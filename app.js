@@ -70,7 +70,6 @@ function render() {
     }
   };
   const [isDarkMode, setIsDarkMode] = React.useState(false);
-  const [activeDomain, setActiveDomain] = React.useState("finance");
   const theme = isDarkMode ? THEME_CONFIG.dark : THEME_CONFIG.light;
   const [showDataSummary, setShowDataSummary] = React.useState(false);
   const STATIC_STYLES = React.useMemo(
@@ -1317,43 +1316,10 @@ function render() {
       displayOrder: 10
     }
   ];
-  const DOMAIN_CONFIG = {
-    finance: {
-      name: "Finance Analytics",
-      icon: "\u{1F4B0}",
-      description: "Revenue, margin, and volume across product lines and markets",
-      defaultMetric: "Revenue",
-      defaultView: "Product Group",
-      metricLabels: {
-        "Volume": "Gross Volume",
-        "Revenue": "Net Revenue",
-        "Margin Rate": "Margin Rate"
-      }
-    },
-    gtm: {
-      name: "GTM Analytics",
-      icon: "\u{1F680}",
-      description: "Go-to-market performance across channels, segments, and regions",
-      defaultMetric: "Volume",
-      defaultView: "Acquisition Channel",
-      metricLabels: {
-        "Volume": "Pipeline Volume",
-        "Revenue": "Closed Revenue",
-        "Margin Rate": "Win Rate"
-      }
-    },
-    product: {
-      name: "Product Analytics",
-      icon: "\u{1F4CA}",
-      description: "Product usage and monetization across categories and customer types",
-      defaultMetric: "Volume",
-      defaultView: "Product",
-      metricLabels: {
-        "Volume": "Total MAU",
-        "Revenue": "Total Time Spent",
-        "Margin Rate": "Avg Time per User"
-      }
-    }
+  const METRIC_LABELS = {
+    "Volume": "Gross Volume",
+    "Revenue": "Net Revenue",
+    "Margin Rate": "Margin Rate"
   };
   const generateSyntheticData = function() {
     var rows = [];
@@ -1422,7 +1388,10 @@ function render() {
       "Enterprise Suite": 0.55
     };
     var currentDate = new Date(2023, 0, 2);
-    var endDate = new Date(2025, 11, 29);
+    var today = /* @__PURE__ */ new Date();
+    var dayOfWeek = today.getDay();
+    var endDate = new Date(today);
+    endDate.setDate(today.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
     var weekIndex = 0;
     while (currentDate <= endDate) {
       var yr = currentDate.getFullYear();
@@ -2176,7 +2145,7 @@ function render() {
       {
         icon: "\u{1F4A1}",
         title: "Insights Panel",
-        text: 'Click "\u2728 Click for Insights" to get AI-generated analysis. Toggle between "Solo Insights" (single dimension) and "Cross Insights" (multi-dimensional).'
+        text: 'Click "\u2728 Click for Insights" to get auto-generated analysis. Toggle between "Solo Insights" (single dimension) and "Cross Insights" (multi-dimensional).'
       },
       {
         icon: "\u{1F4C9}",
@@ -3468,27 +3437,39 @@ function render() {
   var filterOptionsMap = dataExtracts.filterOptionsMap;
   var pricingTypes = dataExtracts.pricingTypes;
   var pricingTypeToGroup = dataExtracts.pricingTypeToGroup;
+  const periodToDateStr = React.useCallback((period) => {
+    if (!period) return "";
+    const qMatch = period.match(/^(\d{4})-Q(\d)$/);
+    if (qMatch) {
+      const mo = ((parseInt(qMatch[2]) - 1) * 3 + 1).toString().padStart(2, "0");
+      return qMatch[1] + "-" + mo + "-01";
+    }
+    if (/^\d{4}$/.test(period)) return period + "-01-01";
+    return period;
+  }, []);
   const filteredDates = React.useMemo(() => {
     if (dateRange === "All") {
       return allDates;
     }
-    const now = /* @__PURE__ */ new Date();
-    let yearStart = now.getFullYear() + "-01-01";
-    let oneYearAgo = now.getFullYear() - 1 + "-" + (now.getMonth() + 1).toString().padStart(2, "0") + "-" + now.getDate().toString().padStart(2, "0");
-    let threeMonthsAgo = new Date(now);
+    const lastComparable = allDates.length > 0 ? periodToDateStr(allDates[allDates.length - 1]) : "";
+    const now = /* @__PURE__ */ new Date(lastComparable + "T00:00:00");
+    if (isNaN(now.getTime())) return allDates;
+    const yearStart = now.getFullYear() + "-01-01";
+    const oneYearAgo = now.getFullYear() - 1 + "-" + (now.getMonth() + 1).toString().padStart(2, "0") + "-" + now.getDate().toString().padStart(2, "0");
+    const threeMonthsAgo = new Date(now);
     threeMonthsAgo.setMonth(now.getMonth() - 3);
-    let oneQuarterAgo = threeMonthsAgo.getFullYear() + "-" + (threeMonthsAgo.getMonth() + 1).toString().padStart(2, "0") + "-" + threeMonthsAgo.getDate().toString().padStart(2, "0");
+    const oneQuarterAgo = threeMonthsAgo.getFullYear() + "-" + (threeMonthsAgo.getMonth() + 1).toString().padStart(2, "0") + "-" + threeMonthsAgo.getDate().toString().padStart(2, "0");
     switch (dateRange) {
       case "1Y":
-        return allDates.filter((date) => date >= oneYearAgo);
+        return allDates.filter((date) => periodToDateStr(date) >= oneYearAgo);
       case "YTD":
-        return allDates.filter((date) => date >= yearStart);
+        return allDates.filter((date) => periodToDateStr(date) >= yearStart);
       case "QTD":
-        return allDates.filter((date) => date >= oneQuarterAgo);
+        return allDates.filter((date) => periodToDateStr(date) >= oneQuarterAgo);
       default:
         return allDates;
     }
-  }, [dateRange, allDates]);
+  }, [dateRange, allDates, periodToDateStr]);
   const filteredDatesSet = React.useMemo(() => {
     return new Set(filteredDates);
   }, [filteredDates]);
@@ -3998,18 +3979,6 @@ function render() {
     );
   };
   const formatMetricValue = React.useCallback((value, metricName) => {
-    if (activeDomain === "product") {
-      switch (metricName) {
-        case "Volume":
-          return numeral(value).format("0.0a") + " users";
-        case "Revenue":
-          return numeral(value).format("0.0a") + " hrs";
-        case "Margin Rate":
-          return numeral(value).format("0.0") + " min";
-        default:
-          return numeral(value).format("0.0a");
-      }
-    }
     switch (metricName) {
       case "Volume":
         return numeral(value).format("$0.0a");
@@ -4020,7 +3989,7 @@ function render() {
       default:
         return numeral(value).format("0.0a");
     }
-  }, [activeDomain]);
+  }, []);
   const formatMetric = React.useCallback(
     (value) => formatMetricValue(value, metric),
     [metric, formatMetricValue]
@@ -7505,53 +7474,7 @@ function render() {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
           }
-        `), /* @__PURE__ */ React.createElement(
-    "div",
-    {
-      style: {
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        padding: "10px 16px",
-        marginBottom: "10px",
-        backgroundColor: isDarkMode ? "rgba(99, 102, 241, 0.12)" : "rgba(99, 102, 241, 0.06)",
-        borderRadius: "10px",
-        border: "1px solid " + (isDarkMode ? "rgba(99, 102, 241, 0.3)" : "rgba(99, 102, 241, 0.2)")
-      }
-    },
-    /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: "18px" } }, DOMAIN_CONFIG[activeDomain].icon), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "13px", fontWeight: "700", color: theme.textPrimary } }, DOMAIN_CONFIG[activeDomain].name), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", color: theme.textTertiary } }, DOMAIN_CONFIG[activeDomain].description))),
-    /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "6px" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: "11px", color: theme.textTertiary, marginRight: "4px" } }, "Demo preset:"), Object.keys(DOMAIN_CONFIG).map(function(domainKey) {
-      var cfg = DOMAIN_CONFIG[domainKey];
-      var isActive = activeDomain === domainKey;
-      return /* @__PURE__ */ React.createElement(
-        "button",
-        {
-          key: domainKey,
-          onClick: function() {
-            setActiveDomain(domainKey);
-            setMetric(DOMAIN_CONFIG[domainKey].defaultMetric);
-            setView(DOMAIN_CONFIG[domainKey].defaultView);
-          },
-          style: {
-            padding: "5px 12px",
-            borderRadius: "6px",
-            border: isActive ? "none" : "1px solid " + theme.borderSecondary,
-            backgroundColor: isActive ? theme.accentPrimary : "transparent",
-            color: isActive ? "white" : theme.textTertiary,
-            fontSize: "12px",
-            fontWeight: isActive ? "600" : "500",
-            cursor: "pointer",
-            transition: "all 0.15s ease",
-            display: "flex",
-            alignItems: "center",
-            gap: "4px"
-          }
-        },
-        /* @__PURE__ */ React.createElement("span", null, cfg.icon),
-        /* @__PURE__ */ React.createElement("span", null, cfg.name)
-      );
-    }))
-  ), /* @__PURE__ */ React.createElement("div", { style: styles.topSection }, /* @__PURE__ */ React.createElement("div", { style: styles.queryContainer, "data-guide": "quick-query" }, /* @__PURE__ */ React.createElement("div", { style: styles.queryInputGroup }, /* @__PURE__ */ React.createElement("div", { style: styles.queryLabelContainer }, /* @__PURE__ */ React.createElement("label", { style: styles.queryLabel }, "Quick Query"), /* @__PURE__ */ React.createElement(
+        `), /* @__PURE__ */ React.createElement("div", { style: styles.topSection }, /* @__PURE__ */ React.createElement("div", { style: styles.queryContainer, "data-guide": "quick-query" }, /* @__PURE__ */ React.createElement("div", { style: styles.queryInputGroup }, /* @__PURE__ */ React.createElement("div", { style: styles.queryLabelContainer }, /* @__PURE__ */ React.createElement("label", { style: styles.queryLabel }, "Quick Query"), /* @__PURE__ */ React.createElement(
     "div",
     {
       style: styles.queryTooltipIcon,
@@ -7692,8 +7615,7 @@ function render() {
   )), /* @__PURE__ */ React.createElement("div", { style: styles.statBoxContainer, "data-guide": "metric-statboxes" }, ["Volume", "Revenue", "Margin Rate"].map((metricName) => {
     const metricStatData = allMetricsStatData[metricName];
     if (!metricStatData) return null;
-    const domainLabels = DOMAIN_CONFIG[activeDomain].metricLabels;
-    const displayLabel = domainLabels[metricName] || metricName;
+    const displayLabel = METRIC_LABELS[metricName] || metricName;
     return renderStatBox(
       metricName,
       metricStatData,

@@ -73,7 +73,6 @@ function render() {
 
   // Theme state
   const [isDarkMode, setIsDarkMode] = React.useState(false);
-  const [activeDomain, setActiveDomain] = React.useState("finance");
   const theme = isDarkMode ? THEME_CONFIG.dark : THEME_CONFIG.light;
 
   // Data Summary collapse state (declared early — used in STATIC_STYLES below)
@@ -1363,49 +1362,16 @@ function render() {
     },
   ];
 
-  // ===== DOMAIN CONFIG: Multi-domain analytics presets =====
-  const DOMAIN_CONFIG = {
-    finance: {
-      name: "Finance Analytics",
-      icon: "💰",
-      description: "Revenue, margin, and volume across product lines and markets",
-      defaultMetric: "Revenue",
-      defaultView: "Product Group",
-      metricLabels: {
-        "Volume": "Gross Volume",
-        "Revenue": "Net Revenue",
-        "Margin Rate": "Margin Rate",
-      },
-    },
-    gtm: {
-      name: "GTM Analytics",
-      icon: "🚀",
-      description: "Go-to-market performance across channels, segments, and regions",
-      defaultMetric: "Volume",
-      defaultView: "Acquisition Channel",
-      metricLabels: {
-        "Volume": "Pipeline Volume",
-        "Revenue": "Closed Revenue",
-        "Margin Rate": "Win Rate",
-      },
-    },
-    product: {
-      name: "Product Analytics",
-      icon: "📊",
-      description: "Product usage and monetization across categories and customer types",
-      defaultMetric: "Volume",
-      defaultView: "Product",
-      metricLabels: {
-        "Volume": "Total MAU",
-        "Revenue": "Total Time Spent",
-        "Margin Rate": "Avg Time per User",
-      },
-    },
+  // Metric display labels for the finance domain
+  const METRIC_LABELS = {
+    "Volume": "Gross Volume",
+    "Revenue": "Net Revenue",
+    "Margin Rate": "Margin Rate",
   };
 
   // ===== SYNTHETIC DATA GENERATOR =====
   // Generates realistic time-series analytics data at WEEKLY granularity for demo purposes.
-  // ~157 weeks (Jan 2023 – Dec 2025) × 4 products × 4 regions = ~2,512 rows.
+  // Jan 2023 – current date × 4 products × 4 regions (weekly rows).
   // Supports Weekly / Monthly / Quarterly / Yearly aggregation via reporting_* fields.
   // Growth rates are deliberately divergent to surface compelling Category Trend insights.
   const generateSyntheticData = function() {
@@ -1486,9 +1452,12 @@ function render() {
     };
 
     // Generate one row per (week × product × region)
-    // Start: Monday Jan 2, 2023; End: Monday Dec 29, 2025
+    // Start: Monday Jan 2, 2023; End: most recent Monday before today
     var currentDate = new Date(2023, 0, 2);
-    var endDate = new Date(2025, 11, 29);
+    var today = new Date();
+    var dayOfWeek = today.getDay();
+    var endDate = new Date(today);
+    endDate.setDate(today.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1)); // roll back to Monday
     var weekIndex = 0;
 
     while (currentDate <= endDate) {
@@ -2424,7 +2393,7 @@ function render() {
       {
         icon: "💡",
         title: "Insights Panel",
-        text: 'Click "✨ Click for Insights" to get AI-generated analysis. Toggle between "Solo Insights" (single dimension) and "Cross Insights" (multi-dimensional).',
+        text: 'Click "✨ Click for Insights" to get auto-generated analysis. Toggle between "Solo Insights" (single dimension) and "Cross Insights" (multi-dimensional).',
       },
       {
         icon: "📉",
@@ -4053,44 +4022,62 @@ function render() {
   var pricingTypes = dataExtracts.pricingTypes;
   var pricingTypeToGroup = dataExtracts.pricingTypeToGroup;
 
+  // Convert any period string (weekly/monthly/quarterly/yearly) to a comparable "YYYY-MM-DD" string
+  const periodToDateStr = React.useCallback((period) => {
+    if (!period) return "";
+    // Quarterly: "2025-Q3" → "2025-07-01"
+    const qMatch = period.match(/^(\d{4})-Q(\d)$/);
+    if (qMatch) {
+      const mo = ((parseInt(qMatch[2]) - 1) * 3 + 1).toString().padStart(2, "0");
+      return qMatch[1] + "-" + mo + "-01";
+    }
+    // Yearly: "2025" → "2025-01-01"
+    if (/^\d{4}$/.test(period)) return period + "-01-01";
+    // Monthly "2025-03-01" or Weekly "2025-03-17" — already comparable
+    return period;
+  }, []);
+
   // Get filtered dates (as array)
   const filteredDates = React.useMemo(() => {
     if (dateRange === "All") {
       return allDates;
     }
 
-    // Using string comparison like the reference code
-    const now = new Date();
-    let yearStart = now.getFullYear() + "-01-01"; // YTD start as string
-    let oneYearAgo =
-      now.getFullYear() -
-      1 +
+    // Anchor date ranges to the last date in the dataset (not today's date)
+    // so YTD/QTD/1Y always return results even if data doesn't extend to the present
+    const lastComparable = allDates.length > 0 ? periodToDateStr(allDates[allDates.length - 1]) : "";
+    const now = new Date(lastComparable + "T00:00:00");
+    if (isNaN(now.getTime())) return allDates;
+
+    const yearStart = now.getFullYear() + "-01-01";
+    const oneYearAgo =
+      (now.getFullYear() - 1) +
       "-" +
       (now.getMonth() + 1).toString().padStart(2, "0") +
       "-" +
-      now.getDate().toString().padStart(2, "0"); // 1Y ago
+      now.getDate().toString().padStart(2, "0");
 
-    let threeMonthsAgo = new Date(now);
+    const threeMonthsAgo = new Date(now);
     threeMonthsAgo.setMonth(now.getMonth() - 3);
-    let oneQuarterAgo =
+    const oneQuarterAgo =
       threeMonthsAgo.getFullYear() +
       "-" +
       (threeMonthsAgo.getMonth() + 1).toString().padStart(2, "0") +
       "-" +
-      threeMonthsAgo.getDate().toString().padStart(2, "0"); // 1Q ago
+      threeMonthsAgo.getDate().toString().padStart(2, "0");
 
-    // Filter using simple string comparison
+    // Compare by converting each period to a date string first
     switch (dateRange) {
       case "1Y":
-        return allDates.filter((date) => date >= oneYearAgo);
+        return allDates.filter((date) => periodToDateStr(date) >= oneYearAgo);
       case "YTD":
-        return allDates.filter((date) => date >= yearStart);
+        return allDates.filter((date) => periodToDateStr(date) >= yearStart);
       case "QTD":
-        return allDates.filter((date) => date >= oneQuarterAgo);
+        return allDates.filter((date) => periodToDateStr(date) >= oneQuarterAgo);
       default:
         return allDates;
     }
-  }, [dateRange, allDates]);
+  }, [dateRange, allDates, periodToDateStr]);
 
   // OPTIMIZATION: Convert filteredDates to Set for O(1) lookups instead of O(n) with .includes()
   // This dramatically speeds up filtering when we have hundreds of dates
@@ -4791,18 +4778,6 @@ function render() {
   };
 
   const formatMetricValue = React.useCallback((value, metricName) => {
-    if (activeDomain === "product") {
-      switch (metricName) {
-        case "Volume":
-          return numeral(value).format("0.0a") + " users";
-        case "Revenue":
-          return numeral(value).format("0.0a") + " hrs";
-        case "Margin Rate":
-          return numeral(value).format("0.0") + " min";
-        default:
-          return numeral(value).format("0.0a");
-      }
-    }
     switch (metricName) {
       case "Volume":
         return numeral(value).format("$0.0a");
@@ -4813,7 +4788,7 @@ function render() {
       default:
         return numeral(value).format("0.0a");
     }
-  }, [activeDomain]);
+  }, []);
 
   // Format metric values (uses current metric)
   const formatMetric = React.useCallback(
@@ -9606,66 +9581,6 @@ function render() {
           }
         `}</style>
 
-      {/* Domain Selector Banner */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "10px 16px",
-          marginBottom: "10px",
-          backgroundColor: isDarkMode ? "rgba(99, 102, 241, 0.12)" : "rgba(99, 102, 241, 0.06)",
-          borderRadius: "10px",
-          border: "1px solid " + (isDarkMode ? "rgba(99, 102, 241, 0.3)" : "rgba(99, 102, 241, 0.2)"),
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <span style={{ fontSize: "18px" }}>{DOMAIN_CONFIG[activeDomain].icon}</span>
-          <div>
-            <div style={{ fontSize: "13px", fontWeight: "700", color: theme.textPrimary }}>
-              {DOMAIN_CONFIG[activeDomain].name}
-            </div>
-            <div style={{ fontSize: "11px", color: theme.textTertiary }}>
-              {DOMAIN_CONFIG[activeDomain].description}
-            </div>
-          </div>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          <span style={{ fontSize: "11px", color: theme.textTertiary, marginRight: "4px" }}>Demo preset:</span>
-          {Object.keys(DOMAIN_CONFIG).map(function(domainKey) {
-            var cfg = DOMAIN_CONFIG[domainKey];
-            var isActive = activeDomain === domainKey;
-            return (
-              <button
-                key={domainKey}
-                onClick={function() {
-                  setActiveDomain(domainKey);
-                  setMetric(DOMAIN_CONFIG[domainKey].defaultMetric);
-                  setView(DOMAIN_CONFIG[domainKey].defaultView);
-                }}
-                style={{
-                  padding: "5px 12px",
-                  borderRadius: "6px",
-                  border: isActive ? "none" : "1px solid " + theme.borderSecondary,
-                  backgroundColor: isActive ? theme.accentPrimary : "transparent",
-                  color: isActive ? "white" : theme.textTertiary,
-                  fontSize: "12px",
-                  fontWeight: isActive ? "600" : "500",
-                  cursor: "pointer",
-                  transition: "all 0.15s ease",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "4px",
-                }}
-              >
-                <span>{cfg.icon}</span>
-                <span>{cfg.name}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
       {/* Top Section: Ask section first, then Statboxes */}
       <div style={styles.topSection}>
         {/* Natural Language Query Interface */}
@@ -9831,8 +9746,7 @@ function render() {
           {["Volume", "Revenue", "Margin Rate"].map((metricName) => {
             const metricStatData = allMetricsStatData[metricName];
             if (!metricStatData) return null;
-            const domainLabels = DOMAIN_CONFIG[activeDomain].metricLabels;
-            const displayLabel = domainLabels[metricName] || metricName;
+            const displayLabel = METRIC_LABELS[metricName] || metricName;
             return renderStatBox(
               metricName,
               metricStatData,
