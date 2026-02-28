@@ -137,20 +137,29 @@ export default {
       ? `Dashboard schema:\n${JSON.stringify(schema, null, 2)}\n\nUser question: ${message}`
       : `User question: ${message}`;
 
-    try {
+    // Models in priority order — try each until one succeeds
+    const MODELS = [
+      "nvidia/nemotron-3-nano-30b-a3b:free",
+      "qwen/qwen3-vl-30b-a3b-thinking",
+      "arcee-ai/trinity-large-preview:free",
+      "nvidia/nemotron-nano-9b-v2:free",
+    ];
+
+    // Try calling a single model, returns { parsed, model } on success or throws
+    async function tryModel(model, apiKey, systemPrompt, userMsg) {
       const llmResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${env.OPENROUTER_API_KEY}`,
+          "Authorization": `Bearer ${apiKey}`,
           "Content-Type": "application/json",
           "HTTP-Referer": "https://datalogic10.github.io",
           "X-Title": "Metrics Dashboard",
         },
         body: JSON.stringify({
-          model: "nvidia/nemotron-nano-9b-v2:free",
+          model,
           messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            { role: "user", content: userMessage },
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userMsg },
           ],
           max_tokens: 1024,
           temperature: 0,
@@ -159,25 +168,16 @@ export default {
 
       if (!llmResponse.ok) {
         const errText = await llmResponse.text();
-        console.error("OpenRouter error:", llmResponse.status, errText);
-        return new Response(JSON.stringify({ error: "LLM service error" }), {
-          status: 502,
-          headers: { ...headers, "Content-Type": "application/json" },
-        });
+        throw new Error(`${model}: HTTP ${llmResponse.status} — ${errText}`);
       }
 
       const llmData = await llmResponse.json();
       const msg = llmData.choices?.[0]?.message;
       // Some models (reasoning models) put output in content, thinking in reasoning.
-      // Fall back to reasoning field if content is empty.
       const content = msg?.content?.trim() || msg?.reasoning?.replace(/<think>[\s\S]*?<\/think>/g, "").trim() || "";
 
       if (!content) {
-        console.error("Empty LLM response. Full message:", JSON.stringify(msg));
-        return new Response(JSON.stringify({ error: "Empty LLM response" }), {
-          status: 502,
-          headers: { ...headers, "Content-Type": "application/json" },
-        });
+        throw new Error(`${model}: Empty response`);
       }
 
       // Extract JSON from response (handle potential markdown fences)
@@ -187,27 +187,31 @@ export default {
         jsonStr = fenceMatch[1].trim();
       }
 
-      let parsed;
+      const parsed = JSON.parse(jsonStr); // throws if invalid JSON
+      return { parsed, model };
+    }
+
+    // Try each model in priority order
+    const errors = [];
+    for (const model of MODELS) {
       try {
-        parsed = JSON.parse(jsonStr);
-      } catch {
-        console.error("Failed to parse LLM JSON:", jsonStr);
-        return new Response(JSON.stringify({ error: "LLM returned invalid JSON", raw: jsonStr }), {
-          status: 502,
+        const { parsed, model: usedModel } = await tryModel(model, env.OPENROUTER_API_KEY, SYSTEM_PROMPT, userMessage);
+        parsed._model = usedModel; // Include which model answered
+        return new Response(JSON.stringify(parsed), {
+          status: 200,
           headers: { ...headers, "Content-Type": "application/json" },
         });
+      } catch (err) {
+        console.error(`Model failed: ${err.message}`);
+        errors.push(err.message);
+        // Continue to next model
       }
-
-      return new Response(JSON.stringify(parsed), {
-        status: 200,
-        headers: { ...headers, "Content-Type": "application/json" },
-      });
-    } catch (err) {
-      console.error("Worker error:", err);
-      return new Response(JSON.stringify({ error: "Internal worker error" }), {
-        status: 500,
-        headers: { ...headers, "Content-Type": "application/json" },
-      });
     }
+
+    // All models failed
+    return new Response(JSON.stringify({ error: "All models failed", details: errors }), {
+      status: 502,
+      headers: { ...headers, "Content-Type": "application/json" },
+    });
   },
 };
