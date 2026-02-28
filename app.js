@@ -2033,6 +2033,9 @@ function render() {
   const [queryText, setQueryText] = React.useState("");
   const [showQueryTooltip, setShowQueryTooltip] = React.useState(false);
   const lastExecutedQueryRef = React.useRef("");
+  const [isLLMLoading, setIsLLMLoading] = React.useState(false);
+  const [llmError, setLlmError] = React.useState("");
+  const [llmExplanation, setLlmExplanation] = React.useState("");
   const [showInsightTooltips, setShowInsightTooltips] = React.useState({});
   const [insightPagination, setInsightPagination] = React.useState({});
   const [hoveredInsight, setHoveredInsight] = React.useState(null);
@@ -2654,6 +2657,12 @@ function render() {
         return decodeURIComponent(match[1]);
       }
     }
+    if (trimmed.includes("config=")) {
+      const match = trimmed.match(/config=([^&]+)/);
+      if (match && match[1]) {
+        return decodeURIComponent(match[1]);
+      }
+    }
     return trimmed;
   }, []);
   const handleLoadPasteCode = React.useCallback(() => {
@@ -2793,6 +2802,20 @@ function render() {
     }
   }, [metadataVariables, decodeShareCode, restoreStateSnapshot]);
   React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const configCode = params.get("config");
+    if (configCode) {
+      const decodedState = decodeShareCode(configCode);
+      if (decodedState) {
+        isRestoringRef.current = true;
+        restoreStateSnapshot(decodedState);
+        setTimeout(() => {
+          isRestoringRef.current = false;
+        }, 100);
+      }
+    }
+  }, []);
+  React.useEffect(() => {
     if (metadataVariables.username && !username) {
       setUsername(metadataVariables.username.toString());
     }
@@ -2837,7 +2860,7 @@ function render() {
     FILTER_CONFIG
   ]);
   React.useEffect(() => {
-    if (isRestoringRef.current) {
+    if (isRestoringRef.current || isExecutingQueryRef.current) {
       return;
     }
     setSelectedCategories([]);
@@ -3479,6 +3502,24 @@ function render() {
     },
     [filterOptionsMap]
   );
+  const buildLLMSchema = React.useCallback(() => {
+    const filters = {};
+    FILTER_CONFIG_STATIC.forEach(({ key, label }) => {
+      const opts = getFilterOptions(key);
+      const values = opts.length > 1 ? opts.slice(1) : [];
+      if (values.length > 0) {
+        filters[key] = { label, values };
+      }
+    });
+    const views = ["Overall", ...Object.keys(VIEW_CONFIG)];
+    return {
+      metrics: ["Revenue", "Volume", "Margin Rate"],
+      views,
+      dataFrequencies: ["Weekly", "Monthly", "Quarterly", "Yearly"],
+      dateRanges: ["3M", "6M", "1Y", "3Y", "All"],
+      filters
+    };
+  }, [FILTER_CONFIG_STATIC, getFilterOptions, VIEW_CONFIG]);
   const filterOptionsWithoutAll = React.useMemo(() => {
     const map = {};
     Object.keys(filterOptionsMap).forEach((key) => {
@@ -7206,6 +7247,115 @@ function render() {
       matchFiltersToOptions
     ]
   );
+  const LLM_WORKER_URL = React.useMemo(
+    () => window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" ? "http://localhost:8787" : "https://metrics-dashboard-llm-proxy.datalogic10.workers.dev",
+    []
+  );
+  const applyLLMResponse = React.useCallback(
+    (response) => {
+      isExecutingQueryRef.current = true;
+      const validMetrics = ["Revenue", "Volume", "Margin Rate"];
+      if (response.metric && validMetrics.includes(response.metric)) {
+        setMetric(response.metric);
+      }
+      const validFreqs = ["Weekly", "Monthly", "Quarterly", "Yearly"];
+      if (response.dataFrequency && validFreqs.includes(response.dataFrequency)) {
+        setDataFrequency(response.dataFrequency);
+      }
+      const validRanges = ["3M", "6M", "1Y", "3Y", "All"];
+      if (response.dateRange && validRanges.includes(response.dateRange)) {
+        setDateRange(response.dateRange);
+      }
+      if (response.filters && typeof response.filters === "object") {
+        FILTER_CONFIG.forEach(({ setState }) => setState([]));
+        Object.entries(response.filters).forEach(([key, values]) => {
+          const setter = getFilterSetState(key);
+          const opts = getFilterOptions(key);
+          if (setter && Array.isArray(values) && opts.length > 1) {
+            const validValues = values.filter((v) => opts.includes(v));
+            if (validValues.length > 0) {
+              setter(validValues);
+            }
+          }
+        });
+      }
+      const validViews = ["Overall", ...Object.keys(VIEW_CONFIG)];
+      if (response.view && validViews.includes(response.view)) {
+        setView(response.view);
+        if (response.view !== "Overall" && Array.isArray(response.selectedCategories) && response.selectedCategories.length > 0) {
+          const config = VIEW_CONFIG[response.view];
+          if (config) {
+            const categories = getCategoriesForView(config);
+            const validCats = response.selectedCategories.filter((c) => categories.includes(c));
+            if (validCats.length > 0) {
+              setTopX(0);
+              setCategorySelectionMode("manual");
+              setTimeout(() => setSelectedCategories(validCats), 50);
+            }
+          }
+        } else {
+          setSelectedCategories([]);
+        }
+      }
+      setInsightContext(null);
+      setTimeout(() => {
+        isExecutingQueryRef.current = false;
+      }, 200);
+    },
+    [FILTER_CONFIG, getFilterSetState, getFilterOptions, VIEW_CONFIG, getCategoriesForView]
+  );
+  const handleLLMQuery = React.useCallback(
+    async (query) => {
+      if (!query || !query.trim()) return;
+      setIsLLMLoading(true);
+      setLlmError("");
+      setLlmExplanation("");
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3e4);
+      try {
+        const schema = buildLLMSchema();
+        const res = await fetch(LLM_WORKER_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: query, schema }),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || `Request failed (${res.status})`);
+        }
+        const data = await res.json();
+        if (data.explanation) {
+          setLlmExplanation(data.explanation);
+        }
+        applyLLMResponse(data);
+        lastExecutedQueryRef.current = query;
+      } catch (err) {
+        clearTimeout(timeoutId);
+        if (err.name === "AbortError") {
+          setLlmError("Request timed out. Please try again.");
+        } else {
+          setLlmError(err.message || "Something went wrong.");
+        }
+      } finally {
+        setIsLLMLoading(false);
+      }
+    },
+    [buildLLMSchema, applyLLMResponse, LLM_WORKER_URL]
+  );
+  const LLM_EXAMPLE_QUESTIONS = React.useMemo(() => [
+    "How is revenue trending in EMEA?",
+    "Show me volume by product, monthly",
+    "What does margin rate look like by region over 3 years?",
+    "Compare revenue across channels quarterly",
+    "How is Enterprise Suite performing?",
+    "Break down revenue by country",
+    "Show weekly volume for Core Products",
+    "What's the revenue split by pricing type?",
+    "How does revenue break down by customer segment?",
+    "Show me quarterly margin rate trends"
+  ], []);
   React.useEffect(() => {
     if (isRestoringRef.current) return;
     if (isExecutingQueryRef.current) return;
@@ -7521,35 +7671,39 @@ function render() {
         }
       )
     ),
-    showQueryTooltip && /* @__PURE__ */ React.createElement("div", { style: styles.queryTooltip }, /* @__PURE__ */ React.createElement("div", { style: styles.queryTooltipArrow }), /* @__PURE__ */ React.createElement("div", { style: styles.fontWeight600 }, "How to Use"), /* @__PURE__ */ React.createElement("div", { style: styles.textGray }, 'Click "\u{1F3B2} Feeling Lucky" to generate example queries, then click "Ask" to visualize the data.'))
+    showQueryTooltip && /* @__PURE__ */ React.createElement("div", { style: styles.queryTooltip }, /* @__PURE__ */ React.createElement("div", { style: styles.queryTooltipArrow }), /* @__PURE__ */ React.createElement("div", { style: styles.fontWeight600 }, "How to Use"), /* @__PURE__ */ React.createElement("div", { style: styles.textGray }, 'Type a natural language question like "How is revenue trending in EMEA?" or click "Feeling Lucky" for examples. Press Enter or click "Ask" to query.'))
   )), /* @__PURE__ */ React.createElement("div", { style: styles.queryInputWrapper }, /* @__PURE__ */ React.createElement(
-    "div",
+    "input",
     {
+      type: "text",
+      value: queryText,
+      onChange: (e) => setQueryText(e.target.value),
+      onKeyDown: (e) => {
+        if (e.key === "Enter" && queryText.trim() && !isLLMLoading) {
+          handleLLMQuery(queryText);
+        }
+      },
+      placeholder: "Ask a question... e.g. How is revenue trending in EMEA?",
+      disabled: isLLMLoading,
       style: {
         flex: 1,
-        display: "flex",
-        alignItems: "center",
         padding: "10px 14px",
         fontSize: "14px",
         fontFamily: "'Inter', 'Segoe UI', sans-serif",
         border: "2px solid #d1d5db",
         borderRadius: "8px",
-        backgroundColor: "#f9fafb",
+        backgroundColor: isLLMLoading ? "#f3f4f6" : "#fff",
         minHeight: "44px",
-        wordBreak: "break-word"
-      }
-    },
-    queryText ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
-      "span",
-      {
-        style: {
-          fontWeight: "700",
-          color: "#374151",
-          marginRight: "6px"
-        }
+        outline: "none",
+        color: "#374151"
       },
-      "What is"
-    ), /* @__PURE__ */ React.createElement("span", { style: { color: "#374151" } }, queryText)) : /* @__PURE__ */ React.createElement("span", { style: { color: "#9ca3af" } }, "Click 'Feeling Lucky' to generate a query \u2192")
+      onFocus: (e) => {
+        e.target.style.borderColor = "#6366f1";
+      },
+      onBlur: (e) => {
+        e.target.style.borderColor = "#d1d5db";
+      }
+    }
   ), /* @__PURE__ */ React.createElement(
     "button",
     {
@@ -7558,32 +7712,42 @@ function render() {
         fontSize: "14px",
         fontWeight: "600",
         padding: "10px 18px",
-        minWidth: "160px"
+        minWidth: "160px",
+        opacity: isLLMLoading ? 0.6 : 1
       },
       onClick: () => {
-        const randomQuestion = generateRandomQuestion();
-        setQueryText(randomQuestion);
-        lastExecutedQueryRef.current = randomQuestion;
+        const example = LLM_EXAMPLE_QUESTIONS[Math.floor(Math.random() * LLM_EXAMPLE_QUESTIONS.length)];
+        setQueryText(example);
+        setLlmError("");
+        setLlmExplanation("");
       },
+      disabled: isLLMLoading,
       title: "Generate a random example question"
     },
-    "\u{1F3B2} Feeling Lucky"
+    "Feeling Lucky"
   ), /* @__PURE__ */ React.createElement(
     "button",
     {
       style: {
         ...styles.queryButton,
-        ...!isQueryValid(queryText) ? styles.queryButtonDisabled : {}
+        ...!queryText.trim() || isLLMLoading ? styles.queryButtonDisabled : {}
       },
       onClick: () => {
-        if (isQueryValid(queryText)) {
-          executeQuery(queryText);
+        if (queryText.trim() && !isLLMLoading) {
+          handleLLMQuery(queryText);
         }
       },
-      disabled: !isQueryValid(queryText)
+      disabled: !queryText.trim() || isLLMLoading
     },
-    "Ask"
-  ))), /* @__PURE__ */ React.createElement(
+    isLLMLoading ? "Thinking..." : "Ask"
+  )), (isLLMLoading || llmError || llmExplanation) && /* @__PURE__ */ React.createElement("div", { style: { marginTop: "8px", fontSize: "13px", fontFamily: "'Inter', 'Segoe UI', sans-serif" } }, isLLMLoading && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px", color: "#6366f1" } }, /* @__PURE__ */ React.createElement("div", { style: {
+    width: "14px",
+    height: "14px",
+    border: "2px solid #6366f1",
+    borderTopColor: "transparent",
+    borderRadius: "50%",
+    animation: "spin 0.8s linear infinite"
+  } }), "Interpreting your question..."), llmError && /* @__PURE__ */ React.createElement("div", { style: { color: "#dc2626", padding: "4px 0" } }, llmError), llmExplanation && !isLLMLoading && !llmError && /* @__PURE__ */ React.createElement("div", { style: { color: "#6b7280", fontStyle: "italic", padding: "4px 0" } }, llmExplanation))), /* @__PURE__ */ React.createElement(
     "button",
     {
       style: {

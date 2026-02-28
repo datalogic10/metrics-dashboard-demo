@@ -2267,6 +2267,9 @@ function render() {
   const [queryText, setQueryText] = React.useState("");
   const [showQueryTooltip, setShowQueryTooltip] = React.useState(false);
   const lastExecutedQueryRef = React.useRef("");
+  const [isLLMLoading, setIsLLMLoading] = React.useState(false);
+  const [llmError, setLlmError] = React.useState("");
+  const [llmExplanation, setLlmExplanation] = React.useState("");
 
   const [showInsightTooltips, setShowInsightTooltips] = React.useState({});
   const [insightPagination, setInsightPagination] = React.useState({});
@@ -2994,9 +2997,15 @@ function render() {
 
   const extractCodeFromUrl = React.useCallback((input) => {
     const trimmed = input.trim();
-    // Check if it's a full URL with target_analyzer_code parameter
+    // Check if it's a full URL with target_analyzer_code or config parameter
     if (trimmed.includes("target_analyzer_code=")) {
       const match = trimmed.match(/target_analyzer_code=([^&]+)/);
+      if (match && match[1]) {
+        return decodeURIComponent(match[1]);
+      }
+    }
+    if (trimmed.includes("config=")) {
+      const match = trimmed.match(/config=([^&]+)/);
       if (match && match[1]) {
         return decodeURIComponent(match[1]);
       }
@@ -3189,6 +3198,22 @@ function render() {
     }
   }, [metadataVariables, decodeShareCode, restoreStateSnapshot]);
 
+  // Restore state from ?config= URL parameter on mount
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const configCode = params.get("config");
+    if (configCode) {
+      const decodedState = decodeShareCode(configCode);
+      if (decodedState) {
+        isRestoringRef.current = true;
+        restoreStateSnapshot(decodedState);
+        setTimeout(() => {
+          isRestoringRef.current = false;
+        }, 100);
+      }
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- mount only
+
   // Set username and team from extracted metadata
   React.useEffect(() => {
     if (metadataVariables.username && !username) {
@@ -3259,8 +3284,8 @@ function render() {
 
   // Reset selected categories when view changes
   React.useEffect(() => {
-    // Skip resetting trace visibility during state restoration
-    if (isRestoringRef.current) {
+    // Skip resetting trace visibility during state restoration or query execution
+    if (isRestoringRef.current || isExecutingQueryRef.current) {
       return;
     }
 
@@ -4091,6 +4116,28 @@ function render() {
     },
     [filterOptionsMap]
   );
+
+  // Build schema for LLM context — tells the LLM what filter keys/values are available
+  const buildLLMSchema = React.useCallback(() => {
+    const filters = {};
+    FILTER_CONFIG_STATIC.forEach(({ key, label }) => {
+      const opts = getFilterOptions(key);
+      // Send options without "All" sentinel, skip empty filters
+      const values = opts.length > 1 ? opts.slice(1) : [];
+      if (values.length > 0) {
+        filters[key] = { label, values };
+      }
+    });
+    // Collect available view names from VIEW_CONFIG
+    const views = ["Overall", ...Object.keys(VIEW_CONFIG)];
+    return {
+      metrics: ["Revenue", "Volume", "Margin Rate"],
+      views,
+      dataFrequencies: ["Weekly", "Monthly", "Quarterly", "Yearly"],
+      dateRanges: ["3M", "6M", "1Y", "3Y", "All"],
+      filters,
+    };
+  }, [FILTER_CONFIG_STATIC, getFilterOptions, VIEW_CONFIG]);
 
   // OPTIMIZATION: Pre-compute sliced options (without "All") for rendering
   // This avoids creating new arrays on every render for each filter
@@ -9211,6 +9258,142 @@ function render() {
     ]
   );
 
+  // LLM Worker URL — switch between local dev and deployed worker
+  const LLM_WORKER_URL = React.useMemo(() =>
+    window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+      ? "http://localhost:8787"
+      : "https://metrics-dashboard-llm-proxy.datalogic10.workers.dev"
+  , []);
+
+  // Apply structured LLM response to dashboard controls
+  const applyLLMResponse = React.useCallback(
+    (response) => {
+      isExecutingQueryRef.current = true;
+
+      // Validate and apply metric
+      const validMetrics = ["Revenue", "Volume", "Margin Rate"];
+      if (response.metric && validMetrics.includes(response.metric)) {
+        setMetric(response.metric);
+      }
+
+      // Validate and apply dataFrequency
+      const validFreqs = ["Weekly", "Monthly", "Quarterly", "Yearly"];
+      if (response.dataFrequency && validFreqs.includes(response.dataFrequency)) {
+        setDataFrequency(response.dataFrequency);
+      }
+
+      // Validate and apply dateRange
+      const validRanges = ["3M", "6M", "1Y", "3Y", "All"];
+      if (response.dateRange && validRanges.includes(response.dateRange)) {
+        setDateRange(response.dateRange);
+      }
+
+      // Apply filters — validate each key and values against actual options
+      if (response.filters && typeof response.filters === "object") {
+        // Clear existing filters first
+        FILTER_CONFIG.forEach(({ setState }) => setState([]));
+        Object.entries(response.filters).forEach(([key, values]) => {
+          const setter = getFilterSetState(key);
+          const opts = getFilterOptions(key);
+          if (setter && Array.isArray(values) && opts.length > 1) {
+            const validValues = values.filter((v) => opts.includes(v));
+            if (validValues.length > 0) {
+              setter(validValues);
+            }
+          }
+        });
+      }
+
+      // Apply view
+      const validViews = ["Overall", ...Object.keys(VIEW_CONFIG)];
+      if (response.view && validViews.includes(response.view)) {
+        setView(response.view);
+        // If view is a dimension and selectedCategories provided, apply them
+        if (response.view !== "Overall" && Array.isArray(response.selectedCategories) && response.selectedCategories.length > 0) {
+          const config = VIEW_CONFIG[response.view];
+          if (config) {
+            const categories = getCategoriesForView(config);
+            const validCats = response.selectedCategories.filter((c) => categories.includes(c));
+            if (validCats.length > 0) {
+              setTopX(0);
+              setCategorySelectionMode("manual");
+              setTimeout(() => setSelectedCategories(validCats), 50);
+            }
+          }
+        } else {
+          setSelectedCategories([]);
+        }
+      }
+
+      setInsightContext(null);
+      setTimeout(() => {
+        isExecutingQueryRef.current = false;
+      }, 200);
+    },
+    [FILTER_CONFIG, getFilterSetState, getFilterOptions, VIEW_CONFIG, getCategoriesForView]
+  );
+
+  // Handle natural language query via LLM worker
+  const handleLLMQuery = React.useCallback(
+    async (query) => {
+      if (!query || !query.trim()) return;
+      setIsLLMLoading(true);
+      setLlmError("");
+      setLlmExplanation("");
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+      try {
+        const schema = buildLLMSchema();
+        const res = await fetch(LLM_WORKER_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: query, schema }),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || `Request failed (${res.status})`);
+        }
+
+        const data = await res.json();
+        if (data.explanation) {
+          setLlmExplanation(data.explanation);
+        }
+        applyLLMResponse(data);
+        lastExecutedQueryRef.current = query;
+      } catch (err) {
+        clearTimeout(timeoutId);
+        if (err.name === "AbortError") {
+          setLlmError("Request timed out. Please try again.");
+        } else {
+          setLlmError(err.message || "Something went wrong.");
+        }
+      } finally {
+        setIsLLMLoading(false);
+      }
+    },
+    [buildLLMSchema, applyLLMResponse, LLM_WORKER_URL]
+  );
+
+  // Natural language example questions for Feeling Lucky
+  const LLM_EXAMPLE_QUESTIONS = React.useMemo(() => [
+    "How is revenue trending in EMEA?",
+    "Show me volume by product, monthly",
+    "What does margin rate look like by region over 3 years?",
+    "Compare revenue across channels quarterly",
+    "How is Enterprise Suite performing?",
+    "Break down revenue by country",
+    "Show weekly volume for Core Products",
+    "What's the revenue split by pricing type?",
+    "How does revenue break down by customer segment?",
+    "Show me quarterly margin rate trends",
+  ], []);
+
   // Clear query text when filters, metric, or view change (but not during state restoration or query execution)
   React.useEffect(() => {
     // Skip clearing during state restoration to avoid clearing query text when loading from share code
@@ -9627,49 +9810,39 @@ function render() {
                     <div style={styles.queryTooltipArrow}></div>
                     <div style={styles.fontWeight600}>How to Use</div>
                     <div style={styles.textGray}>
-                      Click "🎲 Feeling Lucky" to generate example queries, then
-                      click "Ask" to visualize the data.
+                      Type a natural language question like "How is revenue trending in EMEA?" or click "Feeling Lucky" for examples. Press Enter or click "Ask" to query.
                     </div>
                   </div>
                 )}
               </div>
             </div>
             <div style={styles.queryInputWrapper}>
-              {/* Read-only display area showing generated query */}
-              <div
+              <input
+                type="text"
+                value={queryText}
+                onChange={(e) => setQueryText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && queryText.trim() && !isLLMLoading) {
+                    handleLLMQuery(queryText);
+                  }
+                }}
+                placeholder="Ask a question... e.g. How is revenue trending in EMEA?"
+                disabled={isLLMLoading}
                 style={{
                   flex: 1,
-                  display: "flex",
-                  alignItems: "center",
                   padding: "10px 14px",
                   fontSize: "14px",
                   fontFamily: "'Inter', 'Segoe UI', sans-serif",
                   border: "2px solid #d1d5db",
                   borderRadius: "8px",
-                  backgroundColor: "#f9fafb",
+                  backgroundColor: isLLMLoading ? "#f3f4f6" : "#fff",
                   minHeight: "44px",
-                  wordBreak: "break-word",
+                  outline: "none",
+                  color: "#374151",
                 }}
-              >
-                {queryText ? (
-                  <>
-                    <span
-                      style={{
-                        fontWeight: "700",
-                        color: "#374151",
-                        marginRight: "6px",
-                      }}
-                    >
-                      What is
-                    </span>
-                    <span style={{ color: "#374151" }}>{queryText}</span>
-                  </>
-                ) : (
-                  <span style={{ color: "#9ca3af" }}>
-                    Click 'Feeling Lucky' to generate a query →
-                  </span>
-                )}
-              </div>
+                onFocus={(e) => { e.target.style.borderColor = "#6366f1"; }}
+                onBlur={(e) => { e.target.style.borderColor = "#d1d5db"; }}
+              />
               <button
                 style={{
                   ...styles.luckyButton,
@@ -9677,33 +9850,61 @@ function render() {
                   fontWeight: "600",
                   padding: "10px 18px",
                   minWidth: "160px",
+                  opacity: isLLMLoading ? 0.6 : 1,
                 }}
                 onClick={() => {
-                  const randomQuestion = generateRandomQuestion();
-                  setQueryText(randomQuestion);
-                  lastExecutedQueryRef.current = randomQuestion;
+                  const example = LLM_EXAMPLE_QUESTIONS[Math.floor(Math.random() * LLM_EXAMPLE_QUESTIONS.length)];
+                  setQueryText(example);
+                  setLlmError("");
+                  setLlmExplanation("");
                 }}
+                disabled={isLLMLoading}
                 title="Generate a random example question"
               >
-                🎲 Feeling Lucky
+                Feeling Lucky
               </button>
               <button
                 style={{
                   ...styles.queryButton,
-                  ...(!isQueryValid(queryText)
+                  ...(!queryText.trim() || isLLMLoading
                     ? styles.queryButtonDisabled
                     : {}),
                 }}
                 onClick={() => {
-                  if (isQueryValid(queryText)) {
-                    executeQuery(queryText);
+                  if (queryText.trim() && !isLLMLoading) {
+                    handleLLMQuery(queryText);
                   }
                 }}
-                disabled={!isQueryValid(queryText)}
+                disabled={!queryText.trim() || isLLMLoading}
               >
-                Ask
+                {isLLMLoading ? "Thinking..." : "Ask"}
               </button>
             </div>
+            {/* LLM feedback: loading, error, explanation */}
+            {(isLLMLoading || llmError || llmExplanation) && (
+              <div style={{ marginTop: "8px", fontSize: "13px", fontFamily: "'Inter', 'Segoe UI', sans-serif" }}>
+                {isLLMLoading && (
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#6366f1" }}>
+                    <div style={{
+                      width: "14px", height: "14px", border: "2px solid #6366f1",
+                      borderTopColor: "transparent", borderRadius: "50%",
+                      animation: "spin 0.8s linear infinite",
+                    }} />
+                    Interpreting your question...
+                  </div>
+                )}
+                {llmError && (
+                  <div style={{ color: "#dc2626", padding: "4px 0" }}>
+                    {llmError}
+                  </div>
+                )}
+                {llmExplanation && !isLLMLoading && !llmError && (
+                  <div style={{ color: "#6b7280", fontStyle: "italic", padding: "4px 0" }}>
+                    {llmExplanation}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Theme Toggle Button */}

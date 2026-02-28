@@ -1,0 +1,6 @@
+name = "metrics-dashboard-llm-proxy"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+
+# Deploy: wrangler secret put OPENROUTER_API_KEY
+# Then: wrangler deploy
