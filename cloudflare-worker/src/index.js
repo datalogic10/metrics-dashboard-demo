@@ -5,10 +5,12 @@ const ALLOWED_ORIGINS = [
   "https://datalogic10.github.io",
   "http://localhost:3000",
   "http://localhost:3333",
+  "http://localhost:3456",
   "http://localhost:5000",
   "http://localhost:8080",
   "http://127.0.0.1:3000",
   "http://127.0.0.1:3333",
+  "http://127.0.0.1:3456",
   "http://127.0.0.1:5000",
   "http://127.0.0.1:8080",
 ];
@@ -88,10 +90,119 @@ A: {"metric": "Volume", "view": "Acquisition Channel", "selectedCategories": ["P
 
 Respond with ONLY the JSON object. No markdown fences, no extra text.`;
 
+const METRIC_SUGGEST_PROMPT = `You are a data analytics assistant. Given a database table schema (column names and types), suggest how to configure a 3-metric dashboard.
+
+The dashboard has exactly 3 metric slots. Each is independently configurable with its own aggregation type and column:
+1. **Metric 1**: The primary counting/volume metric — e.g., COUNT(*) of rows, SUM of units, COUNT(DISTINCT user_id).
+2. **Metric 2**: A secondary metric — e.g., SUM(score), AVG(price), COUNT(DISTINCT job_id).
+3. **Metric 3**: An optional third metric — e.g., AVG(score), MAX(value). Set derivedAggType to null to disable.
+
+You must respond with ONLY a JSON object (no markdown, no explanation) with these exact fields:
+{
+  "volumeAggType": "count|count_distinct|sum|avg|min|max",  // aggregation type for metric 1
+  "volumeColumn": null or "column_name",   // null only if volumeAggType is "count", otherwise required
+  "revenueAggType": "count|count_distinct|sum|avg|min|max", // aggregation type for metric 2
+  "revenueColumn": null or "column_name",  // null only if revenueAggType is "count", otherwise required
+  "derivedAggType": null or "count|count_distinct|sum|avg|min|max", // aggregation type for metric 3, null to disable
+  "derivedColumn": null or "column_name",  // null if derivedAggType is null or "count", otherwise required
+  "volumeLabel": "string",                 // Human-readable label for metric 1
+  "revenueLabel": "string",                // Human-readable label for metric 2
+  "derivedLabel": "string",                // Human-readable label for metric 3 (omit if derivedAggType is null)
+  "volumeFormat": "0,0",                   // numeral.js format string
+  "revenueFormat": "0,0",                  // numeral.js format string
+  "derivedFormat": "0.0",                  // numeral.js format string for metric 3
+  "dateColumn": "column_name"              // The date/timestamp column for time series
+}
+
+Rules:
+- Column values must be actual column names from the schema (any column for count_distinct, numeric for sum/avg/min/max), or null only when aggType is "count"
+- dateColumn must be a date/timestamp column from the schema
+- Choose metrics that make business sense for the data
+- Keep labels concise (2-3 words max)
+- For format strings: use "0,0" for integers, "0,0.00" for currency, "0.0" for decimals, "0.0%" for percentages
+
+Respond with ONLY the JSON object.`;
+
+
+// Try calling a single model, returns { parsed, model } on success or throws
+async function tryModel(model, apiKey, systemPrompt, userMsg) {
+  const llmResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://datalogic10.github.io",
+      "X-Title": "Metrics Dashboard",
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMsg },
+      ],
+      max_tokens: 1024,
+      temperature: 0,
+    }),
+  });
+
+  if (!llmResponse.ok) {
+    const errText = await llmResponse.text();
+    throw new Error(`${model}: HTTP ${llmResponse.status} — ${errText}`);
+  }
+
+  const llmData = await llmResponse.json();
+  const msg = llmData.choices?.[0]?.message;
+  const content = msg?.content?.trim() || msg?.reasoning?.replace(/<think>[\s\S]*?<\/think>/g, "").trim() || "";
+
+  if (!content) {
+    throw new Error(`${model}: Empty response`);
+  }
+
+  let jsonStr = content.trim();
+  const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) {
+    jsonStr = fenceMatch[1].trim();
+  }
+
+  const parsed = JSON.parse(jsonStr);
+  return { parsed, model };
+}
+
+// Models in priority order — try each until one succeeds
+const MODELS = [
+  "nvidia/nemotron-3-nano-30b-a3b:free",
+  "qwen/qwen3-vl-30b-a3b-thinking",
+  "arcee-ai/trinity-large-preview:free",
+  "nvidia/nemotron-nano-9b-v2:free",
+];
+
+async function callWithFallback(env, systemPrompt, userMessage, headers) {
+  const errors = [];
+  for (const model of MODELS) {
+    try {
+      const { parsed, model: usedModel } = await tryModel(model, env.OPENROUTER_API_KEY, systemPrompt, userMessage);
+      parsed._model = usedModel;
+      return new Response(JSON.stringify(parsed), {
+        status: 200,
+        headers: { ...headers, "Content-Type": "application/json" },
+      });
+    } catch (err) {
+      console.error(`Model failed: ${err.message}`);
+      errors.push(err.message);
+    }
+  }
+  return new Response(JSON.stringify({ error: "All models failed", details: errors }), {
+    status: 502,
+    headers: { ...headers, "Content-Type": "application/json" },
+  });
+}
+
 export default {
   async fetch(request, env) {
     const origin = request.headers.get("Origin") || "";
     const headers = corsHeaders(origin);
+    const url = new URL(request.url);
+    const path = url.pathname;
 
     // Handle CORS preflight
     if (request.method === "OPTIONS") {
@@ -124,6 +235,21 @@ export default {
       });
     }
 
+    // ===== Route: /suggest-metrics =====
+    if (path === "/suggest-metrics") {
+      const { columns } = body;
+      if (!columns || !Array.isArray(columns)) {
+        return new Response(JSON.stringify({ error: "Missing 'columns' array" }), {
+          status: 400,
+          headers: { ...headers, "Content-Type": "application/json" },
+        });
+      }
+
+      const userMessage = `Table columns:\n${JSON.stringify(columns, null, 2)}\n\nSuggest the best metric configuration for this table.`;
+      return callWithFallback(env, METRIC_SUGGEST_PROMPT, userMessage, headers);
+    }
+
+    // ===== Route: / (default — Quick Query) =====
     const { message, schema } = body;
     if (!message || typeof message !== "string") {
       return new Response(JSON.stringify({ error: "Missing 'message' field" }), {
@@ -132,86 +258,10 @@ export default {
       });
     }
 
-    // Build user message with schema context
     const userMessage = schema
       ? `Dashboard schema:\n${JSON.stringify(schema, null, 2)}\n\nUser question: ${message}`
       : `User question: ${message}`;
 
-    // Models in priority order — try each until one succeeds
-    const MODELS = [
-      "nvidia/nemotron-3-nano-30b-a3b:free",
-      "qwen/qwen3-vl-30b-a3b-thinking",
-      "arcee-ai/trinity-large-preview:free",
-      "nvidia/nemotron-nano-9b-v2:free",
-    ];
-
-    // Try calling a single model, returns { parsed, model } on success or throws
-    async function tryModel(model, apiKey, systemPrompt, userMsg) {
-      const llmResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": "https://datalogic10.github.io",
-          "X-Title": "Metrics Dashboard",
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userMsg },
-          ],
-          max_tokens: 1024,
-          temperature: 0,
-        }),
-      });
-
-      if (!llmResponse.ok) {
-        const errText = await llmResponse.text();
-        throw new Error(`${model}: HTTP ${llmResponse.status} — ${errText}`);
-      }
-
-      const llmData = await llmResponse.json();
-      const msg = llmData.choices?.[0]?.message;
-      // Some models (reasoning models) put output in content, thinking in reasoning.
-      const content = msg?.content?.trim() || msg?.reasoning?.replace(/<think>[\s\S]*?<\/think>/g, "").trim() || "";
-
-      if (!content) {
-        throw new Error(`${model}: Empty response`);
-      }
-
-      // Extract JSON from response (handle potential markdown fences)
-      let jsonStr = content.trim();
-      const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (fenceMatch) {
-        jsonStr = fenceMatch[1].trim();
-      }
-
-      const parsed = JSON.parse(jsonStr); // throws if invalid JSON
-      return { parsed, model };
-    }
-
-    // Try each model in priority order
-    const errors = [];
-    for (const model of MODELS) {
-      try {
-        const { parsed, model: usedModel } = await tryModel(model, env.OPENROUTER_API_KEY, SYSTEM_PROMPT, userMessage);
-        parsed._model = usedModel; // Include which model answered
-        return new Response(JSON.stringify(parsed), {
-          status: 200,
-          headers: { ...headers, "Content-Type": "application/json" },
-        });
-      } catch (err) {
-        console.error(`Model failed: ${err.message}`);
-        errors.push(err.message);
-        // Continue to next model
-      }
-    }
-
-    // All models failed
-    return new Response(JSON.stringify({ error: "All models failed", details: errors }), {
-      status: 502,
-      headers: { ...headers, "Content-Type": "application/json" },
-    });
+    return callWithFallback(env, SYSTEM_PROMPT, userMessage, headers);
   },
 };

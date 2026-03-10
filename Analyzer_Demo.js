@@ -1200,7 +1200,360 @@ function render() {
     [theme, isDarkMode, showDataSummary]
   );
 
-  const COLUMNS = {
+  // ===== LIVE DATA CONNECTION =====
+  // Parse URL hash for Supabase connection params
+  const connectionParams = React.useMemo(() => {
+    const hash = window.location.hash.replace(/^#/, '');
+    if (!hash) return null;
+    const params = new URLSearchParams(hash);
+    const supabaseUrl = params.get('supabaseUrl');
+    const apiKey = params.get('apiKey');
+    const dataset = params.get('dataset');
+    if (supabaseUrl && apiKey && dataset) {
+      return { supabaseUrl, apiKey, dataset };
+    }
+    return null;
+  }, []);
+
+  const [liveDataLoading, setLiveDataLoading] = React.useState(!!connectionParams);
+  const [liveDataError, setLiveDataError] = React.useState(null);
+  const [liveColumnMeta, setLiveColumnMeta] = React.useState(null); // schema columns from query_dataset
+  const [liveSchemaReady, setLiveSchemaReady] = React.useState(false);
+  const [liveFilterOptions, setLiveFilterOptions] = React.useState({}); // { column_name: ["val1", ...] }
+  const [livePeriodAggregates, setLivePeriodAggregates] = React.useState(null);
+  const [liveDimensionAggregates, setLiveDimensionAggregates] = React.useState(null);
+  const [liveAggLoading, setLiveAggLoading] = React.useState(false);
+  const [liveRowCount, setLiveRowCount] = React.useState(0);
+
+  // Metric config for live mode — defines how columns map to the 3 metric slots
+  const [liveMetricConfig, setLiveMetricConfig] = React.useState(() => {
+    if (!connectionParams) return null;
+    const storageKey = 'metricsConfig_' + connectionParams.supabaseUrl + '_' + connectionParams.dataset;
+    try {
+      const saved = localStorage.getItem(storageKey);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return null;
+  });
+
+  const isLiveMode = connectionParams !== null && liveSchemaReady;
+
+  // Metrics editor modal state
+  const [showMetricsEditor, setShowMetricsEditor] = React.useState(false);
+  const [metricsEditorDraft, setMetricsEditorDraft] = React.useState(null);
+  const [metricsEditorSuggesting, setMetricsEditorSuggesting] = React.useState(false);
+  const [metricsEditorError, setMetricsEditorError] = React.useState('');
+
+  // Default metric configs per known dataset
+  const DEFAULT_METRIC_CONFIGS = {
+    fmc_job_metrics: {
+      volumeColumn: null,         // null = count rows (COUNT(*))
+      revenueColumn: "score",     // maps to revenue slot via SUM
+      volumeLabel: "Total Jobs",
+      revenueLabel: "Total Score",
+      derivedLabel: "Avg Score",
+      volumeFormat: "0,0",
+      revenueFormat: "0,0",
+      derivedFormat: "0.0",
+      derivedDivisor: 10000,
+      dateColumn: "reporting_dt",
+    },
+    fmc_conversations: {
+      volumeColumn: "message_count",
+      revenueColumn: "user_message_count",
+      volumeLabel: "Total Messages",
+      revenueLabel: "User Messages",
+      derivedLabel: "User Msg Rate",
+      volumeFormat: "0,0",
+      revenueFormat: "0,0",
+      derivedFormat: "0.0%",
+      derivedDivisor: 10000,
+      dateColumn: "reporting_dt",
+    },
+  };
+
+  // ===== RPC CALL HELPER =====
+  const callQueryDataset = React.useCallback((action, params) => {
+    if (!connectionParams) return Promise.reject(new Error('No connection'));
+    const { supabaseUrl, apiKey, dataset } = connectionParams;
+    return fetch(supabaseUrl + '/rest/v1/rpc/query_dataset', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': apiKey,
+        'Authorization': 'Bearer ' + apiKey,
+      },
+      body: JSON.stringify({ p_table: dataset, p_action: action, ...params }),
+    })
+      .then(res => { if (!res.ok) throw new Error('RPC returned ' + res.status); return res.json(); })
+      .then(data => { if (data.error) throw new Error(data.error); return data; });
+  }, [connectionParams]);
+
+  // ===== QUERY CACHE (in-memory LRU) =====
+  const queryCacheRef = React.useRef(new Map());
+  const getCacheKey = (action, params) => JSON.stringify({ action, ...params });
+  const getCached = (key) => {
+    const cache = queryCacheRef.current;
+    if (cache.has(key)) {
+      const val = cache.get(key);
+      cache.delete(key); cache.set(key, val); // Move to end (LRU)
+      return val;
+    }
+    return null;
+  };
+  const setCache = (key, value) => {
+    const cache = queryCacheRef.current;
+    if (cache.size >= 100) { cache.delete(cache.keys().next().value); } // Evict oldest
+    cache.set(key, value);
+  };
+
+  // Cached RPC call
+  const cachedQuery = React.useCallback((action, params) => {
+    const key = getCacheKey(action, params);
+    const cached = getCached(key);
+    if (cached) return Promise.resolve(cached);
+    return callQueryDataset(action, params).then(result => { setCache(key, result); return result; });
+  }, [callQueryDataset]);
+
+  // ===== BUILD COLUMNS/DIMENSIONS FROM SCHEMA =====
+  // Detect date column from schema metadata
+  const liveDateColumn = React.useMemo(() => {
+    if (!liveColumnMeta) return null;
+    const dateCol = liveColumnMeta.find(c =>
+      c.udt === 'date' || c.udt === 'timestamp' || c.udt === 'timestamptz' ||
+      c.name === 'reporting_dt' || c.name.includes('_dt') || c.name.includes('date')
+    );
+    return dateCol ? dateCol.name : null;
+  }, [liveColumnMeta]);
+
+  // Classify schema columns into dimensions and metrics
+  const liveSchemaClassified = React.useMemo(() => {
+    if (!liveColumnMeta || !liveDateColumn) return { dimensions: [], metrics: [] };
+    const dims = [];
+    const mets = [];
+    liveColumnMeta.forEach(c => {
+      if (c.name === liveDateColumn) return; // Skip date column
+      if (c.udt === 'int4' || c.udt === 'int8' || c.udt === 'float4' || c.udt === 'float8' || c.udt === 'numeric') {
+        mets.push(c);
+      } else {
+        dims.push(c);
+      }
+    });
+    return { dimensions: dims, metrics: mets };
+  }, [liveColumnMeta, liveDateColumn]);
+
+  // Filter dimensions to only those the user selected as visible
+  const visibleLiveDimensions = React.useMemo(() => {
+    if (!liveSchemaClassified.dimensions.length) return [];
+    const visible = liveMetricConfig?.visibleDimensions;
+    if (!visible || !Array.isArray(visible)) return liveSchemaClassified.dimensions;
+    return liveSchemaClassified.dimensions.filter(c => visible.includes(c.name));
+  }, [liveSchemaClassified.dimensions, liveMetricConfig]);
+
+  const buildLiveColumns = (schemaDims) => {
+    const cols = {
+      REPORTING_DAY: "reporting_day",
+      REPORTING_WEEK: "reporting_week",
+      REPORTING_MONTH: "reporting_month",
+      REPORTING_QUARTER: "reporting_quarter",
+      REPORTING_YEAR: "reporting_year",
+      VOLUME: "volume",
+      REVENUE: "revenue",
+    };
+    schemaDims.forEach(c => {
+      cols["DIM_" + c.name.toUpperCase()] = c.name;
+    });
+    return cols;
+  };
+
+  const buildLiveDimensions = (schemaDims) => {
+    return schemaDims.map((c, index) => {
+      // Generate a human-readable label from column name
+      const label = c.name.replace(/^is_/, '').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+      return {
+        columnKey: "DIM_" + c.name.toUpperCase(),
+        filterKey: "dim_" + c.name + "_filter",
+        abbreviation: c.name.slice(0, 3),
+        filterLabel: label,
+        viewName: label,
+        viewLabel: label,
+        insightLabel: label.toLowerCase(),
+        marketLeaderLabel: label.toLowerCase(),
+        insightTextPrefix: "leads",
+        isProductDimension: false,
+        displayOrder: index + 1,
+      };
+    });
+  };
+
+  // ===== RESPONSE TRANSFORMERS =====
+  // Transform flat RPC rows into periodAggregates format
+  const transformToPeriodAggregates = (rows, hasMetric3) => {
+    const aggs = {};
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const period = row.period;
+      if (!period) continue;
+      const vol = Number(row.volume) || 0;
+      const rev = Number(row.revenue) || 0;
+      const m3 = hasMetric3 ? (Number(row.derived) || 0) : (vol > 0 ? (10000 * rev) / vol : 0);
+      aggs[period] = {
+        totalVolume: vol,
+        totalRevenue: rev,
+        Volume: vol,
+        Revenue: rev,
+        "Margin Rate": m3,
+      };
+    }
+    return aggs;
+  };
+
+  // Transform flat RPC rows into dimensionAggregates format (single dimension)
+  const transformToDimensionAggregates = (rows, dimColumn, hasMetric3) => {
+    const aggs = {};
+    const categoryTotals = {};
+    aggs[dimColumn] = {};
+    categoryTotals[dimColumn] = {};
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const period = row.period;
+      const category = row[dimColumn] || "Unknown";
+      const vol = Number(row.volume) || 0;
+      const rev = Number(row.revenue) || 0;
+      const m3 = hasMetric3 ? (Number(row.derived) || 0) : (vol > 0 ? (10000 * rev) / vol : 0);
+
+      if (!aggs[dimColumn][period]) aggs[dimColumn][period] = {};
+      aggs[dimColumn][period][category] = {
+        totalVolume: vol, totalRevenue: rev,
+        Volume: vol, Revenue: rev,
+        "Margin Rate": m3,
+      };
+
+      if (!categoryTotals[dimColumn][category]) {
+        categoryTotals[dimColumn][category] = { totalVolume: 0, totalRevenue: 0, _derivedSum: 0, _derivedCount: 0 };
+      }
+      categoryTotals[dimColumn][category].totalVolume += vol;
+      categoryTotals[dimColumn][category].totalRevenue += rev;
+      if (hasMetric3) {
+        categoryTotals[dimColumn][category]._derivedSum += m3;
+        categoryTotals[dimColumn][category]._derivedCount += 1;
+      }
+    }
+
+    // Derive metrics for category totals
+    Object.keys(categoryTotals[dimColumn]).forEach(cat => {
+      const t = categoryTotals[dimColumn][cat];
+      t.Volume = t.totalVolume;
+      t.Revenue = t.totalRevenue;
+      if (hasMetric3) {
+        t["Margin Rate"] = t._derivedCount > 0 ? t._derivedSum / t._derivedCount : 0;
+      } else {
+        t["Margin Rate"] = t.totalVolume > 0 ? (10000 * t.totalRevenue) / t.totalVolume : 0;
+      }
+    });
+
+    aggs._categoryTotals = categoryTotals;
+    return aggs;
+  };
+
+  // Build p_metrics array for the RPC from metric config
+  const buildRpcMetrics = React.useCallback((config) => {
+    if (!config) return [];
+    const metrics = [];
+    const addMetric = (aggType, column, alias) => {
+      const agg = aggType || (column ? 'sum' : 'count');
+      if (agg === 'count') {
+        metrics.push({ type: "count", alias });
+      } else {
+        metrics.push({ type: agg, column, alias });
+      }
+    };
+    addMetric(config.volumeAggType, config.volumeColumn, "volume");
+    addMetric(config.revenueAggType, config.revenueColumn, "revenue");
+    // Metric 3: independent if derivedAggType is set, otherwise derived client-side
+    if (config.derivedAggType) {
+      addMetric(config.derivedAggType, config.derivedColumn, "derived");
+    }
+    return metrics;
+  }, []);
+
+  // Map dashboard dataFrequency to RPC time_grain
+  const frequencyToGrain = { "Daily": "day", "Weekly": "week", "Monthly": "month", "Quarterly": "quarter", "Yearly": "year" };
+
+  // ===== STARTUP: FETCH SCHEMA + DISTINCT VALUES =====
+  React.useEffect(() => {
+    if (!connectionParams) return;
+    setLiveDataLoading(true);
+    setLiveDataError(null);
+
+    const { dataset } = connectionParams;
+
+    // Step 1: Fetch schema
+    callQueryDataset('schema', {})
+      .then(schemaData => {
+        const columns = schemaData.columns || [];
+        setLiveColumnMeta(columns);
+
+        // Determine metric config
+        let config = liveMetricConfig;
+        const isNewConnection = !config;
+        if (!config) {
+          config = DEFAULT_METRIC_CONFIGS[dataset] || {
+            volumeColumn: null, revenueColumn: null,
+            volumeLabel: "Count", revenueLabel: "Count", derivedLabel: "Ratio",
+            volumeFormat: "0,0", revenueFormat: "0,0", derivedFormat: "0.0", derivedDivisor: 10000,
+            dateColumn: columns.find(c => c.udt === 'date' || c.name.includes('_dt'))?.name || null,
+          };
+          setLiveMetricConfig(config);
+          try {
+            const storageKey = 'metricsConfig_' + connectionParams.supabaseUrl + '_' + dataset;
+            localStorage.setItem(storageKey, JSON.stringify(config));
+          } catch (e) {}
+          // Auto-open metrics editor for unknown datasets so user can configure
+          if (!DEFAULT_METRIC_CONFIGS[dataset]) {
+            setMetricsEditorDraft({ ...config });
+            setShowMetricsEditor(true);
+          }
+        }
+
+        // Step 2: Fetch distinct values for all dimension columns
+        const dateCol = config.dateColumn || columns.find(c => c.udt === 'date' || c.name.includes('_dt'))?.name;
+        const dimCols = columns.filter(c => {
+          if (c.name === dateCol) return false;
+          if (c.udt === 'int4' || c.udt === 'int8' || c.udt === 'float4' || c.udt === 'float8' || c.udt === 'numeric') return false;
+          return true;
+        });
+
+        return Promise.all(
+          dimCols.map(c =>
+            cachedQuery('distinct', { p_column: c.name })
+              .then(r => ({ column: c.name, values: r.values || [] }))
+              .catch(() => ({ column: c.name, values: [] }))
+          )
+        );
+      })
+      .then(distinctResults => {
+        const filterOpts = {};
+        distinctResults.forEach(r => { filterOpts[r.column] = r.values; });
+        setLiveFilterOptions(filterOpts);
+        setLiveSchemaReady(true);
+        setLiveDataLoading(false);
+      })
+      .catch(err => {
+        setLiveDataError(err.message);
+        setLiveDataLoading(false);
+      });
+  }, [connectionParams]);
+
+  // Dynamic filters for live mode (single state object)
+  const [dynamicFilters, setDynamicFilters] = React.useState({});
+
+  const setDynamicFilter = React.useCallback((filterKey, value) => {
+    setDynamicFilters(prev => ({ ...prev, [filterKey]: value }));
+  }, []);
+
+  const COLUMNS = isLiveMode ? buildLiveColumns(visibleLiveDimensions) : {
     REPORTING_WEEK: "reporting_week",
     REPORTING_MONTH: "reporting_month",
     REPORTING_QUARTER: "reporting_quarter",
@@ -1220,13 +1573,9 @@ function render() {
   };
 
   // ===== DIMENSION_DEFINITIONS: Single source of truth for all dimensions =====
-  // Add new dimensions here and they will automatically appear in:
-  // - Filters (Advanced Filters panel)
-  // - Split By Dimension dropdown
-  // - Insights generation (market share, category trends, market leaders)
-  // - Filter search suggestions
-  // - State compression for sharing
-  const DIMENSION_DEFINITIONS = [
+  // In live mode, auto-generated from Supabase column metadata.
+  // In demo mode, hardcoded for the synthetic dataset.
+  const DIMENSION_DEFINITIONS = isLiveMode ? buildLiveDimensions(visibleLiveDimensions) : [
     // Product hierarchy dimensions
     {
       columnKey: "PRODUCT_GROUP_L1",
@@ -1362,8 +1711,12 @@ function render() {
     },
   ];
 
-  // Metric display labels for the finance domain
-  const METRIC_LABELS = {
+  // Metric display labels — in live mode, use labels from metric config
+  const METRIC_LABELS = isLiveMode && liveMetricConfig ? {
+    "Volume": liveMetricConfig.volumeLabel,
+    "Revenue": liveMetricConfig.revenueLabel,
+    "Margin Rate": liveMetricConfig.derivedLabel,
+  } : {
     "Volume": "Gross Volume",
     "Revenue": "Net Revenue",
     "Margin Rate": "Margin Rate",
@@ -1533,10 +1886,13 @@ function render() {
     return { rows: rows };
   };
 
-  // Use synthetic data as the data source (replaces external queryData prop)
+  // Data source: live Supabase data when connected, synthetic data for demo mode
+  // In live mode: no raw rows needed (server-side aggregation).
+  // queryData is only used for demo mode synthetic data.
   const queryData = React.useMemo(function() {
+    if (connectionParams) return { rows: [] }; // Live mode: empty rows, aggregates come from RPC
     return generateSyntheticData();
-  }, []);
+  }, [connectionParams]);
 
   /**
    * Extract metadata from queryData and create cleaned version.
@@ -1640,11 +1996,24 @@ function render() {
 
   // Helper to check which columns exist in the data
   const availableColumns = React.useMemo(() => {
+    // Live mode: derive from schema + synthetic time grain columns
+    if (isLiveMode && liveColumnMeta) {
+      const cols = new Set(liveColumnMeta.map(c => c.name));
+      // Add synthetic columns the dashboard uses
+      cols.add('reporting_day');
+      cols.add('reporting_week');
+      cols.add('reporting_month');
+      cols.add('reporting_quarter');
+      cols.add('reporting_year');
+      cols.add('volume');
+      cols.add('revenue');
+      return cols;
+    }
     if (!cleanedQueryData.rows || cleanedQueryData.rows.length === 0)
       return new Set();
     const firstRow = cleanedQueryData.rows[0];
     return new Set(Object.keys(firstRow));
-  }, [cleanedQueryData.rows]);
+  }, [isLiveMode, liveColumnMeta, cleanedQueryData.rows]);
 
   // Helper function to check if a column exists
   const columnExists = React.useCallback(
@@ -1943,6 +2312,10 @@ function render() {
   // Helper function to get current filter state by key
   const getFilterState = React.useCallback(
     (key) => {
+      // Live mode: use dynamic filters object
+      if (isLiveMode) {
+        return dynamicFilters[key] || [];
+      }
       const stateMap = {
         productNameFilter,
         pricingTypeFilter,
@@ -1960,6 +2333,8 @@ function render() {
       return stateMap[key] || [];
     },
     [
+      isLiveMode,
+      dynamicFilters,
       productNameFilter,
       pricingTypeFilter,
       companySegmentFilter,
@@ -1977,6 +2352,15 @@ function render() {
 
   // Helper function to get setState function by key (stable - setters never change)
   const getFilterSetState = React.useCallback((key) => {
+    // Live mode: return a setter that updates the dynamic filters object
+    if (isLiveMode) {
+      return (value) => {
+        setDynamicFilters(prev => ({
+          ...prev,
+          [key]: typeof value === 'function' ? value(prev[key] || []) : value,
+        }));
+      };
+    }
     const setStateMap = {
       productNameFilter: setProductNameFilter,
       pricingTypeFilter: setPricingTypeFilter,
@@ -1992,7 +2376,7 @@ function render() {
       customerConnectFilter: setCustomerConnectFilter,
     };
     return setStateMap[key];
-  }, []); // Empty deps - setters are stable
+  }, [isLiveMode]); // setDynamicFilters is stable; demo setters are stable
 
   // Derived FILTER_CONFIG for backwards compatibility - adds state and setState to static config
   const FILTER_CONFIG = React.useMemo(() => {
@@ -3948,6 +4332,8 @@ function render() {
   }, []);
   const dateField = React.useMemo(() => {
     switch (dataFrequency) {
+      case "Daily":
+        return COLUMNS.REPORTING_DAY || COLUMNS.REPORTING_WEEK;
       case "Weekly":
         return COLUMNS.REPORTING_WEEK;
       case "Monthly":
@@ -3961,8 +4347,78 @@ function render() {
     }
   }, [dataFrequency]);
 
+  // ===== LIVE MODE: FETCH AGGREGATED DATA FROM RPC =====
+  // Fires whenever controls change in live mode (frequency, view, filters)
+  const liveAggRequestRef = React.useRef(0);
+  React.useEffect(() => {
+    if (!isLiveMode || !liveMetricConfig) return;
+    const requestId = ++liveAggRequestRef.current;
+    setLiveAggLoading(true);
+
+    const grain = frequencyToGrain[dataFrequency] || "month";
+    const dateCol = liveMetricConfig.dateColumn || liveDateColumn;
+    const rpcMetrics = buildRpcMetrics(liveMetricConfig);
+
+    // Build p_filters from dynamicFilters (strip dim_ prefix and _filter suffix to get column name)
+    const pFilters = {};
+    Object.keys(dynamicFilters).forEach(filterKey => {
+      const vals = dynamicFilters[filterKey];
+      if (!vals || vals.length === 0) return;
+      // filterKey format: "dim_column_name_filter"
+      const colName = filterKey.replace(/^dim_/, '').replace(/_filter$/, '');
+      pFilters[colName] = vals;
+    });
+
+    // Determine active dimension column for split-by view
+    const viewConfig = view !== "Overall" ? VIEW_CONFIG[view] : null;
+    const dimColumn = viewConfig ? viewConfig.column : null;
+
+    // Call 1: Period aggregates (overall, no dimension split)
+    const periodPromise = cachedQuery('data', {
+      p_time_grain: grain,
+      p_date_column: dateCol,
+      p_metrics: rpcMetrics,
+      p_filters: pFilters,
+    });
+
+    // Call 2: Dimension aggregates (only if a dimension is selected)
+    const dimPromise = dimColumn
+      ? cachedQuery('data', {
+          p_time_grain: grain,
+          p_date_column: dateCol,
+          p_group_by: [dimColumn],
+          p_metrics: rpcMetrics,
+          p_filters: pFilters,
+        })
+      : Promise.resolve(null);
+
+    const hasMetric3 = !!liveMetricConfig.derivedAggType;
+    Promise.all([periodPromise, dimPromise])
+      .then(([periodData, dimData]) => {
+        if (requestId !== liveAggRequestRef.current) return; // Stale response
+        const periodAggs = transformToPeriodAggregates(periodData.rows || [], hasMetric3);
+        setLivePeriodAggregates(periodAggs);
+        setLiveRowCount(periodData.rows ? periodData.rows.reduce((sum, r) => sum + (Number(r.volume) || 0), 0) : 0);
+
+        if (dimData && dimColumn) {
+          const dimAggs = transformToDimensionAggregates(dimData.rows || [], dimColumn, hasMetric3);
+          setLiveDimensionAggregates(dimAggs);
+        } else {
+          setLiveDimensionAggregates({});
+        }
+        setLiveAggLoading(false);
+      })
+      .catch(err => {
+        if (requestId !== liveAggRequestRef.current) return;
+        console.error('[Dashboard] Aggregation fetch error:', err);
+        setLiveAggLoading(false);
+      });
+  }, [isLiveMode, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, buildRpcMetrics]);
+
   const periodChangeLabel = React.useMemo(() => {
     switch (dataFrequency) {
+      case "Daily":
+        return "DoD";
       case "Weekly":
         return "WoW";
       case "Monthly":
@@ -3981,6 +4437,29 @@ function render() {
   // pricingTypeToGroup) with a single walk over cleanedQueryData.rows.
   // On 800K rows this saves ~12 redundant full scans.
   const dataExtracts = React.useMemo(() => {
+    // Live mode: derive from server-provided data
+    if (isLiveMode) {
+      // allDates from period aggregates
+      var liveAllDates = livePeriodAggregates ? Object.keys(livePeriodAggregates).sort() : [];
+
+      // filterOptionsMap from liveFilterOptions (fetched via distinct RPC)
+      var liveFoMap = {};
+      FILTER_CONFIG_STATIC.forEach(function(fc) {
+        // Extract column name from filterKey: "dim_column_name_filter" → "column_name"
+        var colName = fc.key.replace(/^dim_/, '').replace(/_filter$/, '');
+        var vals = liveFilterOptions[colName] || [];
+        liveFoMap[fc.key] = ["All"].concat(vals);
+      });
+
+      return {
+        allDates: liveAllDates,
+        filterOptionsMap: liveFoMap,
+        pricingTypes: ["All"],
+        pricingTypeToGroup: new Map(),
+      };
+    }
+
+    // Demo mode: scan rows as before
     var rows = cleanedQueryData.rows;
     var n = rows.length;
     var dtCol = dateField;
@@ -4039,7 +4518,7 @@ function render() {
       pricingTypes: ptArr,
       pricingTypeToGroup: ptToGroup,
     };
-  }, [cleanedQueryData.rows, dateField, FILTER_CONFIG_STATIC]);
+  }, [isLiveMode, livePeriodAggregates, liveFilterOptions, cleanedQueryData.rows, dateField, FILTER_CONFIG_STATIC]);
 
   // Destructure for downstream consumers (preserves all existing variable names)
   var allDates = dataExtracts.allDates;
@@ -4133,7 +4612,7 @@ function render() {
     return {
       metrics: ["Revenue", "Volume", "Margin Rate"],
       views,
-      dataFrequencies: ["Weekly", "Monthly", "Quarterly", "Yearly"],
+      dataFrequencies: isLiveMode ? ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"] : ["Weekly", "Monthly", "Quarterly", "Yearly"],
       dateRanges: ["3M", "6M", "1Y", "3Y", "All"],
       filters,
     };
@@ -4348,14 +4827,18 @@ function render() {
   }, [buildFilterDescription]);
 
   const resetAllFilters = React.useCallback(() => {
-    FILTER_CONFIG.forEach(({ setState }) => setState([]));
+    if (isLiveMode) {
+      setDynamicFilters({});
+    } else {
+      FILTER_CONFIG.forEach(({ setState }) => setState([]));
+    }
     setDateRange("YTD");
     setView("Overall");
     setActiveInsightsTab(null);
     setFilterSearchText("");
     setShowFilterSuggestions(false);
-    setInsightContext(null); // 🆕 Clear drill-down context
-  }, [FILTER_CONFIG]);
+    setInsightContext(null);
+  }, [FILTER_CONFIG, isLiveMode]);
 
   // Wrapper for setDataFrequency that clears insight context
   const handleDataFrequencyChange = React.useCallback((newFrequency) => {
@@ -4437,10 +4920,10 @@ function render() {
   };
 
   // OPTIMIZATION (Opportunity 2): Compute base aggregates once, derive filtered version cheaply
-  // baseDataAggregatesByPeriod: O(N) full scan of baseFilteredData (done once)
+  // In live mode: use server-provided aggregates directly
   const baseDataAggregatesByPeriod = React.useMemo(
-    () => buildPeriodAggregates(baseFilteredData, dateField),
-    [baseFilteredData, dateField]
+    () => isLiveMode ? (livePeriodAggregates || {}) : buildPeriodAggregates(baseFilteredData, dateField),
+    [isLiveMode, livePeriodAggregates, baseFilteredData, dateField]
   );
 
   // sortedBaseDataPeriods: baseDataAggregatesByPeriod is now computed earlier (Opportunity 2)
@@ -4565,9 +5048,10 @@ function render() {
 
   // OPTIMIZATION (Opportunity 2): Compute base dimension aggregates once on baseFilteredData (O(N×M)),
   // then derive the date-filtered version cheaply (O(D×P×C)) instead of a second O(N×M) scan
+  // In live mode: use server-provided aggregates directly
   const baseDimensionAggregates = React.useMemo(
-    () => buildDimensionAggregates(baseFilteredData, dateField),
-    [baseFilteredData, dateField]
+    () => isLiveMode ? (liveDimensionAggregates || { _categoryTotals: {} }) : buildDimensionAggregates(baseFilteredData, dateField),
+    [isLiveMode, liveDimensionAggregates, baseFilteredData, dateField]
   );
 
   // dimensionAggregates: derived from baseDimensionAggregates by keeping only periods in filteredDatesSet
@@ -4639,8 +5123,9 @@ function render() {
 
   // Get unique dates/periods from filtered data
   const periods = React.useMemo(() => {
+    if (isLiveMode) return Object.keys(periodAggregates).sort();
     return Object.keys(dataByPeriod).sort();
-  }, [dataByPeriod]);
+  }, [isLiveMode, periodAggregates, dataByPeriod]);
 
   // Optimized: Get pre-computed metric value from periodAggregates when available
   const getMetricFromAggregate = React.useCallback(
@@ -4825,6 +5310,15 @@ function render() {
   };
 
   const formatMetricValue = React.useCallback((value, metricName) => {
+    // Live mode: use metric config formatting
+    if (isLiveMode && liveMetricConfig) {
+      if (metricName === "Volume") return numeral(value).format(liveMetricConfig.volumeFormat);
+      if (metricName === "Revenue") return numeral(value).format(liveMetricConfig.revenueFormat);
+      if (metricName === "Margin Rate") {
+        const displayValue = liveMetricConfig.derivedDivisor ? value / liveMetricConfig.derivedDivisor : value;
+        return numeral(displayValue).format(liveMetricConfig.derivedFormat);
+      }
+    }
     switch (metricName) {
       case "Volume":
         return numeral(value).format("$0.0a");
@@ -4835,7 +5329,7 @@ function render() {
       default:
         return numeral(value).format("0.0a");
     }
-  }, []);
+  }, [isLiveMode, liveMetricConfig]);
 
   // Format metric values (uses current metric)
   const formatMetric = React.useCallback(
@@ -5577,7 +6071,7 @@ function render() {
   );
 
   const generateStructuredInsights = (tabType) => {
-    if (periods.length < 3 || filteredData.length === 0) {
+    if (isLiveMode || periods.length < 3 || filteredData.length === 0) {
       return {
         basicInsights: {
           decomposition: [], // 🆕 NEW
@@ -8288,7 +8782,7 @@ function render() {
         },
         yaxis: {
           title: {
-            text: metric === "Margin Rate" ? "Basis Points" : "USD",
+            text: isLiveMode ? (METRIC_LABELS[metric] || metric) : (metric === "Margin Rate" ? "Basis Points" : "USD"),
             font: { size: 14, color: "#374151" },
           },
           tickfont: { color: "#6b7280" },
@@ -8541,7 +9035,7 @@ function render() {
         },
         yaxis: {
           title: {
-            text: metric === "Margin Rate" ? "Basis Points" : "USD",
+            text: isLiveMode ? (METRIC_LABELS[metric] || metric) : (metric === "Margin Rate" ? "Basis Points" : "USD"),
             font: { size: 14, color: "#374151" },
           },
           tickfont: { color: "#6b7280" },
@@ -9258,12 +9752,8 @@ function render() {
     ]
   );
 
-  // LLM Worker URL — switch between local dev and deployed worker
-  const LLM_WORKER_URL = React.useMemo(() =>
-    window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
-      ? "http://localhost:8787"
-      : "https://metrics-dashboard-llm-proxy.datalogic10.workers.dev"
-  , []);
+  // LLM Worker URL — always use deployed Cloudflare Worker
+  const LLM_WORKER_URL = "https://metrics-dashboard-llm-proxy.datalogic10.workers.dev";
 
   // Apply structured LLM response to dashboard controls
   const applyLLMResponse = React.useCallback(
@@ -9277,7 +9767,7 @@ function render() {
       }
 
       // Validate and apply dataFrequency
-      const validFreqs = ["Weekly", "Monthly", "Quarterly", "Yearly"];
+      const validFreqs = isLiveMode ? ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"] : ["Weekly", "Monthly", "Quarterly", "Yearly"];
       if (response.dataFrequency && validFreqs.includes(response.dataFrequency)) {
         setDataFrequency(response.dataFrequency);
       }
@@ -9764,6 +10254,72 @@ function render() {
           }
         `}</style>
 
+      {/* Status Banner */}
+      {liveDataLoading && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: "8px",
+          padding: "8px 16px", backgroundColor: isDarkMode ? "rgba(99, 102, 241, 0.12)" : "rgba(99, 102, 241, 0.1)",
+          border: `1px solid ${isDarkMode ? "rgba(99, 102, 241, 0.35)" : "rgba(99, 102, 241, 0.4)"}`,
+          borderRadius: "8px", marginBottom: "12px", fontSize: "12px",
+          color: isDarkMode ? "#a5b4fc" : "#4338ca",
+        }}>
+          <div style={{ width: "14px", height: "14px", border: "2px solid currentColor", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+          <span>Connecting to <strong>{connectionParams?.dataset}</strong>...</span>
+        </div>
+      )}
+      {liveDataError && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: "8px",
+          padding: "8px 16px", backgroundColor: isDarkMode ? "rgba(239, 68, 68, 0.12)" : "rgba(239, 68, 68, 0.1)",
+          border: `1px solid ${isDarkMode ? "rgba(239, 68, 68, 0.35)" : "rgba(239, 68, 68, 0.4)"}`,
+          borderRadius: "8px", marginBottom: "12px", fontSize: "12px",
+          color: isDarkMode ? "#fca5a5" : "#dc2626",
+        }}>
+          <span>Connection failed: {liveDataError}. Showing demo data instead.</span>
+        </div>
+      )}
+      {isLiveMode && (
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px",
+          padding: "8px 16px", backgroundColor: isDarkMode ? "rgba(16, 185, 129, 0.12)" : "rgba(16, 185, 129, 0.1)",
+          border: `1px solid ${isDarkMode ? "rgba(16, 185, 129, 0.35)" : "rgba(16, 185, 129, 0.4)"}`,
+          borderRadius: "8px", marginBottom: "12px", fontSize: "12px",
+          color: isDarkMode ? "#6ee7b7" : "#065f46",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#10b981", display: "inline-block" }} />
+            <span>Connected to <strong>{connectionParams.dataset}</strong>{liveRowCount > 0 ? ` — ${liveRowCount.toLocaleString()} records` : ''}{liveAggLoading ? ' (loading...)' : ''}</span>
+          </div>
+          <button
+            onClick={() => {
+              setMetricsEditorDraft({ ...(liveMetricConfig || {}) });
+              setMetricsEditorError('');
+              setShowMetricsEditor(true);
+            }}
+            style={{
+              padding: "4px 12px", borderRadius: "6px", border: "1px solid currentColor",
+              background: "transparent", color: "inherit", cursor: "pointer", fontSize: "11px",
+              fontWeight: 500, whiteSpace: "nowrap",
+            }}
+          >
+            Configure Metrics
+          </button>
+        </div>
+      )}
+      {!isLiveMode && !liveDataLoading && !liveDataError && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: "8px",
+          padding: "8px 16px",
+          backgroundColor: isDarkMode ? "rgba(234, 179, 8, 0.12)" : "rgba(234, 179, 8, 0.1)",
+          border: `1px solid ${isDarkMode ? "rgba(234, 179, 8, 0.35)" : "rgba(234, 179, 8, 0.4)"}`,
+          borderRadius: "8px", marginBottom: "12px", fontSize: "12px",
+          color: isDarkMode ? "#fcd34d" : "#92400e",
+        }}>
+          <span style={{ fontSize: "14px" }}>⚠️</span>
+          <span><strong>Demo only:</strong> All data, numbers, dimensions, and categories shown are fully synthetic and do not represent any real business or organization.</span>
+        </div>
+      )}
+
       {/* Top Section: Ask section first, then Statboxes */}
       <div style={styles.topSection}>
         {/* Natural Language Query Interface */}
@@ -9944,7 +10500,10 @@ function render() {
         </div>
 
         <div style={styles.statBoxContainer} data-guide="metric-statboxes">
-          {["Volume", "Revenue", "Margin Rate"].map((metricName) => {
+          {(isLiveMode && liveMetricConfig && !liveMetricConfig.derivedAggType
+            ? ["Volume", "Revenue"]
+            : ["Volume", "Revenue", "Margin Rate"]
+          ).map((metricName) => {
             const metricStatData = allMetricsStatData[metricName];
             if (!metricStatData) return null;
             const displayLabel = METRIC_LABELS[metricName] || metricName;
@@ -10262,7 +10821,7 @@ function render() {
               {/* Column 3 - Row 2: Date Aggregation */}
               <div style={styles.controlGroup}>
                 {renderButtonGroup(
-                  ["Weekly", "Monthly", "Quarterly", "Yearly"],
+                  isLiveMode ? ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"] : ["Weekly", "Monthly", "Quarterly", "Yearly"],
                   dataFrequency,
                   handleDataFrequencyChange,
                   styles.dataFrequencyGroup,
@@ -11554,6 +12113,322 @@ function render() {
             </>
           );
         })()}
+
+      {/* Metrics Editor Modal */}
+      {showMetricsEditor && metricsEditorDraft && (() => {
+        const allCols = liveColumnMeta || [];
+        const numericCols = allCols.filter(c =>
+          c.udt === 'int4' || c.udt === 'int8' || c.udt === 'float4' || c.udt === 'float8' || c.udt === 'numeric'
+        );
+        const dateCols = allCols.filter(c =>
+          c.udt === 'date' || c.udt === 'timestamp' || c.udt === 'timestamptz'
+        );
+        const draft = metricsEditorDraft;
+        const updateDraft = (field, value) => setMetricsEditorDraft(prev => ({ ...prev, [field]: value }));
+
+        const handleSave = () => {
+          const config = { ...draft };
+          setLiveMetricConfig(config);
+          try {
+            const storageKey = 'metricsConfig_' + connectionParams.supabaseUrl + '_' + connectionParams.dataset;
+            localStorage.setItem(storageKey, JSON.stringify(config));
+          } catch (e) {}
+          setShowMetricsEditor(false);
+          // Clear cache so new metrics take effect
+          queryCacheRef.current.clear();
+        };
+
+        const handleSuggest = async () => {
+          setMetricsEditorSuggesting(true);
+          setMetricsEditorError('');
+          try {
+            const res = await fetch(LLM_WORKER_URL + '/suggest-metrics', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ columns: liveColumnMeta }),
+            });
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}));
+              throw new Error(err.error || 'Request failed');
+            }
+            const suggestion = await res.json();
+            // Validate suggested columns exist
+            const validNumeric = numericCols.map(c => c.name);
+            const validDate = dateCols.map(c => c.name);
+            const validAllCols = allCols.map(c => c.name);
+            const allowedAggs = ['count', 'count_distinct', 'sum', 'avg', 'min', 'max'];
+            setMetricsEditorDraft(prev => ({
+              ...prev,
+              volumeAggType: suggestion.volumeAggType && allowedAggs.includes(suggestion.volumeAggType) ? suggestion.volumeAggType : (suggestion.volumeColumn ? 'sum' : 'count'),
+              volumeColumn: suggestion.volumeColumn && validAllCols.includes(suggestion.volumeColumn) ? suggestion.volumeColumn : prev.volumeColumn,
+              revenueAggType: suggestion.revenueAggType && allowedAggs.includes(suggestion.revenueAggType) ? suggestion.revenueAggType : (suggestion.revenueColumn ? 'sum' : 'count'),
+              revenueColumn: suggestion.revenueColumn && validAllCols.includes(suggestion.revenueColumn) ? suggestion.revenueColumn : prev.revenueColumn,
+              derivedAggType: suggestion.derivedAggType && allowedAggs.includes(suggestion.derivedAggType) ? suggestion.derivedAggType : prev.derivedAggType,
+              derivedColumn: suggestion.derivedColumn && validAllCols.includes(suggestion.derivedColumn) ? suggestion.derivedColumn : prev.derivedColumn,
+              volumeLabel: suggestion.volumeLabel || prev.volumeLabel,
+              revenueLabel: suggestion.revenueLabel || prev.revenueLabel,
+              derivedLabel: suggestion.derivedLabel || prev.derivedLabel,
+              volumeFormat: suggestion.volumeFormat || prev.volumeFormat,
+              revenueFormat: suggestion.revenueFormat || prev.revenueFormat,
+              derivedFormat: suggestion.derivedFormat || prev.derivedFormat,
+              dateColumn: suggestion.dateColumn && validDate.includes(suggestion.dateColumn) ? suggestion.dateColumn : prev.dateColumn,
+            }));
+          } catch (err) {
+            setMetricsEditorError(err.message || 'Suggestion failed');
+          } finally {
+            setMetricsEditorSuggesting(false);
+          }
+        };
+
+        const overlayStyle = {
+          position: 'fixed', inset: 0, zIndex: 10000,
+          backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex',
+          alignItems: 'center', justifyContent: 'center',
+        };
+        const modalStyle = {
+          backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
+          color: isDarkMode ? '#f3f4f6' : '#111827',
+          borderRadius: '12px', padding: '24px', width: '480px', maxWidth: '90vw',
+          maxHeight: '85vh', overflowY: 'auto',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+          border: `1px solid ${isDarkMode ? '#374151' : '#e5e7eb'}`,
+        };
+        const labelStyle = { fontSize: '12px', fontWeight: 600, marginBottom: '4px', display: 'block', color: isDarkMode ? '#9ca3af' : '#6b7280' };
+        const inputStyle = {
+          width: '100%', padding: '6px 10px', borderRadius: '6px', fontSize: '13px',
+          border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`,
+          backgroundColor: isDarkMode ? '#111827' : '#f9fafb',
+          color: isDarkMode ? '#f3f4f6' : '#111827',
+          outline: 'none',
+        };
+        const selectStyle = { ...inputStyle, cursor: 'pointer' };
+        const sectionStyle = { marginBottom: '16px', padding: '12px', borderRadius: '8px', backgroundColor: isDarkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', border: `1px solid ${isDarkMode ? '#374151' : '#f3f4f6'}` };
+        const rowStyle = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '6px' };
+
+        return (
+          <div style={overlayStyle} onClick={() => setShowMetricsEditor(false)}>
+            <div style={modalStyle} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Configure Metrics</h3>
+                <button onClick={() => setShowMetricsEditor(false)} style={{ background: 'none', border: 'none', color: isDarkMode ? '#9ca3af' : '#6b7280', cursor: 'pointer', fontSize: '18px', lineHeight: 1 }}>&times;</button>
+              </div>
+
+              {metricsEditorError && (
+                <div style={{ padding: '8px 12px', marginBottom: '12px', borderRadius: '6px', fontSize: '12px', backgroundColor: isDarkMode ? 'rgba(239,68,68,0.15)' : '#fef2f2', color: isDarkMode ? '#fca5a5' : '#dc2626', border: `1px solid ${isDarkMode ? 'rgba(239,68,68,0.3)' : '#fecaca'}` }}>
+                  {metricsEditorError}
+                </div>
+              )}
+
+              {/* AI Suggest Button */}
+              <button
+                onClick={handleSuggest}
+                disabled={metricsEditorSuggesting}
+                style={{
+                  width: '100%', padding: '8px', marginBottom: '16px', borderRadius: '8px',
+                  border: `1px solid ${isDarkMode ? '#6366f1' : '#818cf8'}`,
+                  backgroundColor: isDarkMode ? 'rgba(99,102,241,0.15)' : 'rgba(99,102,241,0.08)',
+                  color: isDarkMode ? '#a5b4fc' : '#4f46e5',
+                  cursor: metricsEditorSuggesting ? 'wait' : 'pointer', fontSize: '13px', fontWeight: 600,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                  opacity: metricsEditorSuggesting ? 0.7 : 1,
+                }}
+              >
+                {metricsEditorSuggesting ? (
+                  <>
+                    <span style={{ width: '14px', height: '14px', border: '2px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite', display: 'inline-block' }} />
+                    Analyzing schema...
+                  </>
+                ) : (
+                  'AI Suggest Metrics'
+                )}
+              </button>
+
+              {/* Metric Slot 1 */}
+              <div style={sectionStyle}>
+                <div style={{ fontSize: '13px', fontWeight: 700, marginBottom: '8px', color: isDarkMode ? '#f3f4f6' : '#111827' }}>
+                  Metric 1
+                </div>
+                <div style={rowStyle}>
+                  <div>
+                    <label style={labelStyle}>Aggregation</label>
+                    <select style={selectStyle} value={draft.volumeAggType || (draft.volumeColumn ? 'sum' : 'count')} onChange={e => {
+                      const agg = e.target.value;
+                      updateDraft('volumeAggType', agg);
+                      if (agg === 'count') updateDraft('volumeColumn', null);
+                    }}>
+                      <option value="count">COUNT(*)</option>
+                      <option value="count_distinct">COUNT(DISTINCT)</option>
+                      <option value="sum">SUM</option>
+                      <option value="avg">AVG</option>
+                      <option value="min">MIN</option>
+                      <option value="max">MAX</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Column</label>
+                    <select style={selectStyle} value={draft.volumeColumn || ''} disabled={(draft.volumeAggType || (draft.volumeColumn ? 'sum' : 'count')) === 'count'}
+                      onChange={e => updateDraft('volumeColumn', e.target.value || null)}>
+                      <option value="">— select —</option>
+                      {((draft.volumeAggType || 'count') === 'count_distinct' ? allCols : numericCols).map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div style={rowStyle}>
+                  <div>
+                    <label style={labelStyle}>Label</label>
+                    <input style={inputStyle} value={draft.volumeLabel || ''} onChange={e => updateDraft('volumeLabel', e.target.value)} placeholder="e.g. Total Jobs" />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Format</label>
+                    <input style={inputStyle} value={draft.volumeFormat || ''} onChange={e => updateDraft('volumeFormat', e.target.value)} placeholder="0,0" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Metric Slot 2 */}
+              <div style={sectionStyle}>
+                <div style={{ fontSize: '13px', fontWeight: 700, marginBottom: '8px', color: isDarkMode ? '#f3f4f6' : '#111827' }}>
+                  Metric 2
+                </div>
+                <div style={rowStyle}>
+                  <div>
+                    <label style={labelStyle}>Aggregation</label>
+                    <select style={selectStyle} value={draft.revenueAggType || (draft.revenueColumn ? 'sum' : 'count')} onChange={e => {
+                      const agg = e.target.value;
+                      updateDraft('revenueAggType', agg);
+                      if (agg === 'count') updateDraft('revenueColumn', null);
+                    }}>
+                      <option value="count">COUNT(*)</option>
+                      <option value="count_distinct">COUNT(DISTINCT)</option>
+                      <option value="sum">SUM</option>
+                      <option value="avg">AVG</option>
+                      <option value="min">MIN</option>
+                      <option value="max">MAX</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Column</label>
+                    <select style={selectStyle} value={draft.revenueColumn || ''} disabled={(draft.revenueAggType || (draft.revenueColumn ? 'sum' : 'count')) === 'count'}
+                      onChange={e => updateDraft('revenueColumn', e.target.value || null)}>
+                      <option value="">— select —</option>
+                      {((draft.revenueAggType || 'count') === 'count_distinct' ? allCols : numericCols).map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div style={rowStyle}>
+                  <div>
+                    <label style={labelStyle}>Label</label>
+                    <input style={inputStyle} value={draft.revenueLabel || ''} onChange={e => updateDraft('revenueLabel', e.target.value)} placeholder="e.g. Total Score" />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Format</label>
+                    <input style={inputStyle} value={draft.revenueFormat || ''} onChange={e => updateDraft('revenueFormat', e.target.value)} placeholder="0,0" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Metric Slot 3 */}
+              <div style={sectionStyle}>
+                <div style={{ fontSize: '13px', fontWeight: 700, marginBottom: '8px', color: isDarkMode ? '#f3f4f6' : '#111827' }}>
+                  Metric 3
+                </div>
+                <div style={rowStyle}>
+                  <div>
+                    <label style={labelStyle}>Aggregation</label>
+                    <select style={selectStyle} value={draft.derivedAggType || ''} onChange={e => {
+                      const agg = e.target.value;
+                      updateDraft('derivedAggType', agg || null);
+                      if (agg === 'count' || !agg) updateDraft('derivedColumn', null);
+                    }}>
+                      <option value="">— none (disable) —</option>
+                      <option value="count">COUNT(*)</option>
+                      <option value="count_distinct">COUNT(DISTINCT)</option>
+                      <option value="sum">SUM</option>
+                      <option value="avg">AVG</option>
+                      <option value="min">MIN</option>
+                      <option value="max">MAX</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Column</label>
+                    <select style={selectStyle} value={draft.derivedColumn || ''} disabled={!draft.derivedAggType || draft.derivedAggType === 'count'}
+                      onChange={e => updateDraft('derivedColumn', e.target.value || null)}>
+                      <option value="">— select —</option>
+                      {((draft.derivedAggType) === 'count_distinct' ? allCols : numericCols).map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div style={rowStyle}>
+                  <div>
+                    <label style={labelStyle}>Label</label>
+                    <input style={inputStyle} value={draft.derivedLabel || ''} onChange={e => updateDraft('derivedLabel', e.target.value)} placeholder="e.g. Avg Score" />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Format</label>
+                    <input style={inputStyle} value={draft.derivedFormat || ''} onChange={e => updateDraft('derivedFormat', e.target.value)} placeholder="0.0" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Date Column */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={labelStyle}>Date Column</label>
+                <select style={selectStyle} value={draft.dateColumn || ''} onChange={e => updateDraft('dateColumn', e.target.value || null)}>
+                  <option value="">— none —</option>
+                  {dateCols.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                </select>
+              </div>
+
+              {/* Visible Dimensions */}
+              <div style={sectionStyle}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: isDarkMode ? '#f3f4f6' : '#111827' }}>
+                    Dimensions & Filters
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={() => updateDraft('visibleDimensions', liveSchemaClassified.dimensions.map(c => c.name))} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '4px', border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`, background: 'transparent', color: isDarkMode ? '#9ca3af' : '#6b7280', cursor: 'pointer' }}>All</button>
+                    <button onClick={() => updateDraft('visibleDimensions', [])} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '4px', border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`, background: 'transparent', color: isDarkMode ? '#9ca3af' : '#6b7280', cursor: 'pointer' }}>None</button>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                  {liveSchemaClassified.dimensions.map(c => {
+                    const visible = draft.visibleDimensions ? draft.visibleDimensions.includes(c.name) : true;
+                    const label = c.name.replace(/^is_/, '').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                    return (
+                      <button key={c.name}
+                        onClick={() => {
+                          const current = draft.visibleDimensions || liveSchemaClassified.dimensions.map(d => d.name);
+                          const updated = visible ? current.filter(n => n !== c.name) : [...current, c.name];
+                          updateDraft('visibleDimensions', updated);
+                        }}
+                        style={{
+                          padding: '4px 10px', borderRadius: '14px', fontSize: '12px', cursor: 'pointer',
+                          border: `1px solid ${visible ? (isDarkMode ? '#6366f1' : '#818cf8') : (isDarkMode ? '#374151' : '#e5e7eb')}`,
+                          backgroundColor: visible ? (isDarkMode ? 'rgba(99,102,241,0.2)' : 'rgba(99,102,241,0.1)') : 'transparent',
+                          color: visible ? (isDarkMode ? '#a5b4fc' : '#4f46e5') : (isDarkMode ? '#6b7280' : '#9ca3af'),
+                          fontWeight: visible ? 600 : 400,
+                        }}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                <button onClick={() => setShowMetricsEditor(false)} style={{ padding: '8px 16px', borderRadius: '8px', border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`, background: 'transparent', color: isDarkMode ? '#d1d5db' : '#374151', cursor: 'pointer', fontSize: '13px', fontWeight: 500 }}>
+                  Cancel
+                </button>
+                <button onClick={handleSave} style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', backgroundColor: '#6366f1', color: '#ffffff', cursor: 'pointer', fontSize: '13px', fontWeight: 600 }}>
+                  Save & Apply
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
