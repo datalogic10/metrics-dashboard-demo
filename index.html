@@ -128,7 +128,7 @@
       var root = ReactDOM.createRoot(document.getElementById('root'));
       root.render(
         React.createElement(ErrorBoundary, null,
-          React.createElement(render)
+          React.createElement(__app.render)
         )
       );
       document.getElementById('loading-screen').style.display = 'none';

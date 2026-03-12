@@ -1,75 +1,43 @@
-function render() {
-  // Theme configuration - Light and Dark color palettes
-  const THEME_CONFIG = {
-    light: {
-      // Backgrounds
-      bgPrimary: "#ffffff",
-      bgSecondary: "#fafafa",
-      bgTertiary: "#f9fafb",
-      bgQuaternary: "#f3f4f6",
-      // Text
-      textPrimary: "#111827",
-      textSecondary: "#374151",
-      textTertiary: "#6b7280",
-      textQuaternary: "#9ca3af",
-      // Borders
-      borderPrimary: "#e5e7eb",
-      borderSecondary: "#d1d5db",
-      // Interactive
-      accentPrimary: "#6366f1",
-      accentHover: "#5558e3",
-      // Status colors
-      success: "#10b981",
-      successBg: "rgba(16, 185, 129, 0.12)",
-      successBorder: "rgba(16, 185, 129, 0.3)",
-      successText: "#059669",
-      danger: "#ef4444",
-      dangerBg: "rgba(239, 68, 68, 0.12)",
-      dangerBorder: "rgba(239, 68, 68, 0.3)",
-      dangerText: "#dc2626",
-      // Chart specific - seamless
-      chartBg: "#ffffff",
-      chartPlotBg: "#ffffff",
-      overlayBg: "rgba(0, 0, 0, 0.5)",
-      // Stat box
-      statBoxActiveBg: "#f0f9ff",
-      statBoxActiveBorder: "#6366f1",
-    },
-    dark: {
-      // Backgrounds - using cohesive gray scale without pitch black
-      bgPrimary: "#1e293b",
-      bgSecondary: "#1e293b",
-      bgTertiary: "#334155",
-      bgQuaternary: "#475569",
-      // Text
-      textPrimary: "#f9fafb",
-      textSecondary: "#e5e7eb",
-      textTertiary: "#d1d5db",
-      textQuaternary: "#9ca3af",
-      // Borders
-      borderPrimary: "#374151",
-      borderSecondary: "#4b5563",
-      // Interactive
-      accentPrimary: "#818cf8",
-      accentHover: "#6366f1",
-      // Status colors
-      success: "#10b981",
-      successBg: "rgba(16, 185, 129, 0.15)",
-      successBorder: "rgba(16, 185, 129, 0.4)",
-      successText: "#34d399",
-      danger: "#ef4444",
-      dangerBg: "rgba(239, 68, 68, 0.15)",
-      dangerBorder: "rgba(239, 68, 68, 0.4)",
-      dangerText: "#f87171",
-      // Chart specific - seamless, no distinction
-      chartBg: "#334155",
-      chartPlotBg: "#334155",
-      overlayBg: "rgba(0, 0, 0, 0.7)",
-      // Stat box
-      statBoxActiveBg: "rgba(129, 140, 248, 0.1)",
-      statBoxActiveBorder: "#818cf8",
-    },
-  };
+import { THEME_CONFIG, MODERN_COLOR_PALETTE, getCategoryColor } from './src/theme.js';
+import { generateSyntheticData, DEMO_COLUMNS, DEMO_DIMENSION_DEFINITIONS } from './src/syntheticData.js';
+import {
+  DEFAULT_METRIC_CONFIGS, parseConnectionParams, createRpcCaller, createQueryCache,
+  classifySchema, detectDateColumn, buildLiveColumns, buildLiveDimensions,
+  buildRpcMetrics, transformToPeriodAggregates, transformToDimensionAggregates,
+  frequencyToGrain, LLM_WORKER_URL,
+} from './src/liveConnection.js';
+import {
+  compressState as compressStateUtil,
+  expandState as expandStateUtil,
+  generateShareCode as generateShareCodeUtil,
+  decodeShareCode as decodeShareCodeUtil,
+  base64UrlEncode, base64UrlDecode,
+  VALUE_ABBREVIATIONS as VALUE_ABBREVIATIONS_MAP,
+  REVERSE_ABBREVIATIONS as REVERSE_ABBREVIATIONS_MAP,
+} from './src/shareCode.js';
+import {
+  calculatePercentageChange as calculatePercentageChangeUtil,
+  calculateGrowthMetrics as calculateGrowthMetricsUtil,
+  getWeekNumber,
+  formatPeriodDate as formatPeriodDateUtil,
+  formatYoYValue as formatYoYValueUtil,
+  capYoYForDisplay as capYoYForDisplayUtil,
+  getDimAggMetric,
+  getCategoriesFromAggregates,
+  calculateYoYDataArray as calculateYoYDataArrayUtil,
+  OVERLAY_CONFIG,
+  calculatePeriodChange,
+  calculateSMA,
+} from './src/metrics.js';
+import {
+  formatFilterName as formatFilterNameUtil,
+  getInsightSentiment as getInsightSentimentUtil,
+  getSentimentColors as getSentimentColorsUtil,
+  SENTIMENT_KEYWORDS,
+} from './src/formatUtils.js';
+import { InsightContextBanner } from './src/components/InsightContextBanner.js';
+
+export function render() {
 
   // Theme state
   const [isDarkMode, setIsDarkMode] = React.useState(false);
@@ -1201,19 +1169,7 @@ function render() {
   );
 
   // ===== LIVE DATA CONNECTION =====
-  // Parse URL hash for Supabase connection params
-  const connectionParams = React.useMemo(() => {
-    const hash = window.location.hash.replace(/^#/, '');
-    if (!hash) return null;
-    const params = new URLSearchParams(hash);
-    const supabaseUrl = params.get('supabaseUrl');
-    const apiKey = params.get('apiKey');
-    const dataset = params.get('dataset');
-    if (supabaseUrl && apiKey && dataset) {
-      return { supabaseUrl, apiKey, dataset };
-    }
-    return null;
-  }, []);
+  const connectionParams = React.useMemo(() => parseConnectionParams(), []);
 
   const [liveDataLoading, setLiveDataLoading] = React.useState(!!connectionParams);
   const [liveDataError, setLiveDataError] = React.useState(null);
@@ -1244,103 +1200,26 @@ function render() {
   const [metricsEditorSuggesting, setMetricsEditorSuggesting] = React.useState(false);
   const [metricsEditorError, setMetricsEditorError] = React.useState('');
 
-  // Default metric configs per known dataset
-  const DEFAULT_METRIC_CONFIGS = {
-    fmc_job_metrics: {
-      volumeColumn: null,         // null = count rows (COUNT(*))
-      revenueColumn: "score",     // maps to revenue slot via SUM
-      volumeLabel: "Total Jobs",
-      revenueLabel: "Total Score",
-      derivedLabel: "Avg Score",
-      volumeFormat: "0,0",
-      revenueFormat: "0,0",
-      derivedFormat: "0.0",
-      derivedDivisor: 10000,
-      dateColumn: "reporting_dt",
-    },
-    fmc_conversations: {
-      volumeColumn: "message_count",
-      revenueColumn: "user_message_count",
-      volumeLabel: "Total Messages",
-      revenueLabel: "User Messages",
-      derivedLabel: "User Msg Rate",
-      volumeFormat: "0,0",
-      revenueFormat: "0,0",
-      derivedFormat: "0.0%",
-      derivedDivisor: 10000,
-      dateColumn: "reporting_dt",
-    },
-  };
-
   // ===== RPC CALL HELPER =====
-  const callQueryDataset = React.useCallback((action, params) => {
-    if (!connectionParams) return Promise.reject(new Error('No connection'));
-    const { supabaseUrl, apiKey, dataset } = connectionParams;
-    return fetch(supabaseUrl + '/rest/v1/rpc/query_dataset', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'apikey': apiKey,
-        'Authorization': 'Bearer ' + apiKey,
-      },
-      body: JSON.stringify({ p_table: dataset, p_action: action, ...params }),
-    })
-      .then(res => { if (!res.ok) throw new Error('RPC returned ' + res.status); return res.json(); })
-      .then(data => { if (data.error) throw new Error(data.error); return data; });
-  }, [connectionParams]);
+  const callQueryDataset = React.useMemo(
+    () => createRpcCaller(connectionParams),
+    [connectionParams]
+  );
 
   // ===== QUERY CACHE (in-memory LRU) =====
-  const queryCacheRef = React.useRef(new Map());
-  const getCacheKey = (action, params) => JSON.stringify({ action, ...params });
-  const getCached = (key) => {
-    const cache = queryCacheRef.current;
-    if (cache.has(key)) {
-      const val = cache.get(key);
-      cache.delete(key); cache.set(key, val); // Move to end (LRU)
-      return val;
-    }
-    return null;
-  };
-  const setCache = (key, value) => {
-    const cache = queryCacheRef.current;
-    if (cache.size >= 100) { cache.delete(cache.keys().next().value); } // Evict oldest
-    cache.set(key, value);
-  };
+  const queryCacheRef = React.useRef(createQueryCache(100));
 
-  // Cached RPC call
   const cachedQuery = React.useCallback((action, params) => {
-    const key = getCacheKey(action, params);
-    const cached = getCached(key);
+    const cache = queryCacheRef.current;
+    const key = cache.getKey(action, params);
+    const cached = cache.get(key);
     if (cached) return Promise.resolve(cached);
-    return callQueryDataset(action, params).then(result => { setCache(key, result); return result; });
+    return callQueryDataset(action, params).then(result => { cache.set(key, result); return result; });
   }, [callQueryDataset]);
 
   // ===== BUILD COLUMNS/DIMENSIONS FROM SCHEMA =====
-  // Detect date column from schema metadata
-  const liveDateColumn = React.useMemo(() => {
-    if (!liveColumnMeta) return null;
-    const dateCol = liveColumnMeta.find(c =>
-      c.udt === 'date' || c.udt === 'timestamp' || c.udt === 'timestamptz' ||
-      c.name === 'reporting_dt' || c.name.includes('_dt') || c.name.includes('date')
-    );
-    return dateCol ? dateCol.name : null;
-  }, [liveColumnMeta]);
-
-  // Classify schema columns into dimensions and metrics
-  const liveSchemaClassified = React.useMemo(() => {
-    if (!liveColumnMeta || !liveDateColumn) return { dimensions: [], metrics: [] };
-    const dims = [];
-    const mets = [];
-    liveColumnMeta.forEach(c => {
-      if (c.name === liveDateColumn) return; // Skip date column
-      if (c.udt === 'int4' || c.udt === 'int8' || c.udt === 'float4' || c.udt === 'float8' || c.udt === 'numeric') {
-        mets.push(c);
-      } else {
-        dims.push(c);
-      }
-    });
-    return { dimensions: dims, metrics: mets };
-  }, [liveColumnMeta, liveDateColumn]);
+  const liveDateColumn = React.useMemo(() => detectDateColumn(liveColumnMeta), [liveColumnMeta]);
+  const liveSchemaClassified = React.useMemo(() => classifySchema(liveColumnMeta, liveDateColumn), [liveColumnMeta, liveDateColumn]);
 
   // Filter dimensions to only those the user selected as visible
   const visibleLiveDimensions = React.useMemo(() => {
@@ -1350,136 +1229,7 @@ function render() {
     return liveSchemaClassified.dimensions.filter(c => visible.includes(c.name));
   }, [liveSchemaClassified.dimensions, liveMetricConfig]);
 
-  const buildLiveColumns = (schemaDims) => {
-    const cols = {
-      REPORTING_DAY: "reporting_day",
-      REPORTING_WEEK: "reporting_week",
-      REPORTING_MONTH: "reporting_month",
-      REPORTING_QUARTER: "reporting_quarter",
-      REPORTING_YEAR: "reporting_year",
-      VOLUME: "volume",
-      REVENUE: "revenue",
-    };
-    schemaDims.forEach(c => {
-      cols["DIM_" + c.name.toUpperCase()] = c.name;
-    });
-    return cols;
-  };
 
-  const buildLiveDimensions = (schemaDims) => {
-    return schemaDims.map((c, index) => {
-      // Generate a human-readable label from column name
-      const label = c.name.replace(/^is_/, '').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-      return {
-        columnKey: "DIM_" + c.name.toUpperCase(),
-        filterKey: "dim_" + c.name + "_filter",
-        abbreviation: c.name.slice(0, 3),
-        filterLabel: label,
-        viewName: label,
-        viewLabel: label,
-        insightLabel: label.toLowerCase(),
-        marketLeaderLabel: label.toLowerCase(),
-        insightTextPrefix: "leads",
-        isProductDimension: false,
-        displayOrder: index + 1,
-      };
-    });
-  };
-
-  // ===== RESPONSE TRANSFORMERS =====
-  // Transform flat RPC rows into periodAggregates format
-  const transformToPeriodAggregates = (rows, hasMetric3) => {
-    const aggs = {};
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const period = row.period;
-      if (!period) continue;
-      const vol = Number(row.volume) || 0;
-      const rev = Number(row.revenue) || 0;
-      const m3 = hasMetric3 ? (Number(row.derived) || 0) : (vol > 0 ? (10000 * rev) / vol : 0);
-      aggs[period] = {
-        totalVolume: vol,
-        totalRevenue: rev,
-        Volume: vol,
-        Revenue: rev,
-        "Margin Rate": m3,
-      };
-    }
-    return aggs;
-  };
-
-  // Transform flat RPC rows into dimensionAggregates format (single dimension)
-  const transformToDimensionAggregates = (rows, dimColumn, hasMetric3) => {
-    const aggs = {};
-    const categoryTotals = {};
-    aggs[dimColumn] = {};
-    categoryTotals[dimColumn] = {};
-
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const period = row.period;
-      const category = row[dimColumn] || "Unknown";
-      const vol = Number(row.volume) || 0;
-      const rev = Number(row.revenue) || 0;
-      const m3 = hasMetric3 ? (Number(row.derived) || 0) : (vol > 0 ? (10000 * rev) / vol : 0);
-
-      if (!aggs[dimColumn][period]) aggs[dimColumn][period] = {};
-      aggs[dimColumn][period][category] = {
-        totalVolume: vol, totalRevenue: rev,
-        Volume: vol, Revenue: rev,
-        "Margin Rate": m3,
-      };
-
-      if (!categoryTotals[dimColumn][category]) {
-        categoryTotals[dimColumn][category] = { totalVolume: 0, totalRevenue: 0, _derivedSum: 0, _derivedCount: 0 };
-      }
-      categoryTotals[dimColumn][category].totalVolume += vol;
-      categoryTotals[dimColumn][category].totalRevenue += rev;
-      if (hasMetric3) {
-        categoryTotals[dimColumn][category]._derivedSum += m3;
-        categoryTotals[dimColumn][category]._derivedCount += 1;
-      }
-    }
-
-    // Derive metrics for category totals
-    Object.keys(categoryTotals[dimColumn]).forEach(cat => {
-      const t = categoryTotals[dimColumn][cat];
-      t.Volume = t.totalVolume;
-      t.Revenue = t.totalRevenue;
-      if (hasMetric3) {
-        t["Margin Rate"] = t._derivedCount > 0 ? t._derivedSum / t._derivedCount : 0;
-      } else {
-        t["Margin Rate"] = t.totalVolume > 0 ? (10000 * t.totalRevenue) / t.totalVolume : 0;
-      }
-    });
-
-    aggs._categoryTotals = categoryTotals;
-    return aggs;
-  };
-
-  // Build p_metrics array for the RPC from metric config
-  const buildRpcMetrics = React.useCallback((config) => {
-    if (!config) return [];
-    const metrics = [];
-    const addMetric = (aggType, column, alias) => {
-      const agg = aggType || (column ? 'sum' : 'count');
-      if (agg === 'count') {
-        metrics.push({ type: "count", alias });
-      } else {
-        metrics.push({ type: agg, column, alias });
-      }
-    };
-    addMetric(config.volumeAggType, config.volumeColumn, "volume");
-    addMetric(config.revenueAggType, config.revenueColumn, "revenue");
-    // Metric 3: independent if derivedAggType is set, otherwise derived client-side
-    if (config.derivedAggType) {
-      addMetric(config.derivedAggType, config.derivedColumn, "derived");
-    }
-    return metrics;
-  }, []);
-
-  // Map dashboard dataFrequency to RPC time_grain
-  const frequencyToGrain = { "Daily": "day", "Weekly": "week", "Monthly": "month", "Quarterly": "quarter", "Yearly": "year" };
 
   // ===== STARTUP: FETCH SCHEMA + DISTINCT VALUES =====
   React.useEffect(() => {
@@ -1553,163 +1303,9 @@ function render() {
     setDynamicFilters(prev => ({ ...prev, [filterKey]: value }));
   }, []);
 
-  const COLUMNS = isLiveMode ? buildLiveColumns(visibleLiveDimensions) : {
-    REPORTING_WEEK: "reporting_week",
-    REPORTING_MONTH: "reporting_month",
-    REPORTING_QUARTER: "reporting_quarter",
-    REPORTING_YEAR: "reporting_year",
-    PRODUCT_GROUP_L1: "product_group_l1",
-    PRODUCT_NAME: "product_name",
-    PRODUCT: "product",
-    CUSTOMER_SEGMENT: "customer_segment",
-    REGION: "region",
-    COUNTRY: "country",
-    ACQUISITION_CHANNEL: "acquisition_channel",
-    CUSTOMER_TYPE: "customer_type",
-    CHANNEL: "channel",
-    CHANNEL_TYPE: "channel_type",
-    VOLUME: "volume",
-    REVENUE: "revenue",
-  };
+  const COLUMNS = isLiveMode ? buildLiveColumns(visibleLiveDimensions) : DEMO_COLUMNS;
 
-  // ===== DIMENSION_DEFINITIONS: Single source of truth for all dimensions =====
-  // In live mode, auto-generated from Supabase column metadata.
-  // In demo mode, hardcoded for the synthetic dataset.
-  const DIMENSION_DEFINITIONS = isLiveMode ? buildLiveDimensions(visibleLiveDimensions) : [
-    // Product hierarchy dimensions
-    {
-      columnKey: "PRODUCT_GROUP_L1",
-      filterKey: "productGroupFilter",
-      abbreviation: "pg",
-      filterLabel: "Product Group",
-      viewName: "Product Group",
-      viewLabel: "Product Groups",
-      insightLabel: "product group",
-      marketLeaderLabel: "product groups",
-      insightTextPrefix: "leads",
-      isProductDimension: true,
-      displayOrder: 1,
-    },
-    {
-      columnKey: "PRODUCT_NAME",
-      filterKey: "productNameFilter",
-      abbreviation: "pn",
-      filterLabel: "Product",
-      viewName: "Product",
-      viewLabel: "Products",
-      insightLabel: "product",
-      marketLeaderLabel: "products",
-      insightTextPrefix: "leads",
-      isProductDimension: true,
-      displayOrder: 2,
-    },
-    {
-      columnKey: "PRODUCT",
-      filterKey: "pricingTypeFilter",
-      abbreviation: "pt",
-      filterLabel: "Pricing Type",
-      viewName: "Pricing Type",
-      viewLabel: "Pricing Types",
-      insightLabel: "pricing type",
-      marketLeaderLabel: "pricing types",
-      insightTextPrefix: "leads",
-      isProductDimension: true,
-      displayOrder: 3,
-    },
-    // Geographic dimensions
-    {
-      columnKey: "COUNTRY",
-      filterKey: "revenueCountryFilter",
-      abbreviation: "rc",
-      filterLabel: "Country",
-      viewName: "Country",
-      viewLabel: "Countries",
-      insightLabel: "country",
-      marketLeaderLabel: "countries",
-      insightTextPrefix: "leads",
-      isProductDimension: false,
-      displayOrder: 4,
-    },
-    {
-      columnKey: "REGION",
-      filterKey: "revenueRegionFilter",
-      abbreviation: "rr",
-      filterLabel: "Region",
-      viewName: "Region",
-      viewLabel: "Regions",
-      insightLabel: "region",
-      marketLeaderLabel: "regions",
-      insightTextPrefix: "leads",
-      isProductDimension: false,
-      displayOrder: 5,
-    },
-    // Other dimensions
-    {
-      columnKey: "CHANNEL",
-      filterKey: "channelFilter",
-      abbreviation: "ch",
-      filterLabel: "Channel",
-      viewName: "Channel",
-      viewLabel: "Channels",
-      insightLabel: "channel",
-      marketLeaderLabel: "channels",
-      insightTextPrefix: "leads",
-      isProductDimension: false,
-      displayOrder: 6,
-    },
-    {
-      columnKey: "CHANNEL_TYPE",
-      filterKey: "channelTypeFilter",
-      abbreviation: "cht",
-      filterLabel: "Channel Type",
-      viewName: "Channel Type",
-      viewLabel: "Channel Types",
-      insightLabel: "channel type",
-      marketLeaderLabel: "channel types",
-      insightTextPrefix: "leads",
-      isProductDimension: false,
-      displayOrder: 7,
-    },
-    {
-      columnKey: "CUSTOMER_SEGMENT",
-      filterKey: "companySegmentFilter",
-      abbreviation: "cs",
-      filterLabel: "Customer Segment",
-      viewName: "Customer Segment",
-      viewLabel: "Customer Segments",
-      insightLabel: "segment",
-      marketLeaderLabel: "segments",
-      insightTextPrefix: "leads",
-      isProductDimension: false,
-      displayOrder: 8,
-    },
-    {
-      columnKey: "ACQUISITION_CHANNEL",
-      filterKey: "acquisitionChannelFilter",
-      abbreviation: "ac",
-      filterLabel: "Acquisition Channel",
-      viewName: "Acquisition Channel",
-      viewLabel: "Acquisition Channels",
-      insightLabel: "acquisition channel",
-      marketLeaderLabel: "acquisition channels",
-      insightTextPrefix: "leads",
-      isProductDimension: false,
-      displayOrder: 9,
-    },
-    {
-      columnKey: "CUSTOMER_TYPE",
-      filterKey: "isAiCompanyFilter",
-      abbreviation: "ct",
-      filterLabel: "Customer Type",
-      viewName: "Customer Type",
-      viewLabel: "Customer Types",
-      insightLabel: "customer type",
-      marketLeaderLabel: "customer types",
-      insightTextPrefix: "leads",
-      isProductDimension: false,
-      displayOrder: 10,
-    },
-  ];
+  const DIMENSION_DEFINITIONS = isLiveMode ? buildLiveDimensions(visibleLiveDimensions) : DEMO_DIMENSION_DEFINITIONS;
 
   // Metric display labels — in live mode, use labels from metric config
   const METRIC_LABELS = isLiveMode && liveMetricConfig ? {
@@ -1720,170 +1316,6 @@ function render() {
     "Volume": "Gross Volume",
     "Revenue": "Net Revenue",
     "Margin Rate": "Margin Rate",
-  };
-
-  // ===== SYNTHETIC DATA GENERATOR =====
-  // Generates realistic time-series analytics data at WEEKLY granularity for demo purposes.
-  // Jan 2023 – current date × 4 products × 4 regions (weekly rows).
-  // Supports Weekly / Monthly / Quarterly / Yearly aggregation via reporting_* fields.
-  // Growth rates are deliberately divergent to surface compelling Category Trend insights.
-  const generateSyntheticData = function() {
-    var rows = [];
-    var rngState = 1234567891;
-    var rng = function() {
-      rngState = (rngState * 1664525 + 1013904223) & 0x7fffffff;
-      return rngState / 0x7fffffff;
-    };
-
-    var productNames = ["Core Product", "Support Add-on", "Analytics Add-on", "Enterprise Suite"];
-
-    var productGroupMap = {
-      "Core Product": "Core Products",
-      "Support Add-on": "Core Products",
-      "Analytics Add-on": "Growth Products",
-      "Enterprise Suite": "Growth Products",
-    };
-
-    // Pricing type options per product
-    var pricingTypeMap = {
-      "Core Product": ["Annual Contract", "Monthly Subscription"],
-      "Support Add-on": ["Volume License", "Monthly Subscription"],
-      "Analytics Add-on": ["Usage-Based", "Annual Contract"],
-      "Enterprise Suite": ["Annual Contract", "Volume License"],
-    };
-
-    var regions = ["NA", "EMEA", "APAC", "LATAM"];
-    var countryMap = {
-      "NA": ["US", "Canada"],
-      "EMEA": ["UK", "Germany", "France"],
-      "APAC": ["Japan", "Australia", "Singapore"],
-      "LATAM": ["Brazil", "Mexico"],
-    };
-    var channels = ["Direct", "Partner", "Self-Serve", "Inbound"];
-    var channelTypeMap = {
-      "Direct": "Sales-Led",
-      "Partner": "Partner-Led",
-      "Self-Serve": "Product-Led",
-      "Inbound": "Marketing-Led",
-    };
-    var segmentMap = {
-      "Core Product": "Enterprise",
-      "Support Add-on": "SMB",
-      "Analytics Add-on": "Mid-Market",
-      "Enterprise Suite": "Enterprise",
-    };
-    var acquisitionChannels = ["Organic Search", "Paid Search", "Referral", "Partnership"];
-    var customerTypes = ["Tech-Native", "Traditional", "Digital-First"];
-
-    // Base annual volume per product (divided by 52 for weekly baseline)
-    var baseWeeklyVolumes = {
-      "Core Product": 120000000 / 52,
-      "Support Add-on": 45000000 / 52,
-      "Analytics Add-on": 35000000 / 52,
-      "Enterprise Suite": 60000000 / 52,
-    };
-    var regionFactors = {
-      "NA": 0.45,
-      "EMEA": 0.30,
-      "APAC": 0.18,
-      "LATAM": 0.07,
-    };
-    var marginRates = {
-      "Core Product": 0.30,
-      "Support Add-on": 0.20,
-      "Analytics Add-on": 0.35,
-      "Enterprise Suite": 0.28,
-    };
-    // Deliberately divergent annual growth rates to surface clear Category Trend insights:
-    // Analytics Add-on = star, Support Add-on = declining, Enterprise Suite = strong,
-    // Core Product = steady. This creates a compelling investigation path demo narrative.
-    var annualGrowthRates = {
-      "Core Product": 0.32,
-      "Support Add-on": -0.18,
-      "Analytics Add-on": 0.85,
-      "Enterprise Suite": 0.55,
-    };
-
-    // Generate one row per (week × product × region)
-    // Start: Monday Jan 2, 2023; End: most recent Monday before today
-    var currentDate = new Date(2023, 0, 2);
-    var today = new Date();
-    var dayOfWeek = today.getDay();
-    var endDate = new Date(today);
-    endDate.setDate(today.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1)); // roll back to Monday
-    var weekIndex = 0;
-
-    while (currentDate <= endDate) {
-      var yr = currentDate.getFullYear();
-      var mo = currentDate.getMonth() + 1;
-      var dy = currentDate.getDate();
-      var moStr = mo < 10 ? "0" + mo : String(mo);
-      var dyStr = dy < 10 ? "0" + dy : String(dy);
-
-      var weekStr = yr + "-" + moStr + "-" + dyStr;
-      var monthStr = yr + "-" + moStr + "-01";
-      var quarter = Math.ceil(mo / 3);
-      var quarterStr = yr + "-Q" + quarter;
-      var yearStr = String(yr);
-
-      for (var pIdx = 0; pIdx < productNames.length; pIdx++) {
-        var productName = productNames[pIdx];
-        var growthRate = annualGrowthRates[productName];
-        var weeklyGrowthFactor = Math.pow(1 + growthRate, weekIndex / 52);
-
-        for (var rIdx = 0; rIdx < regions.length; rIdx++) {
-          var region = regions[rIdx];
-          var regionFactor = regionFactors[region];
-          var countries = countryMap[region];
-          var country = countries[(pIdx + rIdx) % countries.length];
-
-          var noise = 0.92 + rng() * 0.16;
-          // Seasonal curve: peaks in Sep/Oct, troughs in Jan/Mar
-          var seasonality = 1 + 0.12 * Math.sin((mo - 3) * Math.PI / 6);
-
-          var volume = Math.round(
-            baseWeeklyVolumes[productName] * regionFactor *
-            weeklyGrowthFactor * seasonality * noise
-          );
-          var marginRate = marginRates[productName];
-          var revenue = Math.round(volume * marginRate * (0.95 + rng() * 0.10));
-
-          var comboIdx = pIdx * regions.length + rIdx;
-          var channel = channels[comboIdx % channels.length];
-          var channelType = channelTypeMap[channel];
-          var segment = segmentMap[productName];
-          var acqChannel = acquisitionChannels[comboIdx % acquisitionChannels.length];
-          var customerType = customerTypes[pIdx % customerTypes.length];
-          var pricingTypes = pricingTypeMap[productName];
-          var pricingType = pricingTypes[rIdx % pricingTypes.length];
-
-          rows.push({
-            reporting_week: weekStr,
-            reporting_month: monthStr,
-            reporting_quarter: quarterStr,
-            reporting_year: yearStr,
-            product_group_l1: productGroupMap[productName],
-            product_name: productName,
-            product: pricingType,
-            region: region,
-            country: country,
-            channel: channel,
-            channel_type: channelType,
-            customer_segment: segment,
-            acquisition_channel: acqChannel,
-            customer_type: customerType,
-            volume: volume,
-            revenue: revenue,
-          });
-        }
-      }
-
-      // Advance to next Monday
-      currentDate.setDate(currentDate.getDate() + 7);
-      weekIndex++;
-    }
-
-    return { rows: rows };
   };
 
   // Data source: live Supabase data when connected, synthetic data for demo mode
@@ -2027,19 +1459,6 @@ function render() {
   const PRODUCT_DIMENSIONS = DIMENSION_DEFINITIONS.filter(
     (dim) => dim.isProductDimension && columnExists(COLUMNS[dim.columnKey])
   ).map((dim) => COLUMNS[dim.columnKey]);
-
-  const MODERN_COLOR_PALETTE = [
-    "#6366f1",
-    "#ef4444",
-    "#10b981",
-    "#f59e0b",
-    "#8b5cf6",
-    "#06b6d4",
-    "#84cc16",
-    "#f97316",
-    "#ec4899",
-    "#6b7280",
-  ];
 
   // VIEW_CONFIG - derived from DIMENSION_DEFINITIONS (DRY)
   // Only include dimensions that exist in the data, sorted by displayOrder
@@ -2240,20 +1659,13 @@ function render() {
     },
   ];
 
-  const getCategoryColor = (
-    category,
-    index,
-    fallbackPalette = MODERN_COLOR_PALETTE
-  ) => {
-    if (!category) return fallbackPalette[0];
-    if (category === "Rest Combined") return "#9ca3af";
-    return fallbackPalette[index % fallbackPalette.length];
-  };
-
   const [dataFrequency, setDataFrequency] = React.useState("Monthly");
   const [metric, setMetric] = React.useState("Revenue");
   const [activePeriodComparison, setActivePeriodComparison] =
-    React.useState("YoY"); // YoY, MoM, QoQ, WoW
+    React.useState("YoY"); // YoY, MoM, QoQ, WoW (stat boxes)
+  const [activeOverlays, setActiveOverlays] = React.useState({ yoy: true }); // chart overlay toggles
+  const [smaWindow, setSmaWindow] = React.useState(3);
+  const [showOverlayMenu, setShowOverlayMenu] = React.useState(false);
   const [view, setView] = React.useState("Overall");
   const [topX, setTopX] = React.useState(3);
   const [categorySelectionMode, setCategorySelectionMode] =
@@ -3035,302 +2447,20 @@ function render() {
     setGuideStep(0);
   }, []);
 
-  const VALUE_ABBREVIATIONS = React.useMemo(
-    () => ({
-      // Data frequencies
-      Weekly: "W",
-      Monthly: "Mo",
-      Quarterly: "Q",
-      Yearly: "Yr",
-      // Metrics
-      Revenue: "O",
-      Volume: "P",
-      "Margin Rate": "MR",
-      // Views ("Overall" is default, no abbreviation needed)
-      "Product Group": "PG",
-      "Product": "Pr",
-      "Pricing Type": "PT",
-      "Customer Segment": "CS",
-      "Region": "Re",
-      "Country": "Co",
-      "Acquisition Channel": "AC",
-      "Customer Type": "CT",
-      "Channel": "Ch",
-      "Channel Type": "ChT",
-      // Date ranges
-      QTD: "Qt",
-      YTD: "Yt",
-      "1Y": "1y",
-      All: "A",
-      // Category selection modes
-      topX: "T",
-      manual: "Man",
-    }),
-    []
-  );
-
-  const REVERSE_ABBREVIATIONS = React.useMemo(
-    () =>
-      Object.fromEntries(
-        Object.entries(VALUE_ABBREVIATIONS).map(([k, v]) => [v, k])
-      ),
-    [VALUE_ABBREVIATIONS]
-  );
-
-  // Helper function to compress a state snapshot (can be called recursively)
-  const compressStateHelper = React.useCallback(
-    (snapshot, isNested = false) => {
-      if (!snapshot) return null;
-
-      const compact = {};
-
-      // Default values - only include if different from default
-      if (snapshot.dataFrequency !== "Monthly") {
-        compact.df =
-          VALUE_ABBREVIATIONS[snapshot.dataFrequency] || snapshot.dataFrequency;
-      }
-      if (snapshot.metric !== "Revenue") {
-        compact.m = VALUE_ABBREVIATIONS[snapshot.metric] || snapshot.metric;
-      }
-      if (snapshot.view !== "Overall" && snapshot.view !== "") {
-        compact.v = VALUE_ABBREVIATIONS[snapshot.view] || snapshot.view;
-      }
-      if (snapshot.topX !== 3) {
-        compact.tx = snapshot.topX;
-      }
-      if (snapshot.dateRange !== "YTD") {
-        compact.dr =
-          VALUE_ABBREVIATIONS[snapshot.dateRange] || snapshot.dateRange;
-      }
-      if (snapshot.activeInsightsTab) {
-        compact.ait = snapshot.activeInsightsTab;
-      }
-      if (
-        snapshot.selectedCategories &&
-        snapshot.selectedCategories.length > 0
-      ) {
-        compact.sc = snapshot.selectedCategories;
-      }
-      if (snapshot.categorySelectionMode !== "topX") {
-        compact.csm =
-          VALUE_ABBREVIATIONS[snapshot.categorySelectionMode] ||
-          snapshot.categorySelectionMode;
-      }
-      if (snapshot.showAllShareTraces !== false) {
-        compact.sst = snapshot.showAllShareTraces ? 1 : 0;
-      }
-      if (snapshot.showAllGrowthTraces !== false) {
-        compact.sgt = snapshot.showAllGrowthTraces ? 1 : 0;
-      }
-      if (snapshot.showAllDollarTraces !== true) {
-        compact.sdt = snapshot.showAllDollarTraces ? 1 : 0;
-      }
-
-      // Add filters with short keys - only include non-empty filters
-      // Derived from DIMENSION_DEFINITIONS (DRY)
-      DIMENSION_DEFINITIONS.forEach((dim) => {
-        if (snapshot[dim.filterKey] && snapshot[dim.filterKey].length > 0) {
-          compact[dim.abbreviation] = snapshot[dim.filterKey];
-        }
-      });
-
-      // Only compress nested scenarios at the top level (avoid infinite recursion)
-      if (!isNested) {
-        // Add scenario comparison state - recursively compress scenario snapshots
-        if (snapshot.scenario1) {
-          compact.s1 = compressStateHelper(snapshot.scenario1, true);
-        }
-        if (snapshot.scenario2) {
-          compact.s2 = compressStateHelper(snapshot.scenario2, true);
-        }
-        if (snapshot.scenario3) {
-          compact.s3 = compressStateHelper(snapshot.scenario3, true);
-        }
-        if (
-          snapshot.activeScenarios &&
-          (snapshot.activeScenarios.scenario1 ||
-            snapshot.activeScenarios.scenario2 ||
-            snapshot.activeScenarios.scenario3)
-        ) {
-          compact.as = snapshot.activeScenarios;
-        }
-        if (snapshot.scenarioLabels) {
-          compact.sl = snapshot.scenarioLabels;
-        }
-        if (snapshot.showScenarioPanel) {
-          compact.ssp = snapshot.showScenarioPanel ? 1 : 0;
-        }
-        // Add legend visibility state - only include if not empty
-        if (
-          snapshot.traceVisibility &&
-          Object.keys(snapshot.traceVisibility).length > 0
-        ) {
-          compact.tv = snapshot.traceVisibility;
-        }
-      } else {
-        // For nested scenarios, keep visibleTraceNames if present
-        if (
-          snapshot.visibleTraceNames &&
-          snapshot.visibleTraceNames.length > 0
-        ) {
-          compact.vtn = snapshot.visibleTraceNames;
-        }
-      }
-
-      // 🆕 Investigation context (not nested in scenarios)
-      if (!isNested && snapshot.insightContext) {
-        compact.ic = snapshot.insightContext;
-      }
-
-      return compact;
-    },
-    [VALUE_ABBREVIATIONS]
-  );
-
+  // Share code utilities (delegated to src/shareCode.js)
   const compressState = React.useCallback(
-    (snapshot) => {
-      return compressStateHelper(snapshot, false);
-    },
-    [compressStateHelper]
+    (snapshot) => compressStateUtil(snapshot, DIMENSION_DEFINITIONS),
+    [DIMENSION_DEFINITIONS]
   );
-
-  // Helper function to expand a compressed state (can be called recursively)
-  const expandStateHelper = React.useCallback(
-    (compact) => {
-      if (!compact) return null;
-
-      // Helper to expand abbreviations
-      const expandValue = (abbr, defaultValue) => {
-        if (abbr === undefined) return defaultValue;
-        // Expand abbreviation, or return as-is if not found (for non-abbreviated values like filter names)
-        return REVERSE_ABBREVIATIONS[abbr] || abbr;
-      };
-
-      const snapshot = {
-        dataFrequency: expandValue(compact.df, "Monthly"),
-        metric: expandValue(compact.m, "Revenue"),
-        view: expandValue(compact.v, "Overall") || "Overall",
-        topX: compact.tx !== undefined ? compact.tx : 3,
-        dateRange: expandValue(compact.dr, "YTD"),
-        activeInsightsTab: compact.ait || null,
-        selectedCategories: compact.sc || [],
-        categorySelectionMode: expandValue(compact.csm, "topX"),
-        showAllShareTraces:
-          compact.sst !== undefined ? compact.sst === 1 : false,
-        showAllGrowthTraces:
-          compact.sgt !== undefined ? compact.sgt === 1 : false,
-        showAllDollarTraces:
-          compact.sdt !== undefined ? compact.sdt === 1 : true,
-      };
-
-      // Restore filters - derived from DIMENSION_DEFINITIONS (DRY)
-      // Initialize all filters to empty arrays
-      DIMENSION_DEFINITIONS.forEach((dim) => {
-        snapshot[dim.filterKey] = [];
-      });
-      // Restore filters from compact format
-      DIMENSION_DEFINITIONS.forEach((dim) => {
-        if (compact[dim.abbreviation]) {
-          snapshot[dim.filterKey] = compact[dim.abbreviation];
-        }
-      });
-
-      // Restore visibleTraceNames if present (for nested scenarios)
-      if (compact.vtn !== undefined) {
-        snapshot.visibleTraceNames = compact.vtn;
-      }
-
-      return snapshot;
-    },
-    [REVERSE_ABBREVIATIONS]
-  );
-
-  const expandState = React.useCallback(
-    (compact) => {
-      const snapshot = expandStateHelper(compact);
-
-      // Restore scenario comparison state - recursively expand scenario snapshots
-      if (compact.s1 !== undefined) {
-        snapshot.scenario1 = expandStateHelper(compact.s1);
-      }
-      if (compact.s2 !== undefined) {
-        snapshot.scenario2 = expandStateHelper(compact.s2);
-      }
-      if (compact.s3 !== undefined) {
-        snapshot.scenario3 = expandStateHelper(compact.s3);
-      }
-      if (compact.as !== undefined) {
-        snapshot.activeScenarios = compact.as;
-      } else {
-        snapshot.activeScenarios = {
-          scenario1: false,
-          scenario2: false,
-          scenario3: false,
-        };
-      }
-      if (compact.sl !== undefined) {
-        snapshot.scenarioLabels = compact.sl;
-      } else {
-        snapshot.scenarioLabels = {
-          scenario1: "Scenario 1",
-          scenario2: "Scenario 2",
-          scenario3: "Scenario 3",
-        };
-      }
-      if (compact.ssp !== undefined) {
-        snapshot.showScenarioPanel = compact.ssp === 1;
-      }
-      // Restore legend visibility state
-      if (compact.tv !== undefined) {
-        snapshot.traceVisibility = compact.tv;
-      }
-
-      // 🆕 Restore investigation context
-      if (compact.ic !== undefined) {
-        snapshot.insightContext = compact.ic;
-      }
-
-      return snapshot;
-    },
-    [expandStateHelper]
-  );
-
-  const base64UrlEncode = React.useCallback((str) => {
-    return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  }, []);
-
-  const base64UrlDecode = React.useCallback((str) => {
-    str = str.replace(/-/g, "+").replace(/_/g, "/");
-    while (str.length % 4) {
-      str += "=";
-    }
-    return atob(str);
-  }, []);
 
   const generateShareCode = React.useCallback(() => {
     const snapshot = captureStateSnapshot();
-    const compact = compressState(snapshot);
-    const jsonString = JSON.stringify(compact);
-    // Use base64url for shorter, URL-safe encoding
-    return base64UrlEncode(jsonString);
-  }, [captureStateSnapshot, compressState, base64UrlEncode]);
+    return generateShareCodeUtil(snapshot, DIMENSION_DEFINITIONS);
+  }, [captureStateSnapshot, DIMENSION_DEFINITIONS]);
 
   const decodeShareCode = React.useCallback(
-    (code) => {
-      try {
-        // Handle null, undefined, or empty string
-        if (!code || typeof code !== "string" || code.trim().length === 0) {
-          return null;
-        }
-        const jsonString = base64UrlDecode(code.trim());
-        const compact = JSON.parse(jsonString);
-        return expandState(compact);
-      } catch (error) {
-        console.error("Failed to decode share code:", error);
-        return null;
-      }
-    },
-    [base64UrlDecode, expandState]
+    (code) => decodeShareCodeUtil(code, DIMENSION_DEFINITIONS),
+    [DIMENSION_DEFINITIONS]
   );
 
   const handleShareClick = React.useCallback(() => {
@@ -3740,32 +2870,10 @@ function render() {
     []
   );
 
-  // Helper function to format filter names for display ONLY
-  const formatFilterName = React.useCallback((filterName) => {
-    // Handle non-string values (e.g., booleans for AI Company filter)
-    if (typeof filterName !== "string") {
-      if (filterName === true) return "Yes";
-      if (filterName === false) return "No";
-      return String(filterName);
-    }
-
-    // Check if the entire string is uppercase (likely an acronym like "NA", "APAC")
-    const isAllCaps =
-      filterName === filterName.toUpperCase() && filterName.length <= 5;
-
-    // If it's an acronym, return as-is (no formatting)
-    if (isAllCaps) {
-      return filterName;
-    }
-
-    // Convert snake_case and camelCase to Title Case
-    // Only add space before capital letters that follow lowercase letters (camelCase)
-    return filterName
-      .replace(/_/g, " ") // Replace underscores with spaces
-      .replace(/([a-z])([A-Z])/g, "$1 $2") // Add space between lowercase and uppercase (camelCase)
-      .replace(/\b\w/g, (l) => l.toUpperCase()) // Capitalize first letter of each word
-      .trim();
-  }, []);
+  const formatFilterName = React.useCallback(
+    (filterName) => formatFilterNameUtil(filterName),
+    []
+  );
 
   // Helper function to render a dropdown filter
   const renderDropdownFilter = React.useCallback(
@@ -3940,221 +3048,50 @@ function render() {
 
   // ==================== INSIGHT SENTIMENT & COLORING ====================
 
-  // Helper to determine sentiment and get color based on keywords
-  const getInsightSentiment = React.useCallback((insightText) => {
-    const text = insightText.toLowerCase();
+  const getInsightSentiment = React.useCallback(
+    (insightText) => getInsightSentimentUtil(insightText),
+    []
+  );
 
-    // Positive keywords
-    const positiveKeywords = [
-      "surged",
-      "surge",
-      "surging",
-      "gained",
-      "gaining",
-      "gains",
-      "grew",
-      "growing",
-      "growth",
-      "improved",
-      "improving",
-      "improvement",
-      "accelerated",
-      "accelerating",
-      "climbing",
-      "climbed",
-      "increased",
-      "increasing",
-      "strengthened",
-      "strengthening",
-    ];
-
-    // Negative keywords
-    const negativeKeywords = [
-      "declined",
-      "declining",
-      "decline",
-      "lost",
-      "losing",
-      "loss",
-      "fell",
-      "falling",
-      "fallen",
-      "dropped",
-      "dropping",
-      "drop",
-      "decreased",
-      "decreasing",
-      "slowing",
-      "slowed",
-      "slowdown",
-      "shrinking",
-      "shrunk",
-      "weakened",
-      "weakening",
-      "contracted",
-      "contracting",
-    ];
-
-    // Neutral keywords
-    const neutralKeywords = [
-      "shifted",
-      "shifting",
-      "fluctuated",
-      "fluctuating",
-      "volatile",
-      "volatility",
-      "stabilized",
-      "stabilizing",
-      "maintained",
-      "maintaining",
-    ];
-
-    // Check for keywords
-    const hasPositive = positiveKeywords.some((kw) => text.includes(kw));
-    const hasNegative = negativeKeywords.some((kw) => text.includes(kw));
-    const hasNeutral = neutralKeywords.some((kw) => text.includes(kw));
-
-    // Determine sentiment
-    if (hasPositive && !hasNegative) return "positive";
-    if (hasNegative && !hasPositive) return "negative";
-    if (hasNeutral) return "neutral";
-    return "neutral"; // Default to neutral
-  }, []);
-
-  // Get colors based on sentiment
   const getSentimentColors = React.useCallback(
-    (sentiment) => {
-      const colors = {
-        positive: {
-          text: isDarkMode ? "#34d399" : "#059669", // green-400 / green-600
-          border: isDarkMode ? "#34d399" : "#10b981", // green-400 / green-500
-        },
-        negative: {
-          text: isDarkMode ? "#f87171" : "#dc2626", // red-400 / red-600
-          border: isDarkMode ? "#f87171" : "#ef4444", // red-400 / red-500
-        },
-        neutral: {
-          text: isDarkMode ? "#fbbf24" : "#d97706", // amber-400 / amber-600
-          border: isDarkMode ? "#fbbf24" : "#f59e0b", // amber-400 / amber-500
-        },
-      };
-      return colors[sentiment] || colors.neutral;
-    },
+    (sentiment) => getSentimentColorsUtil(sentiment, isDarkMode),
     [isDarkMode]
   );
 
-  // Colorize keywords in insight text
+  // Colorize keywords in insight text (uses JSX, stays in main file)
   const colorizeInsightText = React.useCallback(
     (insightText, sentiment) => {
-      // Keywords to colorize (grouped by sentiment)
-      const keywordMap = {
-        positive: [
-          "surged",
-          "surge",
-          "surging",
-          "gained",
-          "gaining",
-          "gains",
-          "grew",
-          "growing",
-          "growth",
-          "improved",
-          "improving",
-          "improvement",
-          "accelerated",
-          "accelerating",
-          "climbing",
-          "climbed",
-          "increased",
-          "increasing",
-          "strengthened",
-          "strengthening",
-        ],
-        negative: [
-          "declined",
-          "declining",
-          "decline",
-          "lost",
-          "losing",
-          "loss",
-          "fell",
-          "falling",
-          "fallen",
-          "dropped",
-          "dropping",
-          "drop",
-          "decreased",
-          "decreasing",
-          "slowing",
-          "slowed",
-          "slowdown",
-          "shrinking",
-          "shrunk",
-          "weakened",
-          "weakening",
-          "contracted",
-          "contracting",
-        ],
-        neutral: [
-          "shifted",
-          "shifting",
-          "fluctuated",
-          "fluctuating",
-          "volatile",
-          "volatility",
-          "stabilized",
-          "stabilizing",
-          "maintained",
-          "maintaining",
-        ],
-      };
-
-      const colors = getSentimentColors(sentiment);
-      const keywords = keywordMap[sentiment] || [];
-
-      // Create regex pattern to match keywords (case-insensitive, whole words)
+      const colors = getSentimentColorsUtil(sentiment, isDarkMode);
+      const keywords = SENTIMENT_KEYWORDS[sentiment] || [];
       if (keywords.length === 0) return insightText;
 
       const pattern = new RegExp(`\\b(${keywords.join("|")})\\b`, "gi");
-
-      // Split text and create colored spans
       const parts = [];
       let lastIndex = 0;
       let match;
-
-      // Reset regex lastIndex
       pattern.lastIndex = 0;
 
       while ((match = pattern.exec(insightText)) !== null) {
-        // Add text before match
         if (match.index > lastIndex) {
           parts.push(insightText.substring(lastIndex, match.index));
         }
-
-        // Add colored keyword
         parts.push(
-          <span
-            key={match.index}
-            style={{ color: colors.text, fontWeight: "600" }}
-          >
+          <span key={match.index} style={{ color: colors.text, fontWeight: "600" }}>
             {match[0]}
           </span>
         );
-
         lastIndex = match.index + match[0].length;
       }
 
-      // Add remaining text
       if (lastIndex < insightText.length) {
         parts.push(insightText.substring(lastIndex));
       }
 
       return parts.length > 0 ? parts : insightText;
     },
-    [getSentimentColors]
+    [isDarkMode]
   );
 
-  // Toggle for left border accent (set to false to disable)
   const SHOW_SENTIMENT_BORDER = true;
 
   // ==================== END INSIGHT SENTIMENT & COLORING ====================
@@ -4413,7 +3350,7 @@ function render() {
         console.error('[Dashboard] Aggregation fetch error:', err);
         setLiveAggLoading(false);
       });
-  }, [isLiveMode, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, buildRpcMetrics]);
+  }, [isLiveMode, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery]);
 
   const periodChangeLabel = React.useMemo(() => {
     switch (dataFrequency) {
@@ -5103,15 +4040,8 @@ function render() {
   // Helper to get metric value from dimension aggregates (O(1) lookup)
   // Unified helper: O(1) lookup into any dimension aggregates object (replaces getDimensionMetric, getBaseDimensionMetric, getBaseDimensionVolume)
   const getDimMetric = React.useCallback(
-    (aggregates, column, period, categoryValue, metricName) => {
-      var dimAgg = aggregates[column];
-      if (!dimAgg) return 0;
-      var periodAgg = dimAgg[period];
-      if (!periodAgg) return 0;
-      var catAgg = periodAgg[categoryValue];
-      if (!catAgg) return 0;
-      return catAgg[metricName] || 0;
-    },
+    (aggregates, column, period, categoryValue, metricName) =>
+      getDimAggMetric(aggregates, column, period, categoryValue, metricName),
     []
   );
 
@@ -5121,11 +4051,10 @@ function render() {
     return dimensionAggregates._categoryTotals || {};
   }, [dimensionAggregates]);
 
-  // Get unique dates/periods from filtered data
+  // Get unique dates/periods — always from periodAggregates (works in both modes)
   const periods = React.useMemo(() => {
-    if (isLiveMode) return Object.keys(periodAggregates).sort();
-    return Object.keys(dataByPeriod).sort();
-  }, [isLiveMode, periodAggregates, dataByPeriod]);
+    return Object.keys(periodAggregates).sort();
+  }, [periodAggregates]);
 
   // Optimized: Get pre-computed metric value from periodAggregates when available
   const getMetricFromAggregate = React.useCallback(
@@ -5169,161 +4098,29 @@ function render() {
   );
 
   // 🆕 NEW: InsightContextBanner Component - displays context banner for drill-down
-  const InsightContextBanner = ({
-    insightContext,
-    formatMetric,
-    formatPeriodDate,
-    onClear,
-  }) => {
-    if (!insightContext) return null;
-
-    const {
-      parentLabel,
-      parentGrowth,
-      parentExcessGrowth,
-      marketAvgGrowth,
-      parentAbsChange,
-      firstValue,
-      lastValue,
-      periods,
-      drillPath,
-    } = insightContext;
-
-    const isPositive = parentAbsChange >= 0;
-    const changeSign = isPositive ? "+" : "";
-    const growthColor = isPositive ? theme.success : theme.danger;
-    const excessColor = parentExcessGrowth > 0 ? theme.success : theme.danger;
-
-    return (
-      <div
-        style={{
-          backgroundColor: isDarkMode ? "rgba(99, 102, 241, 0.1)" : "#f0f9ff",
-          border: `1px solid ${
-            isDarkMode ? "rgba(99, 102, 241, 0.3)" : "#bfdbfe"
-          }`,
-          borderRadius: "8px",
-          padding: "12px 16px",
-          marginBottom: "12px",
-          fontSize: "13px",
-        }}
-      >
-        {/* Breadcrumb navigation */}
-        {drillPath && drillPath.length > 0 && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              marginBottom: "8px",
-              fontSize: "12px",
-              color: theme.textTertiary,
-            }}
-          >
-            <span>Overall</span>
-            {drillPath.map((step, i) => (
-              <React.Fragment key={i}>
-                <span>→</span>
-                <span>{step.label}</span>
-              </React.Fragment>
-            ))}
-            <span>→</span>
-            <span style={{ fontWeight: "600", color: theme.textPrimary }}>
-              {parentLabel}
-            </span>
-          </div>
-        )}
-
-        {/* Current context with EXCESS growth prominently displayed */}
-        <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span style={{ fontSize: "16px" }}>🔍</span>
-            <span style={{ fontWeight: "600", color: theme.textPrimary }}>
-              Investigating: {parentLabel}
-            </span>
-          </div>
-
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              padding: "4px 12px",
-              backgroundColor: isDarkMode ? "rgba(0,0,0,0.2)" : "white",
-              borderRadius: "6px",
-            }}
-          >
-            <span style={{ color: growthColor, fontWeight: "700" }}>
-              {changeSign}
-              {parentGrowth.toFixed(1)}%
-            </span>
-            {/* 🆕 EXCESS GROWTH - Most important metric (only show for category drilldown, not period anomalies) */}
-            {parentExcessGrowth != null && marketAvgGrowth != null && (
-              <span
-                style={{
-                  color: excessColor,
-                  fontWeight: "700",
-                  fontSize: "11px",
-                  backgroundColor: isDarkMode
-                    ? "rgba(16, 185, 129, 0.1)"
-                    : "#d1fae5",
-                  padding: "2px 6px",
-                  borderRadius: "4px",
-                }}
-              >
-                {changeSign}
-                {parentExcessGrowth.toFixed(1)}pp above{" "}
-                {marketAvgGrowth.toFixed(1)}% market
-              </span>
-            )}
-            <span style={{ color: theme.textTertiary }}>
-              ({formatMetric(firstValue)} → {formatMetric(lastValue)})
-            </span>
-            <span style={{ color: theme.textSecondary, fontWeight: "600" }}>
-              {changeSign}
-              {formatMetric(parentAbsChange)}
-            </span>
-          </div>
-
-          <div style={{ color: theme.textTertiary, fontSize: "12px" }}>
-            {formatPeriodDate(periods[0])} →{" "}
-            {formatPeriodDate(periods[periods.length - 1])}
-          </div>
-
-          <button
-            onClick={onClear}
-            style={{
-              marginLeft: "auto",
-              padding: "4px 8px",
-              fontSize: "11px",
-              backgroundColor: "transparent",
-              border: `1px solid ${theme.borderSecondary}`,
-              borderRadius: "4px",
-              color: theme.textTertiary,
-              cursor: "pointer",
-            }}
-          >
-            Clear context
-          </button>
-        </div>
-      </div>
-    );
-  };
-
   const formatMetricValue = React.useCallback((value, metricName) => {
-    // Live mode: use metric config formatting
+    // Live mode: use metric config formatting with prefix/suffix
     if (isLiveMode && liveMetricConfig) {
-      if (metricName === "Volume") return numeral(value).format(liveMetricConfig.volumeFormat);
-      if (metricName === "Revenue") return numeral(value).format(liveMetricConfig.revenueFormat);
+      if (metricName === "Volume") {
+        const formatted = numeral(value).format(liveMetricConfig.volumeFormat);
+        return (liveMetricConfig.volumePrefix || "") + formatted + (liveMetricConfig.volumeSuffix || "");
+      }
+      if (metricName === "Revenue") {
+        const formatted = numeral(value).format(liveMetricConfig.revenueFormat);
+        return (liveMetricConfig.revenuePrefix || "") + formatted + (liveMetricConfig.revenueSuffix || "");
+      }
       if (metricName === "Margin Rate") {
         const displayValue = liveMetricConfig.derivedDivisor ? value / liveMetricConfig.derivedDivisor : value;
-        return numeral(displayValue).format(liveMetricConfig.derivedFormat);
+        const formatted = numeral(displayValue).format(liveMetricConfig.derivedFormat);
+        return (liveMetricConfig.derivedPrefix || "") + formatted + (liveMetricConfig.derivedSuffix || "");
       }
     }
+    // Demo mode: prefix/suffix baked in
     switch (metricName) {
       case "Volume":
-        return numeral(value).format("$0.0a");
+        return "$" + numeral(value).format("0.0a");
       case "Revenue":
-        return numeral(value).format("$0.0a");
+        return "$" + numeral(value).format("0.0a");
       case "Margin Rate":
         return numeral(value).format("0.0") + " bps";
       default:
@@ -5337,360 +4134,39 @@ function render() {
     [metric, formatMetricValue]
   );
 
-  // Calculate percentage change with proper handling for edge cases (zero, negative values, sign changes)
-  // Returns: percentage change, or 9999/-9999 for infinity cases, or null if cannot calculate
   const calculatePercentageChange = React.useCallback(
-    (currentValue, previousValue) => {
-      // Handle null/undefined
-      if (previousValue === null || previousValue === undefined) return null;
-      if (currentValue === null || currentValue === undefined) return null;
-
-      // Handle zero previous value (infinity case)
-      if (previousValue === 0) {
-        if (currentValue === 0) return null;
-        return currentValue > 0 ? 9999 : -9999;
-      }
-
-      // Handle sign changes and negative values
-      const negativeToPositive = previousValue < 0 && currentValue > 0;
-      const positiveToNegative = previousValue > 0 && currentValue < 0;
-      const bothNegative = previousValue < 0 && currentValue < 0;
-
-      if (negativeToPositive) {
-        // Going from negative to positive is always positive improvement
-        const absoluteChange = currentValue - previousValue;
-        return (absoluteChange / Math.abs(previousValue)) * 100;
-      } else if (positiveToNegative) {
-        // Going from positive to negative is always negative
-        return ((currentValue - previousValue) / previousValue) * 100;
-      } else if (bothNegative) {
-        // Both negative: less negative = improvement (positive %)
-        const improvement = currentValue - previousValue;
-        return (improvement / Math.abs(previousValue)) * 100;
-      } else {
-        // Both positive: normal calculation
-        return ((currentValue - previousValue) / previousValue) * 100;
-      }
-    },
+    (currentValue, previousValue) => calculatePercentageChangeUtil(currentValue, previousValue),
     []
   );
 
-  /**
-   * Calculate growth metrics with proper handling for all edge cases
-   * Combines percentage change calculation with direction determination and relative growth
-   *
-   * @param {number} currentValue - The current/new value
-   * @param {number} previousValue - The previous/old value
-   * @param {number|null} overallGrowthRate - Optional market growth rate for relative comparison
-   * @returns {Object} { growthRate, relativeGrowth, direction, absoluteGrowth }
-   *
-   * Handles:
-   * - Negative to positive transitions (e.g., -37.1 → 98.1 bps)
-   * - Both values negative (less negative = improvement)
-   * - Positive to negative transitions
-   * - Normal positive growth/decline
-   */
   const calculateGrowthMetrics = React.useCallback(
-    (currentValue, previousValue, overallGrowthRate = null) => {
-      // Use existing calculatePercentageChange for proper handling of all edge cases
-      const growthRate = calculatePercentageChange(currentValue, previousValue);
-
-      // Calculate relative growth if market rate provided
-      const relativeGrowth =
-        overallGrowthRate !== null ? growthRate - overallGrowthRate : null;
-
-      // Determine direction based on growth and relative performance
-      let direction;
-      if (growthRate === null) {
-        direction = "remained flat";
-      } else if (growthRate < 0) {
-        direction = "declined";
-      } else if (relativeGrowth !== null && relativeGrowth > 0) {
-        direction = "surged";
-      } else if (relativeGrowth !== null && relativeGrowth < 0) {
-        direction = "grew only";
-      } else {
-        direction = growthRate > 0 ? "increased" : "remained flat";
-      }
-
-      return {
-        growthRate,
-        relativeGrowth,
-        direction,
-        absoluteGrowth: growthRate !== null ? Math.abs(growthRate) : 0,
-      };
-    },
-    [calculatePercentageChange]
+    (currentValue, previousValue, overallGrowthRate = null) =>
+      calculateGrowthMetricsUtil(currentValue, previousValue, overallGrowthRate),
+    []
   );
 
-  // Helper to get week number from date
-  const getWeekNumber = (date) => {
-    const d = new Date(
-      Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())
-    );
-    const dayNum = d.getUTCDay() || 7;
-    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-    return Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
-  };
-
-  // Helper function to format period dates for display (e.g., "2025-06-01" -> "Jun'25")
   const formatPeriodDate = React.useCallback(
-    (periodString) => {
-      if (!periodString) return periodString;
-
-      // Handle different date formats based on data frequency
-      if (dataFrequency === "Weekly") {
-        // Weekly format: "2025-W23" or "2025-06-01" -> "W23'25"
-        if (periodString.includes("W")) {
-          const match = periodString.match(/(\d{4})-W(\d{1,2})/);
-          if (match) {
-            const year = match[1].substring(2); // Last 2 digits
-            const week = match[2];
-            return `W${week}'${year}`;
-          }
-        }
-        // Try parsing as date string - use local time to avoid timezone issues
-        const dateMatch = periodString.match(/(\d{4})-(\d{2})-(\d{2})/);
-        if (dateMatch) {
-          const [, year, month, day] = dateMatch;
-          const date = new Date(
-            parseInt(year),
-            parseInt(month) - 1,
-            parseInt(day)
-          );
-          if (!isNaN(date.getTime())) {
-            const yearShort = year.substring(2);
-            const weekNum = getWeekNumber(date);
-            return `W${weekNum}'${yearShort}`;
-          }
-        }
-        return periodString;
-      } else if (dataFrequency === "Monthly") {
-        // Monthly format: "2025-06" or "2025-06-01" -> "Jun'25"
-        // Parse date components manually to avoid timezone issues
-        const dateMatch = periodString.match(/(\d{4})-(\d{2})(?:-(\d{2}))?/);
-        if (dateMatch) {
-          const [, year, month] = dateMatch;
-          // Use local date construction to avoid UTC timezone conversion
-          const monthIndex = parseInt(month) - 1; // JavaScript months are 0-indexed
-          const monthNames = [
-            "Jan",
-            "Feb",
-            "Mar",
-            "Apr",
-            "May",
-            "Jun",
-            "Jul",
-            "Aug",
-            "Sep",
-            "Oct",
-            "Nov",
-            "Dec",
-          ];
-          const monthName = monthNames[monthIndex];
-          const yearShort = year.substring(2);
-          return `${monthName}'${yearShort}`;
-        }
-        return periodString;
-      } else if (dataFrequency === "Quarterly") {
-        // Quarterly format: "2025-Q2" or "2025-06" -> "Q2'25"
-        if (periodString.includes("Q")) {
-          const match = periodString.match(/(\d{4})-Q(\d)/);
-          if (match) {
-            const year = match[1].substring(2);
-            const quarter = match[2];
-            return `Q${quarter}'${year}`;
-          }
-        }
-        // Parse date components manually to avoid timezone issues
-        const dateMatch = periodString.match(/(\d{4})-(\d{2})(?:-(\d{2}))?/);
-        if (dateMatch) {
-          const [, year, month] = dateMatch;
-          const monthIndex = parseInt(month) - 1; // JavaScript months are 0-indexed
-          const quarter = Math.floor(monthIndex / 3) + 1;
-          const yearShort = year.substring(2);
-          return `Q${quarter}'${yearShort}`;
-        }
-        return periodString;
-      } else if (dataFrequency === "Yearly") {
-        // Yearly format: "2025" -> "2025"
-        return periodString;
-      }
-
-      return periodString;
-    },
+    (periodString) => formatPeriodDateUtil(periodString, dataFrequency),
     [dataFrequency]
   );
 
-  const calculateYoYChange = (currentPeriod, currentValue) => {
-    let previousPeriod;
+  // ==================== OVERLAY HELPER FUNCTIONS ====================
 
-    if (dataFrequency === "Weekly") {
-      // For weekly data, use 52-week comparison via pre-computed sortedBaseDataPeriods
-      const currentIndex = sortedBaseDataPeriods.indexOf(currentPeriod);
-      if (currentIndex === -1 || currentIndex < 52) return null;
-      previousPeriod = sortedBaseDataPeriods[currentIndex - 52];
-    } else {
-      // For other frequencies, use year-based lookup
-      const currentYear = parseInt(currentPeriod.substring(0, 4));
-      const previousYear = currentYear - 1;
-      previousPeriod = currentPeriod.replace(
-        currentYear.toString(),
-        previousYear.toString()
-      );
-    }
-
-    // O(1) lookup into pre-computed baseDataAggregatesByPeriod
-    const agg = baseDataAggregatesByPeriod[previousPeriod];
-    if (!agg) return null;
-
-    const previousValue = agg[metric];
-    return calculatePercentageChange(currentValue, previousValue);
-  };
-
-  // ==================== YoY HELPER FUNCTIONS (DRY) ====================
-
-  /**
-   * Get the appropriate YoY comparison label based on data frequency
-   * @returns {string} "52W" for weekly data, "YoY" for all other frequencies
-   */
-  const getYoYLabel = React.useCallback(() => {
-    return dataFrequency === "Weekly" ? "52W" : "YoY";
-  }, [dataFrequency]);
-
-  /**
-   * Format a YoY percentage value with proper sign and infinity handling
-   * @param {number|null} yoyValue - The YoY percentage value (or null)
-   * @returns {string} Formatted string like "+5.3%", "-2.1%", "+∞", or "N/A"
-   */
-  const formatYoYValue = React.useCallback((yoyValue) => {
-    if (yoyValue === null || yoyValue === undefined) return "N/A";
-
-    // Handle infinity cases
-    if (Math.abs(yoyValue) >= 9999) {
-      return yoyValue > 0 ? "+∞" : "-∞";
-    }
-
-    // Format with sign and percentage
-    const sign = yoyValue >= 0 ? "+" : "";
-    return sign + yoyValue.toFixed(1) + "%";
-  }, []);
-
-  /**
-   * Cap YoY values for chart display (infinity -> 1000/-1000)
-   * @param {number|null} yoyValue - The YoY percentage value
-   * @returns {number|null} Capped value suitable for chart axis
-   */
-  const capYoYForDisplay = React.useCallback((yoyValue) => {
-    if (yoyValue === null) return null;
-    if (Math.abs(yoyValue) >= 9999) {
-      return yoyValue > 0 ? 1000 : -1000;
-    }
-    return yoyValue;
-  }, []);
-
-  /**
-   * Create annotation text combining metric value and YoY change
-   * @param {number} metricValue - The primary metric value to display
-   * @param {number|null} yoyChange - The YoY change percentage
-   * @returns {string} Formatted annotation like "123.5<br>YoY: +5.3%"
-   */
-  const createYoYAnnotation = React.useCallback(
-    (metricValue, yoyChange) => {
-      let annotation = formatMetric(metricValue);
-
-      if (yoyChange !== null) {
-        const comparisonLabel = getYoYLabel();
-        const yoyText = formatYoYValue(yoyChange);
-        annotation += "<br>" + comparisonLabel + ": " + yoyText;
-      }
-
-      return annotation;
-    },
-    [formatMetric, getYoYLabel, formatYoYValue]
-  );
-
-  /**
-   * Calculate YoY data array for a set of periods
-   * @param {Array} periods - Array of period strings
-   * @param {Object} dataByPeriod - Map of period -> data rows
-   * @param {Function} metricCalculator - Function to calculate metric from rows
-   * @param {Function} yoyCalculator - Function to calculate YoY change
-   * @param {boolean} includeLastPeriod - Whether to include last period in YoY calculation
-   * @returns {Object} { yoyData: Array, lastPeriodYoY: number|null }
-   */
-  const calculateYoYDataArray = React.useCallback(
-    (
-      periods,
-      dataByPeriod,
-      metricCalculator,
-      yoyCalculator,
-      includeLastPeriod = false
-    ) => {
-      const periodsForYoY = includeLastPeriod ? periods : periods.slice(0, -1);
-      const yoyDataForPeriods = periodsForYoY.map((period) => {
-        const periodRows = dataByPeriod[period] || [];
-        const currentValue = metricCalculator(periodRows);
-        return yoyCalculator(period, currentValue);
-      });
-
-      // Pad with null for the last period if not included
-      const yoyData = includeLastPeriod
-        ? yoyDataForPeriods
-        : [...yoyDataForPeriods, null];
-
-      // Calculate last period separately for annotation purposes
-      let lastPeriodYoY = null;
-      if (!includeLastPeriod && periods.length > 0) {
-        const lastPeriod = periods[periods.length - 1];
-        const lastPeriodRows = dataByPeriod[lastPeriod] || [];
-        const lastPeriodValue = metricCalculator(lastPeriodRows);
-        lastPeriodYoY = yoyCalculator(lastPeriod, lastPeriodValue);
-      }
-
-      return { yoyData, lastPeriodYoY };
-    },
+  const formatYoYValue = React.useCallback(
+    (yoyValue) => formatYoYValueUtil(yoyValue),
     []
   );
 
-  // ==================== END YoY HELPER FUNCTIONS ====================
+  const capYoYForDisplay = React.useCallback(
+    (yoyValue) => capYoYForDisplayUtil(yoyValue),
+    []
+  );
 
-  // 🆕 NEW: Generate insights that explain parent category's EXCESS growth
-  // Helper: O(1) lookup into any dimension aggregates object
-  const getDimAggMetric = (
-    aggregates,
-    column,
-    period,
-    categoryValue,
-    metricName
-  ) => {
-    const dimAgg = aggregates[column];
-    if (!dimAgg) return 0;
-    const periodAgg = dimAgg[period];
-    if (!periodAgg) return 0;
-    const catAgg = periodAgg[categoryValue];
-    if (!catAgg) return 0;
-    return catAgg[metricName] || 0;
-  };
-
-  // Helper: get unique non-trivial categories for a column from dimension aggregates within given periods
-  const getCategoriesFromAggregates = (dimAggs, column, periodsToCheck) => {
-    const dimAgg = dimAggs[column];
-    if (!dimAgg) return [];
-    const catSet = new Set();
-    for (let p = 0; p < periodsToCheck.length; p++) {
-      const periodAgg = dimAgg[periodsToCheck[p]];
-      if (!periodAgg) continue;
-      const cats = Object.keys(periodAgg);
-      for (let c = 0; c < cats.length; c++) {
-        const cat = cats[c];
-        if (cat && cat !== "Unknown" && cat !== "uncategorized")
-          catSet.add(cat);
-      }
-    }
-    return Array.from(catSet);
-  };
+  const calculateYoYDataArray = React.useCallback(
+    (periods, dataByPeriod, metricCalculator, yoyCalculator, includeLastPeriod = false) =>
+      calculateYoYDataArrayUtil(periods, dataByPeriod, metricCalculator, yoyCalculator, includeLastPeriod),
+    []
+  );
 
   const generateExcessGrowthInsights = React.useCallback(
     (insightContext) => {
@@ -7855,11 +6331,7 @@ function render() {
             line: { color: "rgba(255,255,255,0.3)", width: 0.5 },
             opacity: 0.6,
           },
-          customdata: barData.map((value) => {
-            return scenarioMetric === "Margin Rate"
-              ? value.toFixed(2) + " bps"
-              : numeral(value).format("$0.00a");
-          }),
+          customdata: barData.map((value) => formatMetricValue(value, scenarioMetric)),
           hovertemplate: `[${scenarioLabel}] ${scenarioMetric}<br>%{customdata}<extra></extra>`,
           visible: "legendonly", // Hidden by default, user can show via legend
         });
@@ -8023,9 +6495,7 @@ function render() {
                     line: { color: "rgba(255,255,255,0.3)", width: 0.5 },
                     opacity: 0.5,
                   },
-                  customdata: traceData.map((value) =>
-                    numeral(value).format("$0.00a")
-                  ),
+                  customdata: traceData.map((value) => formatMetricValue(value, scenarioMetric)),
                   hovertemplate: `[${scenarioLabel}] ${category}<br>%{customdata}<extra></extra>`,
                 });
               }
@@ -8192,7 +6662,6 @@ function render() {
       filterMatches,
       calculateMetricValue,
       formatMetricValue,
-      calculateYoYChange,
       VIEW_CONFIG,
       getCategoryColor,
       calculatePercentageChange,
@@ -8557,9 +7026,7 @@ function render() {
               family: "'Inter', 'Segoe UI', sans-serif",
             },
             insidetextanchor: "middle",
-            customdata: traceData.map((value) => {
-              return numeral(value).format("$0.00a");
-            }),
+            customdata: traceData.map((value) => formatMetricValue(value, metric)),
             hovertemplate: category + "<br>%{customdata}<extra></extra>",
           });
         }
@@ -8706,18 +7173,9 @@ function render() {
       const referenceLineData =
         metric === "Margin Rate"
           ? periods.map((period) => {
-              const periodRows = dataByPeriod[period] || [];
-              const totalVolume = periodRows.reduce(
-                (sum, row) => sum + (row[COLUMNS.VOLUME] || 0),
-                0
-              );
-              const totalRevenue = periodRows.reduce(
-                (sum, row) =>
-                  sum +
-                  (row[COLUMNS.REVENUE] || 0),
-                0
-              );
-              return totalVolume > 0 ? (10000 * totalRevenue) / totalVolume : 0;
+              const agg = periodAggregates[period];
+              if (!agg) return 0;
+              return agg["Margin Rate"] || 0;
             })
           : null;
 
@@ -8859,7 +7317,6 @@ function render() {
       topX,
       categorySelectionMode,
       selectedCategories,
-      dataByPeriod,
       calculateMetric,
       formatMetric,
       getSimpleChartTitle,
@@ -8891,13 +7348,13 @@ function render() {
   const getVisibleTraceNames = React.useCallback(() => {
     let chartData = [];
     if (view === "Overall") {
-      chartData = [
-        { name: metric, visible: true },
-        {
-          name: dataFrequency === "Weekly" ? "52W Change %" : "YoY Change %",
-          visible: true,
-        },
-      ];
+      chartData = [{ name: metric, visible: true }];
+      OVERLAY_CONFIG.forEach(overlay => {
+        if (activeOverlays[overlay.id]) {
+          const name = overlay.isSMA ? `SMA(${smaWindow})` : overlay.label + ' Change %';
+          chartData.push({ name, visible: true });
+        }
+      });
     } else {
       const config = VIEW_CONFIG[view];
       if (config) {
@@ -8912,7 +7369,7 @@ function render() {
       .map((trace) => trace.name);
 
     return visibleTraceNames;
-  }, [view, metric, dataFrequency, prepareChartDataByAttribute, VIEW_CONFIG]);
+  }, [view, metric, dataFrequency, prepareChartDataByAttribute, VIEW_CONFIG, activeOverlays, smaWindow]);
 
   const setScenario = React.useCallback(
     (index) => {
@@ -8938,26 +7395,68 @@ function render() {
     let chartLayout = {};
 
     if (view === "Overall") {
+      // Use periodAggregates — unified path for both demo and live mode
       const barData = periods.map((period) => {
-        const periodRows = dataByPeriod[period] || [];
-        return calculateMetric(periodRows);
+        const agg = periodAggregates[period];
+        return agg ? (agg[metric] || 0) : 0;
       });
 
-      // Calculate YoY data using helper function
-      const { yoyData, lastPeriodYoY } = calculateYoYDataArray(
-        periods,
-        dataByPeriod,
-        calculateMetric,
-        calculateYoYChange,
-        false // Don't include last period in line trace
-      );
+      // Build overlay traces dynamically from activeOverlays
+      const overlayTraces = [];
+      let primaryOverlayData = null; // For bar text annotations
 
-      // Create text annotations with YoY values
+      OVERLAY_CONFIG.forEach(overlay => {
+        if (!activeOverlays[overlay.id]) return;
+
+        if (overlay.isSMA) {
+          const smaData = calculateSMA(barData, smaWindow);
+          overlayTraces.push({
+            type: 'scatter', mode: 'lines',
+            x: periods, y: smaData,
+            name: `SMA(${smaWindow})`,
+            yaxis: 'y',
+            line: { color: overlay.color, width: 2, dash: 'dot' },
+            customdata: smaData.map(v => v !== null ? formatMetricValue(v, metric) : 'N/A'),
+            hovertemplate: `SMA(${smaWindow}): %{customdata}<extra></extra>`,
+            connectgaps: false,
+          });
+        } else {
+          const lookback = overlay.lookback[dataFrequency];
+          if (!lookback) return;
+
+          const changeData = periods.map((period, i) => {
+            const currentIndex = sortedBaseDataPeriods.indexOf(period);
+            if (currentIndex === -1) return null;
+            return calculatePeriodChange(currentIndex, barData[i], lookback, sortedBaseDataPeriods, baseDataAggregatesByPeriod, metric);
+          });
+
+          if (!primaryOverlayData) primaryOverlayData = { data: changeData, label: overlay.label };
+
+          overlayTraces.push({
+            type: 'scatter', mode: 'lines+markers',
+            x: periods, y: changeData.map(capYoYForDisplay),
+            name: overlay.label + ' Change %',
+            yaxis: 'y2',
+            line: { color: overlay.color, width: 2.5, shape: 'spline', smoothing: 0.3 },
+            marker: { size: 3, color: overlay.color, line: { color: '#ffffff', width: 1 } },
+            customdata: changeData.map(formatYoYValue),
+            hovertemplate: overlay.label + ' Change: %{customdata}<extra></extra>',
+            connectgaps: false,
+          });
+        }
+      });
+
+      // Create text annotations — show change only when exactly 1 period-change overlay active
+      const activeChangeOverlays = OVERLAY_CONFIG.filter(o => !o.isSMA && activeOverlays[o.id]);
       const textAnnotations = barData.map((value, index) => {
-        // For last period, use lastPeriodYoY; for others, use yoyData[index]
-        const yoyChange =
-          index === barData.length - 1 ? lastPeriodYoY : yoyData[index];
-        return createYoYAnnotation(value, yoyChange);
+        let annotation = formatMetric(value);
+        if (activeChangeOverlays.length === 1 && primaryOverlayData) {
+          const changeVal = primaryOverlayData.data[index];
+          if (changeVal !== null) {
+            annotation += '<br>' + primaryOverlayData.label + ': ' + formatYoYValueUtil(changeVal);
+          }
+        }
+        return annotation;
       });
 
       const barColors = barData.map((_, index) => {
@@ -8981,36 +7480,10 @@ function render() {
           text: textAnnotations,
           textposition: "outside",
           textfont: { color: theme.textPrimary, size: 11 },
-          customdata: barData.map((value) => {
-            return metric === "Margin Rate"
-              ? value.toFixed(2) + " bps"
-              : numeral(value).format("$0.00a");
-          }),
+          customdata: barData.map((value) => formatMetricValue(value, metric)),
           hovertemplate: "%{customdata}<extra></extra>",
         },
-        {
-          type: "scatter",
-          mode: "lines+markers",
-          x: periods,
-          y: yoyData.map(capYoYForDisplay), // Cap infinity for display
-          name: getYoYLabel() + " Change %",
-          yaxis: "y2",
-          line: {
-            color: "#a4133c",
-            width: 2.5,
-            shape: "spline",
-            smoothing: 0.3,
-          },
-          marker: {
-            size: 3,
-            color: "#a4133c",
-            line: { color: "#ffffff", width: 1 },
-          },
-          customdata: yoyData.map(formatYoYValue),
-          hovertemplate:
-            getYoYLabel() + " Change: %{customdata}<extra></extra>",
-          connectgaps: false,
-        },
+        ...overlayTraces,
       ];
 
       chartLayout = {
@@ -9059,13 +7532,12 @@ function render() {
                 })()
               : undefined,
         },
-        yaxis2: {
+        yaxis2: activeChangeOverlays.length > 0 ? {
           title: {
-            text: getYoYLabel() + " Change (%)",
-            font: { size: 14, color: "#a4133c" },
+            text: activeChangeOverlays.map(o => o.label).join(' / ') + " Change (%)",
+            font: { size: 14, color: activeChangeOverlays.length === 1 ? activeChangeOverlays[0].color : '#6b7280' },
           },
-          tickfont: { color: "#a4133c" },
-          zerolinecolor: "#e5e7eb",
+          tickfont: { color: activeChangeOverlays.length === 1 ? activeChangeOverlays[0].color : '#6b7280' },
           showgrid: false,
           side: "right",
           overlaying: "y",
@@ -9073,7 +7545,7 @@ function render() {
           zerolinewidth: 2,
           zerolinecolor: "#d1d5db",
           showspikes: false,
-        },
+        } : { visible: false, overlaying: "y" },
         hovermode: "x unified",
       };
     } else {
@@ -9201,15 +7673,12 @@ function render() {
   }, [
     view,
     metric,
-    filteredData,
     periods,
     dateField,
     dataFrequency,
     topX,
     selectedCategories,
     categorySelectionMode,
-    baseFilteredData,
-    dataByPeriod,
     calculateMetric,
     formatMetric,
     prepareChartDataByAttribute,
@@ -9221,13 +7690,16 @@ function render() {
     scenario3,
     scenarioLabels,
     calculateScenarioChartData,
-    calculateYoYDataArray,
-    createYoYAnnotation,
-    getYoYLabel,
     capYoYForDisplay,
     formatYoYValue,
     isDarkMode,
     theme,
+    periodAggregates,
+    activeOverlays,
+    smaWindow,
+    sortedBaseDataPeriods,
+    baseDataAggregatesByPeriod,
+    formatMetricValue,
   ]);
 
   // Apply highlighting to chartData when an insight is hovered
@@ -9310,14 +7782,15 @@ function render() {
     const column = config.column;
     if (!column) return [];
 
-    return Array.from(
-      new Set(
-        filteredData
-          .map((row) => row[column])
-          .filter((val) => val && val !== "Unknown")
-      )
-    ).sort();
-  }, [view, filteredData]);
+    // Use dimensionCategoryTotals (works in both demo and live mode)
+    const dimTotals = dimensionCategoryTotals[column];
+    if (dimTotals) {
+      return Object.keys(dimTotals)
+        .filter((val) => val && val !== "Unknown")
+        .sort();
+    }
+    return [];
+  }, [view, dimensionCategoryTotals, VIEW_CONFIG]);
 
   // Filter categories based on search text
   const filteredCategories = React.useMemo(() => {
@@ -9526,28 +7999,14 @@ function render() {
     // Get all available categories from all dimensions, tracking which dimension they belong to
     const categoriesByDimension = {};
     FILTER_CONFIG_STATIC.forEach(({ column }) => {
-      const categories = Array.from(
-        new Set(
-          filteredData
-            .map((row) => row[column])
-            .filter((val) => {
-              if (!val || val === "Unknown") return false;
-              const lowerVal = String(val).toLowerCase();
-              // Exclude generic/unhelpful categories
-              if (
-                lowerVal === "other" ||
-                lowerVal === "uncategorized" ||
-                lowerVal === "n/a" ||
-                lowerVal === "null"
-              )
-                return false;
-              return true;
-            })
-        )
-      );
-      categoriesByDimension[column] = categories.filter(
-        (cat) => cat.length < 30
-      ); // Prefer shorter names
+      const dimTotals = dimensionCategoryTotals[column] || {};
+      const categories = Object.keys(dimTotals).filter((val) => {
+        if (!val || val === "Unknown") return false;
+        const lowerVal = String(val).toLowerCase();
+        if (lowerVal === "other" || lowerVal === "uncategorized" || lowerVal === "n/a" || lowerVal === "null") return false;
+        return true;
+      });
+      categoriesByDimension[column] = categories.filter((cat) => cat.length < 30);
     });
 
     // Flatten all categories for main category selection
@@ -9627,7 +8086,7 @@ function render() {
     const metricDisplay = metric;
 
     return `${category}'s ${metricDisplay}${action}${filter}`;
-  }, [FILTER_CONFIG, filteredData, formatFilterName]);
+  }, [FILTER_CONFIG, dimensionCategoryTotals, formatFilterName]);
 
   // Execute query - simplified logic
   const executeQuery = React.useCallback(
@@ -9752,8 +8211,6 @@ function render() {
     ]
   );
 
-  // LLM Worker URL — always use deployed Cloudflare Worker
-  const LLM_WORKER_URL = "https://metrics-dashboard-llm-proxy.datalogic10.workers.dev";
 
   // Apply structured LLM response to dashboard controls
   const applyLLMResponse = React.useCallback(
@@ -11630,7 +10087,91 @@ function render() {
               onClear={() => {
                 setInsightContext(null);
               }}
+              theme={theme}
+              isDarkMode={isDarkMode}
             />
+          )}
+
+          {view === "Overall" && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '4px', position: 'relative' }}>
+              <button
+                onClick={() => setShowOverlayMenu(prev => !prev)}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  borderRadius: '6px',
+                  border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`,
+                  backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
+                  color: isDarkMode ? '#d1d5db' : '#374151',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                Overlays
+                {(() => { const count = OVERLAY_CONFIG.filter(o => activeOverlays[o.id]).length; return count > 0 ? ` (${count})` : ''; })()}
+                <span style={{ fontSize: '8px', marginLeft: '2px' }}>{showOverlayMenu ? '▲' : '▼'}</span>
+              </button>
+              {showOverlayMenu && (
+                <>
+                  <div style={{ position: 'fixed', inset: 0, zIndex: 999 }} onClick={() => setShowOverlayMenu(false)} />
+                  <div style={{
+                    position: 'absolute', top: '100%', right: 0, zIndex: 1000, marginTop: '4px',
+                    backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
+                    border: `1px solid ${isDarkMode ? '#374151' : '#e5e7eb'}`,
+                    borderRadius: '8px', padding: '4px 0', minWidth: '160px',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                  }}>
+                    {OVERLAY_CONFIG.map(overlay => {
+                      const isActive = !!activeOverlays[overlay.id];
+                      return (
+                        <div key={overlay.id} style={{ padding: '0 4px' }}>
+                          <label
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: '8px',
+                              padding: '6px 8px', cursor: 'pointer', borderRadius: '4px',
+                              fontSize: '12px', fontWeight: 500,
+                              color: isDarkMode ? '#e5e7eb' : '#374151',
+                              backgroundColor: 'transparent',
+                              transition: 'background-color 0.1s',
+                            }}
+                            onMouseEnter={e => { e.currentTarget.style.backgroundColor = isDarkMode ? '#374151' : '#f3f4f6'; }}
+                            onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                          >
+                            <input
+                              type="checkbox" checked={isActive}
+                              onChange={() => setActiveOverlays(prev => ({ ...prev, [overlay.id]: !prev[overlay.id] }))}
+                              style={{ accentColor: overlay.color, cursor: 'pointer' }}
+                            />
+                            <span style={{
+                              width: '10px', height: '10px', borderRadius: '50%',
+                              backgroundColor: overlay.color, flexShrink: 0,
+                            }} />
+                            <span>{overlay.label}</span>
+                            {overlay.isSMA && isActive && (
+                              <input
+                                type="number" min={2} max={52} value={smaWindow}
+                                onClick={e => e.stopPropagation()}
+                                onChange={e => setSmaWindow(Math.max(2, Math.min(52, parseInt(e.target.value) || 3)))}
+                                style={{
+                                  width: '36px', padding: '1px 3px', fontSize: '11px', borderRadius: '4px',
+                                  border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`, textAlign: 'center',
+                                  backgroundColor: isDarkMode ? '#111827' : '#f9fafb',
+                                  color: isDarkMode ? '#f3f4f6' : '#111827',
+                                  outline: 'none', marginLeft: 'auto',
+                                }}
+                              />
+                            )}
+                          </label>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
           )}
 
           <PlotlyChart
@@ -12171,6 +10712,12 @@ function render() {
               volumeFormat: suggestion.volumeFormat || prev.volumeFormat,
               revenueFormat: suggestion.revenueFormat || prev.revenueFormat,
               derivedFormat: suggestion.derivedFormat || prev.derivedFormat,
+              volumePrefix: suggestion.volumePrefix != null ? suggestion.volumePrefix : (prev.volumePrefix || ""),
+              volumeSuffix: suggestion.volumeSuffix != null ? suggestion.volumeSuffix : (prev.volumeSuffix || ""),
+              revenuePrefix: suggestion.revenuePrefix != null ? suggestion.revenuePrefix : (prev.revenuePrefix || ""),
+              revenueSuffix: suggestion.revenueSuffix != null ? suggestion.revenueSuffix : (prev.revenueSuffix || ""),
+              derivedPrefix: suggestion.derivedPrefix != null ? suggestion.derivedPrefix : (prev.derivedPrefix || ""),
+              derivedSuffix: suggestion.derivedSuffix != null ? suggestion.derivedSuffix : (prev.derivedSuffix || ""),
               dateColumn: suggestion.dateColumn && validDate.includes(suggestion.dateColumn) ? suggestion.dateColumn : prev.dateColumn,
             }));
           } catch (err) {
@@ -12283,6 +10830,16 @@ function render() {
                     <input style={inputStyle} value={draft.volumeFormat || ''} onChange={e => updateDraft('volumeFormat', e.target.value)} placeholder="0,0" />
                   </div>
                 </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '6px' }}>
+                  <div>
+                    <label style={labelStyle}>Prefix</label>
+                    <input style={inputStyle} value={draft.volumePrefix || ''} onChange={e => updateDraft('volumePrefix', e.target.value)} placeholder="e.g. $" />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Suffix</label>
+                    <input style={inputStyle} value={draft.volumeSuffix || ''} onChange={e => updateDraft('volumeSuffix', e.target.value)} placeholder="e.g. units" />
+                  </div>
+                </div>
               </div>
 
               {/* Metric Slot 2 */}
@@ -12323,6 +10880,16 @@ function render() {
                   <div>
                     <label style={labelStyle}>Format</label>
                     <input style={inputStyle} value={draft.revenueFormat || ''} onChange={e => updateDraft('revenueFormat', e.target.value)} placeholder="0,0" />
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '6px' }}>
+                  <div>
+                    <label style={labelStyle}>Prefix</label>
+                    <input style={inputStyle} value={draft.revenuePrefix || ''} onChange={e => updateDraft('revenuePrefix', e.target.value)} placeholder="e.g. $" />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Suffix</label>
+                    <input style={inputStyle} value={draft.revenueSuffix || ''} onChange={e => updateDraft('revenueSuffix', e.target.value)} placeholder="e.g. pts" />
                   </div>
                 </div>
               </div>
@@ -12366,6 +10933,16 @@ function render() {
                   <div>
                     <label style={labelStyle}>Format</label>
                     <input style={inputStyle} value={draft.derivedFormat || ''} onChange={e => updateDraft('derivedFormat', e.target.value)} placeholder="0.0" />
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '6px' }}>
+                  <div>
+                    <label style={labelStyle}>Prefix</label>
+                    <input style={inputStyle} value={draft.derivedPrefix || ''} onChange={e => updateDraft('derivedPrefix', e.target.value)} placeholder="e.g. $" />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Suffix</label>
+                    <input style={inputStyle} value={draft.derivedSuffix || ''} onChange={e => updateDraft('derivedSuffix', e.target.value)} placeholder="e.g. bps" />
                   </div>
                 </div>
               </div>

@@ -111,6 +111,12 @@ You must respond with ONLY a JSON object (no markdown, no explanation) with thes
   "volumeFormat": "0,0",                   // numeral.js format string
   "revenueFormat": "0,0",                  // numeral.js format string
   "derivedFormat": "0.0",                  // numeral.js format string for metric 3
+  "volumePrefix": "",                      // prefix before formatted value (e.g. "$", "€")
+  "volumeSuffix": "",                      // suffix after formatted value (e.g. " units", " bps")
+  "revenuePrefix": "",                     // prefix for metric 2
+  "revenueSuffix": "",                     // suffix for metric 2
+  "derivedPrefix": "",                     // prefix for metric 3
+  "derivedSuffix": "",                     // suffix for metric 3
   "dateColumn": "column_name"              // The date/timestamp column for time series
 }
 

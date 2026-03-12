@@ -2,7 +2,7 @@
   "name": "metrics-dashboard-demo",
   "private": true,
   "scripts": {
-    "build": "esbuild Analyzer_Demo.js --loader:.js=jsx --outfile=app.js --jsx=transform --jsx-factory=React.createElement --jsx-fragment=React.Fragment",
+    "build": "esbuild Analyzer_Demo.js --bundle --loader:.js=jsx --outfile=app.js --jsx=transform --jsx-factory=React.createElement --jsx-fragment=React.Fragment --global-name=__app --format=iife",
     "dev": "npx serve ."
   },
   "devDependencies": {
