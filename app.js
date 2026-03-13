@@ -4082,7 +4082,7 @@ var __app = (() => {
         if (requestId !== liveAggRequestRef.current) return;
         const periodAggs = transformToPeriodAggregates(periodData.rows || [], hasMetric3, formulaConfigsArg);
         setLivePeriodAggregates(periodAggs);
-        setLiveRowCount(periodData.rows ? periodData.rows.reduce((sum, r) => sum + (Number(r.volume) || 0), 0) : 0);
+        setLiveRowCount(periodData.row_count || (periodData.rows ? periodData.rows.length : 0));
         if (dimData && dimColumn) {
           const dimAggs = transformToDimensionAggregates(dimData.rows || [], dimColumn, hasMetric3, formulaConfigsArg);
           setLiveDimensionAggregates(dimAggs);
@@ -8064,7 +8064,7 @@ var __app = (() => {
       marginBottom: "12px",
       fontSize: "12px",
       color: isDarkMode ? "#6ee7b7" : "#065f46"
-    } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px" } }, /* @__PURE__ */ React.createElement("span", { style: { width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#10b981", display: "inline-block" } }), /* @__PURE__ */ React.createElement("span", null, "Connected to ", /* @__PURE__ */ React.createElement("strong", null, connectionParams.dataset), liveRowCount > 0 ? ` \u2014 ${liveRowCount.toLocaleString()} records` : "", liveAggLoading ? " (loading...)" : "")), /* @__PURE__ */ React.createElement(
+    } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px" } }, /* @__PURE__ */ React.createElement("span", { style: { width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#10b981", display: "inline-block" } }), /* @__PURE__ */ React.createElement("span", null, "Connected to ", /* @__PURE__ */ React.createElement("strong", null, connectionParams.dataset), liveRowCount > 0 ? ` \u2014 ${liveRowCount.toLocaleString()} periods` : "", liveAggLoading ? " (loading...)" : "")), /* @__PURE__ */ React.createElement(
       "button",
       {
         onClick: () => {
