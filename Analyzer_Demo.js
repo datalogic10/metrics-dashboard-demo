@@ -3341,13 +3341,14 @@ export function render() {
         if (requestId !== liveAggRequestRef.current) return; // Stale response
         const periodAggs = transformToPeriodAggregates(periodData.rows || [], hasMetric3, formulaConfigsArg);
         setLivePeriodAggregates(periodAggs);
-        setLiveRowCount(periodData.row_count || (periodData.rows ? periodData.rows.length : 0));
-
+        // Show row count from the most granular query: dimension query if active, else period query
         if (dimData && dimColumn) {
           const dimAggs = transformToDimensionAggregates(dimData.rows || [], dimColumn, hasMetric3, formulaConfigsArg);
           setLiveDimensionAggregates(dimAggs);
+          setLiveRowCount(dimData.row_count || (dimData.rows ? dimData.rows.length : 0));
         } else {
           setLiveDimensionAggregates({});
+          setLiveRowCount(periodData.row_count || (periodData.rows ? periodData.rows.length : 0));
         }
         setLiveAggLoading(false);
       })
