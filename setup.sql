@@ -39,7 +39,7 @@ DECLARE
   v_col text;
   v_i integer;
   v_time_expr text;
-  v_allowed_types text[] := ARRAY['count', 'count_distinct', 'sum', 'avg', 'min', 'max'];
+  v_allowed_types text[] := ARRAY['count', 'count_distinct', 'sum', 'avg', 'min', 'max', 'percentile'];
 BEGIN
   -- ===== TABLE RESOLUTION =====
   -- Map known dataset names to actual schema.table.
@@ -148,6 +148,13 @@ BEGIN
           v_select_parts := array_append(v_select_parts, format('MIN(%I) AS %I', v_metric_rec->>'column', v_metric_rec->>'alias'));
         WHEN 'max' THEN
           v_select_parts := array_append(v_select_parts, format('MAX(%I) AS %I', v_metric_rec->>'column', v_metric_rec->>'alias'));
+        WHEN 'percentile' THEN
+          v_select_parts := array_append(v_select_parts, format(
+            'PERCENTILE_CONT(%s) WITHIN GROUP (ORDER BY %I) AS %I',
+            COALESCE((v_metric_rec->>'percentile')::numeric, 0.5),
+            v_metric_rec->>'column',
+            v_metric_rec->>'alias'
+          ));
       END CASE;
     END LOOP;
 

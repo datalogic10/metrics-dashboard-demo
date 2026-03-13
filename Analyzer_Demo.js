@@ -1199,6 +1199,7 @@ export function render() {
   const [metricsEditorDraft, setMetricsEditorDraft] = React.useState(null);
   const [metricsEditorSuggesting, setMetricsEditorSuggesting] = React.useState(false);
   const [metricsEditorError, setMetricsEditorError] = React.useState('');
+  const [expandedMetricSlot, setExpandedMetricSlot] = React.useState(null);
 
   // ===== RPC CALL HELPER =====
   const callQueryDataset = React.useMemo(
@@ -3329,16 +3330,21 @@ export function render() {
         })
       : Promise.resolve(null);
 
-    const hasMetric3 = !!liveMetricConfig.derivedAggType;
+    const hasMetric3 = !!liveMetricConfig.derivedAggType || liveMetricConfig.derivedMode === 'formula';
+    const formulaConfigs = {};
+    if (liveMetricConfig.volumeMode === 'formula') formulaConfigs.volume = { operator: liveMetricConfig.volumeFormulaOperator || '/' };
+    if (liveMetricConfig.revenueMode === 'formula') formulaConfigs.revenue = { operator: liveMetricConfig.revenueFormulaOperator || '/' };
+    if (liveMetricConfig.derivedMode === 'formula') formulaConfigs.derived = { operator: liveMetricConfig.derivedFormulaOperator || '/' };
+    const formulaConfigsArg = Object.keys(formulaConfigs).length > 0 ? formulaConfigs : null;
     Promise.all([periodPromise, dimPromise])
       .then(([periodData, dimData]) => {
         if (requestId !== liveAggRequestRef.current) return; // Stale response
-        const periodAggs = transformToPeriodAggregates(periodData.rows || [], hasMetric3);
+        const periodAggs = transformToPeriodAggregates(periodData.rows || [], hasMetric3, formulaConfigsArg);
         setLivePeriodAggregates(periodAggs);
         setLiveRowCount(periodData.rows ? periodData.rows.reduce((sum, r) => sum + (Number(r.volume) || 0), 0) : 0);
 
         if (dimData && dimColumn) {
-          const dimAggs = transformToDimensionAggregates(dimData.rows || [], dimColumn, hasMetric3);
+          const dimAggs = transformToDimensionAggregates(dimData.rows || [], dimColumn, hasMetric3, formulaConfigsArg);
           setLiveDimensionAggregates(dimAggs);
         } else {
           setLiveDimensionAggregates({});
@@ -4110,7 +4116,7 @@ export function render() {
         return (liveMetricConfig.revenuePrefix || "") + formatted + (liveMetricConfig.revenueSuffix || "");
       }
       if (metricName === "Margin Rate") {
-        const displayValue = liveMetricConfig.derivedDivisor ? value / liveMetricConfig.derivedDivisor : value;
+        const displayValue = (liveMetricConfig.derivedMode !== 'formula' && liveMetricConfig.derivedDivisor) ? value / liveMetricConfig.derivedDivisor : value;
         const formatted = numeral(displayValue).format(liveMetricConfig.derivedFormat);
         return (liveMetricConfig.derivedPrefix || "") + formatted + (liveMetricConfig.derivedSuffix || "");
       }
@@ -6467,7 +6473,7 @@ export function render() {
                       ? "square"
                       : "diamond",
                 },
-                customdata: traceData.map((value) => value.toFixed(2) + " bps"),
+                customdata: traceData.map((value) => formatMetricValue(value, scenarioMetric)),
                 hovertemplate: `[${scenarioLabel}] ${category}<br>%{customdata}<extra></extra>`,
               });
             } else {
@@ -7000,9 +7006,7 @@ export function render() {
               size: 3,
               color: categoryColor,
             },
-            customdata: traceData.map((value) => {
-              return value.toFixed(2) + " bps";
-            }),
+            customdata: traceData.map((value) => formatMetricValue(value, metric)),
             hovertemplate: category + "<br>%{customdata}<extra></extra>",
           });
         } else {
@@ -7196,7 +7200,8 @@ export function render() {
             size: 3,
             color: "#6b7280",
           },
-          hovertemplate: "Overall Average: %{y:.2f} bps<extra></extra>",
+          customdata: referenceLineData.map((value) => formatMetricValue(value, metric)),
+          hovertemplate: "Overall Average: %{customdata}<extra></extra>",
         });
       }
 
@@ -8957,7 +8962,7 @@ export function render() {
         </div>
 
         <div style={styles.statBoxContainer} data-guide="metric-statboxes">
-          {(isLiveMode && liveMetricConfig && !liveMetricConfig.derivedAggType
+          {(isLiveMode && liveMetricConfig && !liveMetricConfig.derivedAggType && liveMetricConfig.derivedMode !== 'formula'
             ? ["Volume", "Revenue"]
             : ["Volume", "Revenue", "Margin Rate"]
           ).map((metricName) => {
@@ -10704,6 +10709,8 @@ export function render() {
               volumeColumn: suggestion.volumeColumn && validAllCols.includes(suggestion.volumeColumn) ? suggestion.volumeColumn : prev.volumeColumn,
               revenueAggType: suggestion.revenueAggType && allowedAggs.includes(suggestion.revenueAggType) ? suggestion.revenueAggType : (suggestion.revenueColumn ? 'sum' : 'count'),
               revenueColumn: suggestion.revenueColumn && validAllCols.includes(suggestion.revenueColumn) ? suggestion.revenueColumn : prev.revenueColumn,
+              derivedMode: 'aggregation',
+              formulaOperator: prev.formulaOperator || '/',
               derivedAggType: suggestion.derivedAggType && allowedAggs.includes(suggestion.derivedAggType) ? suggestion.derivedAggType : prev.derivedAggType,
               derivedColumn: suggestion.derivedColumn && validAllCols.includes(suggestion.derivedColumn) ? suggestion.derivedColumn : prev.derivedColumn,
               volumeLabel: suggestion.volumeLabel || prev.volumeLabel,
@@ -10790,162 +10797,203 @@ export function render() {
                 )}
               </button>
 
-              {/* Metric Slot 1 */}
-              <div style={sectionStyle}>
-                <div style={{ fontSize: '13px', fontWeight: 700, marginBottom: '8px', color: isDarkMode ? '#f3f4f6' : '#111827' }}>
-                  Metric 1
-                </div>
-                <div style={rowStyle}>
-                  <div>
-                    <label style={labelStyle}>Aggregation</label>
-                    <select style={selectStyle} value={draft.volumeAggType || (draft.volumeColumn ? 'sum' : 'count')} onChange={e => {
-                      const agg = e.target.value;
-                      updateDraft('volumeAggType', agg);
-                      if (agg === 'count') updateDraft('volumeColumn', null);
-                    }}>
-                      <option value="count">COUNT(*)</option>
-                      <option value="count_distinct">COUNT(DISTINCT)</option>
-                      <option value="sum">SUM</option>
-                      <option value="avg">AVG</option>
-                      <option value="min">MIN</option>
-                      <option value="max">MAX</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Column</label>
-                    <select style={selectStyle} value={draft.volumeColumn || ''} disabled={(draft.volumeAggType || (draft.volumeColumn ? 'sum' : 'count')) === 'count'}
-                      onChange={e => updateDraft('volumeColumn', e.target.value || null)}>
-                      <option value="">— select —</option>
-                      {((draft.volumeAggType || 'count') === 'count_distinct' ? allCols : numericCols).map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
-                    </select>
-                  </div>
-                </div>
-                <div style={rowStyle}>
-                  <div>
-                    <label style={labelStyle}>Label</label>
-                    <input style={inputStyle} value={draft.volumeLabel || ''} onChange={e => updateDraft('volumeLabel', e.target.value)} placeholder="e.g. Total Jobs" />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Format</label>
-                    <input style={inputStyle} value={draft.volumeFormat || ''} onChange={e => updateDraft('volumeFormat', e.target.value)} placeholder="0,0" />
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '6px' }}>
-                  <div>
-                    <label style={labelStyle}>Prefix</label>
-                    <input style={inputStyle} value={draft.volumePrefix || ''} onChange={e => updateDraft('volumePrefix', e.target.value)} placeholder="e.g. $" />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Suffix</label>
-                    <input style={inputStyle} value={draft.volumeSuffix || ''} onChange={e => updateDraft('volumeSuffix', e.target.value)} placeholder="e.g. units" />
-                  </div>
-                </div>
-              </div>
+              {/* Metric Slots — accordion: click header to expand/collapse */}
+              {[
+                { prefix: 'volume', title: 'Metric 1', canDisable: false },
+                { prefix: 'revenue', title: 'Metric 2', canDisable: false },
+                { prefix: 'derived', title: 'Metric 3', canDisable: true },
+              ].map(({ prefix, title, canDisable }) => {
+                const aggKey = prefix + 'AggType';
+                const colKey = prefix + 'Column';
+                const labelKey = prefix + 'Label';
+                const formatKey = prefix + 'Format';
+                const prefixKey = prefix + 'Prefix';
+                const suffixKey = prefix + 'Suffix';
+                const modeKey = prefix + 'Mode';
+                const percentileKey = prefix + 'Percentile';
+                const formulaOpKey = prefix + 'FormulaOperator';
+                const fNumAggKey = prefix + 'FormulaNumAggType';
+                const fNumColKey = prefix + 'FormulaNumColumn';
+                const fNumPctKey = prefix + 'FormulaNumPercentile';
+                const fDenAggKey = prefix + 'FormulaDenAggType';
+                const fDenColKey = prefix + 'FormulaDenColumn';
+                const fDenPctKey = prefix + 'FormulaDenPercentile';
+                const mode = draft[modeKey] || 'aggregation';
+                const isExpanded = expandedMetricSlot === prefix;
 
-              {/* Metric Slot 2 */}
-              <div style={sectionStyle}>
-                <div style={{ fontSize: '13px', fontWeight: 700, marginBottom: '8px', color: isDarkMode ? '#f3f4f6' : '#111827' }}>
-                  Metric 2
-                </div>
-                <div style={rowStyle}>
-                  <div>
-                    <label style={labelStyle}>Aggregation</label>
-                    <select style={selectStyle} value={draft.revenueAggType || (draft.revenueColumn ? 'sum' : 'count')} onChange={e => {
-                      const agg = e.target.value;
-                      updateDraft('revenueAggType', agg);
-                      if (agg === 'count') updateDraft('revenueColumn', null);
-                    }}>
-                      <option value="count">COUNT(*)</option>
-                      <option value="count_distinct">COUNT(DISTINCT)</option>
-                      <option value="sum">SUM</option>
-                      <option value="avg">AVG</option>
-                      <option value="min">MIN</option>
-                      <option value="max">MAX</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Column</label>
-                    <select style={selectStyle} value={draft.revenueColumn || ''} disabled={(draft.revenueAggType || (draft.revenueColumn ? 'sum' : 'count')) === 'count'}
-                      onChange={e => updateDraft('revenueColumn', e.target.value || null)}>
-                      <option value="">— select —</option>
-                      {((draft.revenueAggType || 'count') === 'count_distinct' ? allCols : numericCols).map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
-                    </select>
-                  </div>
-                </div>
-                <div style={rowStyle}>
-                  <div>
-                    <label style={labelStyle}>Label</label>
-                    <input style={inputStyle} value={draft.revenueLabel || ''} onChange={e => updateDraft('revenueLabel', e.target.value)} placeholder="e.g. Total Score" />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Format</label>
-                    <input style={inputStyle} value={draft.revenueFormat || ''} onChange={e => updateDraft('revenueFormat', e.target.value)} placeholder="0,0" />
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '6px' }}>
-                  <div>
-                    <label style={labelStyle}>Prefix</label>
-                    <input style={inputStyle} value={draft.revenuePrefix || ''} onChange={e => updateDraft('revenuePrefix', e.target.value)} placeholder="e.g. $" />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Suffix</label>
-                    <input style={inputStyle} value={draft.revenueSuffix || ''} onChange={e => updateDraft('revenueSuffix', e.target.value)} placeholder="e.g. pts" />
-                  </div>
-                </div>
-              </div>
+                // Build compact summary for collapsed state
+                const summaryParts = [];
+                if (mode === 'formula') {
+                  const numAgg = (draft[fNumAggKey] || 'count').toUpperCase();
+                  const numCol = draft[fNumColKey] ? `(${draft[fNumColKey]})` : '(*)';
+                  const op = { '/': '÷', '*': '×', '+': '+', '-': '−' }[draft[formulaOpKey] || '/'] || '÷';
+                  const denAgg = (draft[fDenAggKey] || 'count').toUpperCase();
+                  const denCol = draft[fDenColKey] ? `(${draft[fDenColKey]})` : '(*)';
+                  summaryParts.push(`${numAgg}${numCol} ${op} ${denAgg}${denCol}`);
+                } else {
+                  const agg = draft[aggKey];
+                  if (canDisable && !agg) {
+                    summaryParts.push('Disabled');
+                  } else {
+                    const aggLabel = (agg || 'count').toUpperCase();
+                    const col = draft[colKey] ? `(${draft[colKey]})` : '(*)';
+                    summaryParts.push(`${aggLabel}${col}`);
+                  }
+                }
+                const label = draft[labelKey];
+                const summary = label ? `${summaryParts[0]}  ·  ${label}` : summaryParts[0];
+                const isDisabled = canDisable && mode === 'aggregation' && !draft[aggKey];
 
-              {/* Metric Slot 3 */}
-              <div style={sectionStyle}>
-                <div style={{ fontSize: '13px', fontWeight: 700, marginBottom: '8px', color: isDarkMode ? '#f3f4f6' : '#111827' }}>
-                  Metric 3
-                </div>
-                <div style={rowStyle}>
-                  <div>
-                    <label style={labelStyle}>Aggregation</label>
-                    <select style={selectStyle} value={draft.derivedAggType || ''} onChange={e => {
-                      const agg = e.target.value;
-                      updateDraft('derivedAggType', agg || null);
-                      if (agg === 'count' || !agg) updateDraft('derivedColumn', null);
-                    }}>
-                      <option value="">— none (disable) —</option>
-                      <option value="count">COUNT(*)</option>
-                      <option value="count_distinct">COUNT(DISTINCT)</option>
-                      <option value="sum">SUM</option>
-                      <option value="avg">AVG</option>
-                      <option value="min">MIN</option>
-                      <option value="max">MAX</option>
-                    </select>
+                const renderAggRow = (aggTypeKey, columnKey, pctKey, allowDisable) => {
+                  const aggVal = draft[aggTypeKey] || (allowDisable ? '' : (draft[columnKey] ? 'sum' : 'count'));
+                  return (
+                    <div style={rowStyle}>
+                      <div>
+                        <label style={labelStyle}>Aggregation</label>
+                        <select style={selectStyle} value={aggVal} onChange={e => {
+                          const agg = e.target.value;
+                          updateDraft(aggTypeKey, agg || null);
+                          if (agg === 'count' || !agg) updateDraft(columnKey, null);
+                          if (agg !== 'percentile') updateDraft(pctKey, null);
+                        }}>
+                          {allowDisable && <option value="">— none (disable) —</option>}
+                          <option value="count">COUNT(*)</option>
+                          <option value="count_distinct">COUNT(DISTINCT)</option>
+                          <option value="sum">SUM</option>
+                          <option value="avg">AVG</option>
+                          <option value="min">MIN</option>
+                          <option value="max">MAX</option>
+                          <option value="percentile">PERCENTILE</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label style={labelStyle}>Column</label>
+                        <select style={selectStyle} value={draft[columnKey] || ''} disabled={!aggVal || aggVal === 'count'}
+                          onChange={e => updateDraft(columnKey, e.target.value || null)}>
+                          <option value="">— select —</option>
+                          {(aggVal === 'count_distinct' ? allCols : numericCols).map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                        </select>
+                      </div>
+                      {aggVal === 'percentile' && (
+                        <div>
+                          <label style={labelStyle}>Pct (0-1)</label>
+                          <input type="number" step="0.05" min="0" max="1" style={{ ...inputStyle, width: '70px' }}
+                            value={draft[pctKey] != null ? draft[pctKey] : 0.5}
+                            onChange={e => updateDraft(pctKey, parseFloat(e.target.value) || 0.5)} />
+                        </div>
+                      )}
+                    </div>
+                  );
+                };
+
+                return (
+                  <div key={prefix} style={{
+                    ...sectionStyle,
+                    marginBottom: '8px',
+                    transition: 'all 0.15s ease',
+                  }}>
+                    {/* Accordion header — always visible */}
+                    <div
+                      onClick={() => setExpandedMetricSlot(isExpanded ? null : prefix)}
+                      style={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        cursor: 'pointer', userSelect: 'none',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
+                        <span style={{
+                          fontSize: '10px', color: isDarkMode ? '#6b7280' : '#9ca3af',
+                          transition: 'transform 0.15s ease',
+                          transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                          display: 'inline-block',
+                        }}>&#9654;</span>
+                        <span style={{ fontSize: '13px', fontWeight: 700, color: isDarkMode ? '#f3f4f6' : '#111827', flexShrink: 0 }}>
+                          {title}
+                        </span>
+                        {!isExpanded && (
+                          <span style={{
+                            fontSize: '11px', color: isDisabled ? (isDarkMode ? '#6b7280' : '#9ca3af') : (isDarkMode ? '#9ca3af' : '#6b7280'),
+                            fontStyle: isDisabled ? 'italic' : 'normal',
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          }}>
+                            {summary}
+                          </span>
+                        )}
+                      </div>
+                      {isExpanded && (
+                        <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                          {['aggregation', 'formula'].map(m => (
+                            <button key={m}
+                              onClick={e => {
+                                e.stopPropagation();
+                                updateDraft(modeKey, m);
+                                if (m === 'formula') {
+                                  updateDraft(aggKey, null);
+                                  updateDraft(colKey, null);
+                                }
+                              }}
+                              style={{
+                                padding: '2px 8px', fontSize: '11px', borderRadius: '4px', cursor: 'pointer', fontWeight: 500,
+                                border: `1px solid ${mode === m ? (isDarkMode ? '#6366f1' : '#818cf8') : (isDarkMode ? '#4b5563' : '#d1d5db')}`,
+                                backgroundColor: mode === m ? (isDarkMode ? 'rgba(99,102,241,0.2)' : 'rgba(99,102,241,0.1)') : 'transparent',
+                                color: mode === m ? (isDarkMode ? '#a5b4fc' : '#4f46e5') : (isDarkMode ? '#9ca3af' : '#6b7280'),
+                              }}
+                            >
+                              {m === 'aggregation' ? 'Agg' : 'Formula'}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Expanded body */}
+                    {isExpanded && (
+                      <div style={{ marginTop: '10px' }}>
+                        {mode === 'aggregation' ? (
+                          renderAggRow(aggKey, colKey, percentileKey, canDisable)
+                        ) : (
+                          <div style={{ padding: '8px', borderRadius: '6px', backgroundColor: isDarkMode ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.04)', border: `1px solid ${isDarkMode ? '#4b5563' : '#e5e7eb'}` }}>
+                            <div style={{ fontSize: '11px', fontWeight: 600, marginBottom: '4px', color: isDarkMode ? '#9ca3af' : '#6b7280' }}>Numerator</div>
+                            {renderAggRow(fNumAggKey, fNumColKey, fNumPctKey, false)}
+                            <div style={{ display: 'flex', justifyContent: 'center', margin: '6px 0' }}>
+                              <select style={{ ...selectStyle, width: '50px', textAlign: 'center', padding: '4px', fontSize: '14px', fontWeight: 700 }}
+                                value={draft[formulaOpKey] || '/'}
+                                onChange={e => updateDraft(formulaOpKey, e.target.value)}>
+                                <option value="/">÷</option>
+                                <option value="*">×</option>
+                                <option value="+">+</option>
+                                <option value="-">−</option>
+                              </select>
+                            </div>
+                            <div style={{ fontSize: '11px', fontWeight: 600, marginBottom: '4px', color: isDarkMode ? '#9ca3af' : '#6b7280' }}>Denominator</div>
+                            {renderAggRow(fDenAggKey, fDenColKey, fDenPctKey, false)}
+                          </div>
+                        )}
+
+                        {/* Formatting: Label, Format, Prefix, Suffix in one row */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: '6px', marginTop: '8px' }}>
+                          <div>
+                            <label style={labelStyle}>Label</label>
+                            <input style={inputStyle} value={draft[labelKey] || ''} onChange={e => updateDraft(labelKey, e.target.value)} placeholder="e.g. Total" />
+                          </div>
+                          <div>
+                            <label style={labelStyle}>Format</label>
+                            <input style={inputStyle} value={draft[formatKey] || ''} onChange={e => updateDraft(formatKey, e.target.value)} placeholder="0,0" />
+                          </div>
+                          <div>
+                            <label style={labelStyle}>Prefix</label>
+                            <input style={inputStyle} value={draft[prefixKey] || ''} onChange={e => updateDraft(prefixKey, e.target.value)} placeholder="$" />
+                          </div>
+                          <div>
+                            <label style={labelStyle}>Suffix</label>
+                            <input style={inputStyle} value={draft[suffixKey] || ''} onChange={e => updateDraft(suffixKey, e.target.value)} placeholder="ms" />
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <div>
-                    <label style={labelStyle}>Column</label>
-                    <select style={selectStyle} value={draft.derivedColumn || ''} disabled={!draft.derivedAggType || draft.derivedAggType === 'count'}
-                      onChange={e => updateDraft('derivedColumn', e.target.value || null)}>
-                      <option value="">— select —</option>
-                      {((draft.derivedAggType) === 'count_distinct' ? allCols : numericCols).map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
-                    </select>
-                  </div>
-                </div>
-                <div style={rowStyle}>
-                  <div>
-                    <label style={labelStyle}>Label</label>
-                    <input style={inputStyle} value={draft.derivedLabel || ''} onChange={e => updateDraft('derivedLabel', e.target.value)} placeholder="e.g. Avg Score" />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Format</label>
-                    <input style={inputStyle} value={draft.derivedFormat || ''} onChange={e => updateDraft('derivedFormat', e.target.value)} placeholder="0.0" />
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '6px' }}>
-                  <div>
-                    <label style={labelStyle}>Prefix</label>
-                    <input style={inputStyle} value={draft.derivedPrefix || ''} onChange={e => updateDraft('derivedPrefix', e.target.value)} placeholder="e.g. $" />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Suffix</label>
-                    <input style={inputStyle} value={draft.derivedSuffix || ''} onChange={e => updateDraft('derivedSuffix', e.target.value)} placeholder="e.g. bps" />
-                  </div>
-                </div>
-              </div>
+                );
+              })}
 
               {/* Date Column */}
               <div style={{ marginBottom: '16px' }}>

@@ -548,30 +548,71 @@ var __app = (() => {
   function buildRpcMetrics(config) {
     if (!config) return [];
     const metrics = [];
-    const addMetric = (aggType, column, alias) => {
+    const addMetric = (aggType, column, alias, percentile) => {
       const agg = aggType || (column ? "sum" : "count");
       if (agg === "count") {
         metrics.push({ type: "count", alias });
+      } else if (agg === "percentile") {
+        metrics.push({ type: "percentile", column, alias, percentile: percentile || 0.5 });
       } else {
         metrics.push({ type: agg, column, alias });
       }
     };
-    addMetric(config.volumeAggType, config.volumeColumn, "volume");
-    addMetric(config.revenueAggType, config.revenueColumn, "revenue");
-    if (config.derivedAggType) {
-      addMetric(config.derivedAggType, config.derivedColumn, "derived");
-    }
+    const addSlot = (prefix, alias) => {
+      const mode = config[prefix + "Mode"];
+      if (mode === "formula") {
+        addMetric(config[prefix + "FormulaNumAggType"], config[prefix + "FormulaNumColumn"], alias + "_num", config[prefix + "FormulaNumPercentile"]);
+        addMetric(config[prefix + "FormulaDenAggType"], config[prefix + "FormulaDenColumn"], alias + "_den", config[prefix + "FormulaDenPercentile"]);
+      } else {
+        const aggType = config[prefix + "AggType"];
+        if (prefix === "derived" && !aggType) return;
+        addMetric(aggType, config[prefix + "Column"], alias, config[prefix + "Percentile"]);
+      }
+    };
+    addSlot("volume", "volume");
+    addSlot("revenue", "revenue");
+    addSlot("derived", "derived");
     return metrics;
   }
-  function transformToPeriodAggregates(rows, hasMetric3) {
+  function applyOperator(a, b, op) {
+    switch (op) {
+      case "/":
+        return b !== 0 ? a / b : 0;
+      case "*":
+        return a * b;
+      case "+":
+        return a + b;
+      case "-":
+        return a - b;
+      default:
+        return b !== 0 ? a / b : 0;
+    }
+  }
+  function resolveMetric(row, alias, formulaConfigs) {
+    const fc = formulaConfigs && formulaConfigs[alias];
+    if (fc) {
+      const num = Number(row[alias + "_num"]) || 0;
+      const den = Number(row[alias + "_den"]) || 0;
+      return applyOperator(num, den, fc.operator);
+    }
+    return Number(row[alias]) || 0;
+  }
+  function transformToPeriodAggregates(rows, hasMetric3, formulaConfigs) {
     const aggs = {};
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const period = row.period;
       if (!period) continue;
-      const vol = Number(row.volume) || 0;
-      const rev = Number(row.revenue) || 0;
-      const m3 = hasMetric3 ? Number(row.derived) || 0 : vol > 0 ? 1e4 * rev / vol : 0;
+      const vol = resolveMetric(row, "volume", formulaConfigs);
+      const rev = resolveMetric(row, "revenue", formulaConfigs);
+      let m3;
+      if (formulaConfigs && formulaConfigs.derived) {
+        m3 = resolveMetric(row, "derived", formulaConfigs);
+      } else if (hasMetric3) {
+        m3 = Number(row.derived) || 0;
+      } else {
+        m3 = vol > 0 ? 1e4 * rev / vol : 0;
+      }
       aggs[period] = {
         totalVolume: vol,
         totalRevenue: rev,
@@ -582,7 +623,7 @@ var __app = (() => {
     }
     return aggs;
   }
-  function transformToDimensionAggregates(rows, dimColumn, hasMetric3) {
+  function transformToDimensionAggregates(rows, dimColumn, hasMetric3, formulaConfigs) {
     const aggs = {};
     const categoryTotals = {};
     aggs[dimColumn] = {};
@@ -591,9 +632,16 @@ var __app = (() => {
       const row = rows[i];
       const period = row.period;
       const category = row[dimColumn] || "Unknown";
-      const vol = Number(row.volume) || 0;
-      const rev = Number(row.revenue) || 0;
-      const m3 = hasMetric3 ? Number(row.derived) || 0 : vol > 0 ? 1e4 * rev / vol : 0;
+      const vol = resolveMetric(row, "volume", formulaConfigs);
+      const rev = resolveMetric(row, "revenue", formulaConfigs);
+      let m3;
+      if (formulaConfigs && formulaConfigs.derived) {
+        m3 = resolveMetric(row, "derived", formulaConfigs);
+      } else if (hasMetric3) {
+        m3 = Number(row.derived) || 0;
+      } else {
+        m3 = vol > 0 ? 1e4 * rev / vol : 0;
+      }
       if (!aggs[dimColumn][period]) aggs[dimColumn][period] = {};
       aggs[dimColumn][period][category] = {
         totalVolume: vol,
@@ -603,20 +651,36 @@ var __app = (() => {
         "Margin Rate": m3
       };
       if (!categoryTotals[dimColumn][category]) {
-        categoryTotals[dimColumn][category] = { totalVolume: 0, totalRevenue: 0, _derivedSum: 0, _derivedCount: 0 };
+        categoryTotals[dimColumn][category] = { totalVolume: 0, totalRevenue: 0, _volNumSum: 0, _volDenSum: 0, _revNumSum: 0, _revDenSum: 0, _derNumSum: 0, _derDenSum: 0, _derivedSum: 0, _derivedCount: 0 };
       }
-      categoryTotals[dimColumn][category].totalVolume += vol;
-      categoryTotals[dimColumn][category].totalRevenue += rev;
-      if (hasMetric3) {
-        categoryTotals[dimColumn][category]._derivedSum += m3;
-        categoryTotals[dimColumn][category]._derivedCount += 1;
+      const ct = categoryTotals[dimColumn][category];
+      if (formulaConfigs && formulaConfigs.volume) {
+        ct._volNumSum += Number(row.volume_num) || 0;
+        ct._volDenSum += Number(row.volume_den) || 0;
+      } else {
+        ct.totalVolume += vol;
+      }
+      if (formulaConfigs && formulaConfigs.revenue) {
+        ct._revNumSum += Number(row.revenue_num) || 0;
+        ct._revDenSum += Number(row.revenue_den) || 0;
+      } else {
+        ct.totalRevenue += rev;
+      }
+      if (formulaConfigs && formulaConfigs.derived) {
+        ct._derNumSum += Number(row.derived_num) || 0;
+        ct._derDenSum += Number(row.derived_den) || 0;
+      } else if (hasMetric3) {
+        ct._derivedSum += m3;
+        ct._derivedCount += 1;
       }
     }
     Object.keys(categoryTotals[dimColumn]).forEach((cat) => {
       const t = categoryTotals[dimColumn][cat];
-      t.Volume = t.totalVolume;
-      t.Revenue = t.totalRevenue;
-      if (hasMetric3) {
+      t.Volume = formulaConfigs && formulaConfigs.volume ? applyOperator(t._volNumSum, t._volDenSum, formulaConfigs.volume.operator) : t.totalVolume;
+      t.Revenue = formulaConfigs && formulaConfigs.revenue ? applyOperator(t._revNumSum, t._revDenSum, formulaConfigs.revenue.operator) : t.totalRevenue;
+      if (formulaConfigs && formulaConfigs.derived) {
+        t["Margin Rate"] = applyOperator(t._derNumSum, t._derDenSum, formulaConfigs.derived.operator);
+      } else if (hasMetric3) {
         t["Margin Rate"] = t._derivedCount > 0 ? t._derivedSum / t._derivedCount : 0;
       } else {
         t["Margin Rate"] = t.totalVolume > 0 ? 1e4 * t.totalRevenue / t.totalVolume : 0;
@@ -2304,6 +2368,7 @@ var __app = (() => {
     const [metricsEditorDraft, setMetricsEditorDraft] = React.useState(null);
     const [metricsEditorSuggesting, setMetricsEditorSuggesting] = React.useState(false);
     const [metricsEditorError, setMetricsEditorError] = React.useState("");
+    const [expandedMetricSlot, setExpandedMetricSlot] = React.useState(null);
     const callQueryDataset = React.useMemo(
       () => createRpcCaller(connectionParams),
       [connectionParams]
@@ -4007,14 +4072,19 @@ var __app = (() => {
         p_metrics: rpcMetrics,
         p_filters: pFilters
       }) : Promise.resolve(null);
-      const hasMetric3 = !!liveMetricConfig.derivedAggType;
+      const hasMetric3 = !!liveMetricConfig.derivedAggType || liveMetricConfig.derivedMode === "formula";
+      const formulaConfigs = {};
+      if (liveMetricConfig.volumeMode === "formula") formulaConfigs.volume = { operator: liveMetricConfig.volumeFormulaOperator || "/" };
+      if (liveMetricConfig.revenueMode === "formula") formulaConfigs.revenue = { operator: liveMetricConfig.revenueFormulaOperator || "/" };
+      if (liveMetricConfig.derivedMode === "formula") formulaConfigs.derived = { operator: liveMetricConfig.derivedFormulaOperator || "/" };
+      const formulaConfigsArg = Object.keys(formulaConfigs).length > 0 ? formulaConfigs : null;
       Promise.all([periodPromise, dimPromise]).then(([periodData, dimData]) => {
         if (requestId !== liveAggRequestRef.current) return;
-        const periodAggs = transformToPeriodAggregates(periodData.rows || [], hasMetric3);
+        const periodAggs = transformToPeriodAggregates(periodData.rows || [], hasMetric3, formulaConfigsArg);
         setLivePeriodAggregates(periodAggs);
         setLiveRowCount(periodData.rows ? periodData.rows.reduce((sum, r) => sum + (Number(r.volume) || 0), 0) : 0);
         if (dimData && dimColumn) {
-          const dimAggs = transformToDimensionAggregates(dimData.rows || [], dimColumn, hasMetric3);
+          const dimAggs = transformToDimensionAggregates(dimData.rows || [], dimColumn, hasMetric3, formulaConfigsArg);
           setLiveDimensionAggregates(dimAggs);
         } else {
           setLiveDimensionAggregates({});
@@ -4566,7 +4636,7 @@ var __app = (() => {
           return (liveMetricConfig.revenuePrefix || "") + formatted + (liveMetricConfig.revenueSuffix || "");
         }
         if (metricName === "Margin Rate") {
-          const displayValue = liveMetricConfig.derivedDivisor ? value / liveMetricConfig.derivedDivisor : value;
+          const displayValue = liveMetricConfig.derivedMode !== "formula" && liveMetricConfig.derivedDivisor ? value / liveMetricConfig.derivedDivisor : value;
           const formatted = numeral(displayValue).format(liveMetricConfig.derivedFormat);
           return (liveMetricConfig.derivedPrefix || "") + formatted + (liveMetricConfig.derivedSuffix || "");
         }
@@ -6268,7 +6338,7 @@ var __app = (() => {
                     color: blendedColor,
                     symbol: scenarioIndex === 1 ? "circle" : scenarioIndex === 2 ? "square" : "diamond"
                   },
-                  customdata: traceData.map((value) => value.toFixed(2) + " bps"),
+                  customdata: traceData.map((value) => formatMetricValue(value, scenarioMetric)),
                   hovertemplate: `[${scenarioLabel}] ${category}<br>%{customdata}<extra></extra>`
                 });
               } else {
@@ -6632,9 +6702,7 @@ var __app = (() => {
                 size: 3,
                 color: categoryColor
               },
-              customdata: traceData.map((value) => {
-                return value.toFixed(2) + " bps";
-              }),
+              customdata: traceData.map((value) => formatMetricValue(value, metric)),
               hovertemplate: category + "<br>%{customdata}<extra></extra>"
             });
           } else {
@@ -6797,7 +6865,8 @@ var __app = (() => {
               size: 3,
               color: "#6b7280"
             },
-            hovertemplate: "Overall Average: %{y:.2f} bps<extra></extra>"
+            customdata: referenceLineData.map((value) => formatMetricValue(value, metric)),
+            hovertemplate: "Overall Average: %{customdata}<extra></extra>"
           });
         }
         const titleText = getSimpleChartTitle();
@@ -8179,7 +8248,7 @@ var __app = (() => {
         title: showGuide ? "Stop Guide" : "Guide Me - Click to start tour"
       },
       showGuide ? "\u2715" : "Guide Me"
-    )), /* @__PURE__ */ React.createElement("div", { style: styles.statBoxContainer, "data-guide": "metric-statboxes" }, (isLiveMode && liveMetricConfig && !liveMetricConfig.derivedAggType ? ["Volume", "Revenue"] : ["Volume", "Revenue", "Margin Rate"]).map((metricName) => {
+    )), /* @__PURE__ */ React.createElement("div", { style: styles.statBoxContainer, "data-guide": "metric-statboxes" }, (isLiveMode && liveMetricConfig && !liveMetricConfig.derivedAggType && liveMetricConfig.derivedMode !== "formula" ? ["Volume", "Revenue"] : ["Volume", "Revenue", "Margin Rate"]).map((metricName) => {
       const metricStatData = allMetricsStatData[metricName];
       if (!metricStatData) return null;
       const displayLabel = METRIC_LABELS[metricName] || metricName;
@@ -9555,6 +9624,8 @@ var __app = (() => {
             volumeColumn: suggestion.volumeColumn && validAllCols.includes(suggestion.volumeColumn) ? suggestion.volumeColumn : prev.volumeColumn,
             revenueAggType: suggestion.revenueAggType && allowedAggs.includes(suggestion.revenueAggType) ? suggestion.revenueAggType : suggestion.revenueColumn ? "sum" : "count",
             revenueColumn: suggestion.revenueColumn && validAllCols.includes(suggestion.revenueColumn) ? suggestion.revenueColumn : prev.revenueColumn,
+            derivedMode: "aggregation",
+            formulaOperator: prev.formulaOperator || "/",
             derivedAggType: suggestion.derivedAggType && allowedAggs.includes(suggestion.derivedAggType) ? suggestion.derivedAggType : prev.derivedAggType,
             derivedColumn: suggestion.derivedColumn && validAllCols.includes(suggestion.derivedColumn) ? suggestion.derivedColumn : prev.derivedColumn,
             volumeLabel: suggestion.volumeLabel || prev.volumeLabel,
@@ -9636,49 +9707,147 @@ var __app = (() => {
           }
         },
         metricsEditorSuggesting ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: { width: "14px", height: "14px", border: "2px solid currentColor", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite", display: "inline-block" } }), "Analyzing schema...") : "AI Suggest Metrics"
-      ), /* @__PURE__ */ React.createElement("div", { style: sectionStyle }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "13px", fontWeight: 700, marginBottom: "8px", color: isDarkMode ? "#f3f4f6" : "#111827" } }, "Metric 1"), /* @__PURE__ */ React.createElement("div", { style: rowStyle }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Aggregation"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.volumeAggType || (draft.volumeColumn ? "sum" : "count"), onChange: (e) => {
-        const agg = e.target.value;
-        updateDraft("volumeAggType", agg);
-        if (agg === "count") updateDraft("volumeColumn", null);
-      } }, /* @__PURE__ */ React.createElement("option", { value: "count" }, "COUNT(*)"), /* @__PURE__ */ React.createElement("option", { value: "count_distinct" }, "COUNT(DISTINCT)"), /* @__PURE__ */ React.createElement("option", { value: "sum" }, "SUM"), /* @__PURE__ */ React.createElement("option", { value: "avg" }, "AVG"), /* @__PURE__ */ React.createElement("option", { value: "min" }, "MIN"), /* @__PURE__ */ React.createElement("option", { value: "max" }, "MAX"))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Column"), /* @__PURE__ */ React.createElement(
-        "select",
-        {
-          style: selectStyle,
-          value: draft.volumeColumn || "",
-          disabled: (draft.volumeAggType || (draft.volumeColumn ? "sum" : "count")) === "count",
-          onChange: (e) => updateDraft("volumeColumn", e.target.value || null)
-        },
-        /* @__PURE__ */ React.createElement("option", { value: "" }, "\u2014 select \u2014"),
-        ((draft.volumeAggType || "count") === "count_distinct" ? allCols : numericCols).map((c) => /* @__PURE__ */ React.createElement("option", { key: c.name, value: c.name }, c.name))
-      ))), /* @__PURE__ */ React.createElement("div", { style: rowStyle }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Label"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.volumeLabel || "", onChange: (e) => updateDraft("volumeLabel", e.target.value), placeholder: "e.g. Total Jobs" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Format"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.volumeFormat || "", onChange: (e) => updateDraft("volumeFormat", e.target.value), placeholder: "0,0" }))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "6px" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Prefix"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.volumePrefix || "", onChange: (e) => updateDraft("volumePrefix", e.target.value), placeholder: "e.g. $" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Suffix"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.volumeSuffix || "", onChange: (e) => updateDraft("volumeSuffix", e.target.value), placeholder: "e.g. units" })))), /* @__PURE__ */ React.createElement("div", { style: sectionStyle }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "13px", fontWeight: 700, marginBottom: "8px", color: isDarkMode ? "#f3f4f6" : "#111827" } }, "Metric 2"), /* @__PURE__ */ React.createElement("div", { style: rowStyle }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Aggregation"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.revenueAggType || (draft.revenueColumn ? "sum" : "count"), onChange: (e) => {
-        const agg = e.target.value;
-        updateDraft("revenueAggType", agg);
-        if (agg === "count") updateDraft("revenueColumn", null);
-      } }, /* @__PURE__ */ React.createElement("option", { value: "count" }, "COUNT(*)"), /* @__PURE__ */ React.createElement("option", { value: "count_distinct" }, "COUNT(DISTINCT)"), /* @__PURE__ */ React.createElement("option", { value: "sum" }, "SUM"), /* @__PURE__ */ React.createElement("option", { value: "avg" }, "AVG"), /* @__PURE__ */ React.createElement("option", { value: "min" }, "MIN"), /* @__PURE__ */ React.createElement("option", { value: "max" }, "MAX"))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Column"), /* @__PURE__ */ React.createElement(
-        "select",
-        {
-          style: selectStyle,
-          value: draft.revenueColumn || "",
-          disabled: (draft.revenueAggType || (draft.revenueColumn ? "sum" : "count")) === "count",
-          onChange: (e) => updateDraft("revenueColumn", e.target.value || null)
-        },
-        /* @__PURE__ */ React.createElement("option", { value: "" }, "\u2014 select \u2014"),
-        ((draft.revenueAggType || "count") === "count_distinct" ? allCols : numericCols).map((c) => /* @__PURE__ */ React.createElement("option", { key: c.name, value: c.name }, c.name))
-      ))), /* @__PURE__ */ React.createElement("div", { style: rowStyle }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Label"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.revenueLabel || "", onChange: (e) => updateDraft("revenueLabel", e.target.value), placeholder: "e.g. Total Score" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Format"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.revenueFormat || "", onChange: (e) => updateDraft("revenueFormat", e.target.value), placeholder: "0,0" }))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "6px" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Prefix"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.revenuePrefix || "", onChange: (e) => updateDraft("revenuePrefix", e.target.value), placeholder: "e.g. $" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Suffix"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.revenueSuffix || "", onChange: (e) => updateDraft("revenueSuffix", e.target.value), placeholder: "e.g. pts" })))), /* @__PURE__ */ React.createElement("div", { style: sectionStyle }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "13px", fontWeight: 700, marginBottom: "8px", color: isDarkMode ? "#f3f4f6" : "#111827" } }, "Metric 3"), /* @__PURE__ */ React.createElement("div", { style: rowStyle }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Aggregation"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.derivedAggType || "", onChange: (e) => {
-        const agg = e.target.value;
-        updateDraft("derivedAggType", agg || null);
-        if (agg === "count" || !agg) updateDraft("derivedColumn", null);
-      } }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u2014 none (disable) \u2014"), /* @__PURE__ */ React.createElement("option", { value: "count" }, "COUNT(*)"), /* @__PURE__ */ React.createElement("option", { value: "count_distinct" }, "COUNT(DISTINCT)"), /* @__PURE__ */ React.createElement("option", { value: "sum" }, "SUM"), /* @__PURE__ */ React.createElement("option", { value: "avg" }, "AVG"), /* @__PURE__ */ React.createElement("option", { value: "min" }, "MIN"), /* @__PURE__ */ React.createElement("option", { value: "max" }, "MAX"))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Column"), /* @__PURE__ */ React.createElement(
-        "select",
-        {
-          style: selectStyle,
-          value: draft.derivedColumn || "",
-          disabled: !draft.derivedAggType || draft.derivedAggType === "count",
-          onChange: (e) => updateDraft("derivedColumn", e.target.value || null)
-        },
-        /* @__PURE__ */ React.createElement("option", { value: "" }, "\u2014 select \u2014"),
-        (draft.derivedAggType === "count_distinct" ? allCols : numericCols).map((c) => /* @__PURE__ */ React.createElement("option", { key: c.name, value: c.name }, c.name))
-      ))), /* @__PURE__ */ React.createElement("div", { style: rowStyle }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Label"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.derivedLabel || "", onChange: (e) => updateDraft("derivedLabel", e.target.value), placeholder: "e.g. Avg Score" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Format"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.derivedFormat || "", onChange: (e) => updateDraft("derivedFormat", e.target.value), placeholder: "0.0" }))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "6px" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Prefix"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.derivedPrefix || "", onChange: (e) => updateDraft("derivedPrefix", e.target.value), placeholder: "e.g. $" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Suffix"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.derivedSuffix || "", onChange: (e) => updateDraft("derivedSuffix", e.target.value), placeholder: "e.g. bps" })))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: "16px" } }, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Date Column"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.dateColumn || "", onChange: (e) => updateDraft("dateColumn", e.target.value || null) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u2014 none \u2014"), dateCols.map((c) => /* @__PURE__ */ React.createElement("option", { key: c.name, value: c.name }, c.name)))), /* @__PURE__ */ React.createElement("div", { style: sectionStyle }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "13px", fontWeight: 700, color: isDarkMode ? "#f3f4f6" : "#111827" } }, "Dimensions & Filters"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: "8px" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", liveSchemaClassified.dimensions.map((c) => c.name)), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "All"), /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", []), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "None"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } }, liveSchemaClassified.dimensions.map((c) => {
+      ), [
+        { prefix: "volume", title: "Metric 1", canDisable: false },
+        { prefix: "revenue", title: "Metric 2", canDisable: false },
+        { prefix: "derived", title: "Metric 3", canDisable: true }
+      ].map(({ prefix, title, canDisable }) => {
+        const aggKey = prefix + "AggType";
+        const colKey = prefix + "Column";
+        const labelKey = prefix + "Label";
+        const formatKey = prefix + "Format";
+        const prefixKey = prefix + "Prefix";
+        const suffixKey = prefix + "Suffix";
+        const modeKey = prefix + "Mode";
+        const percentileKey = prefix + "Percentile";
+        const formulaOpKey = prefix + "FormulaOperator";
+        const fNumAggKey = prefix + "FormulaNumAggType";
+        const fNumColKey = prefix + "FormulaNumColumn";
+        const fNumPctKey = prefix + "FormulaNumPercentile";
+        const fDenAggKey = prefix + "FormulaDenAggType";
+        const fDenColKey = prefix + "FormulaDenColumn";
+        const fDenPctKey = prefix + "FormulaDenPercentile";
+        const mode = draft[modeKey] || "aggregation";
+        const isExpanded = expandedMetricSlot === prefix;
+        const summaryParts = [];
+        if (mode === "formula") {
+          const numAgg = (draft[fNumAggKey] || "count").toUpperCase();
+          const numCol = draft[fNumColKey] ? `(${draft[fNumColKey]})` : "(*)";
+          const op = { "/": "\xF7", "*": "\xD7", "+": "+", "-": "\u2212" }[draft[formulaOpKey] || "/"] || "\xF7";
+          const denAgg = (draft[fDenAggKey] || "count").toUpperCase();
+          const denCol = draft[fDenColKey] ? `(${draft[fDenColKey]})` : "(*)";
+          summaryParts.push(`${numAgg}${numCol} ${op} ${denAgg}${denCol}`);
+        } else {
+          const agg = draft[aggKey];
+          if (canDisable && !agg) {
+            summaryParts.push("Disabled");
+          } else {
+            const aggLabel = (agg || "count").toUpperCase();
+            const col = draft[colKey] ? `(${draft[colKey]})` : "(*)";
+            summaryParts.push(`${aggLabel}${col}`);
+          }
+        }
+        const label = draft[labelKey];
+        const summary = label ? `${summaryParts[0]}  \xB7  ${label}` : summaryParts[0];
+        const isDisabled = canDisable && mode === "aggregation" && !draft[aggKey];
+        const renderAggRow = (aggTypeKey, columnKey, pctKey, allowDisable) => {
+          const aggVal = draft[aggTypeKey] || (allowDisable ? "" : draft[columnKey] ? "sum" : "count");
+          return /* @__PURE__ */ React.createElement("div", { style: rowStyle }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Aggregation"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: aggVal, onChange: (e) => {
+            const agg = e.target.value;
+            updateDraft(aggTypeKey, agg || null);
+            if (agg === "count" || !agg) updateDraft(columnKey, null);
+            if (agg !== "percentile") updateDraft(pctKey, null);
+          } }, allowDisable && /* @__PURE__ */ React.createElement("option", { value: "" }, "\u2014 none (disable) \u2014"), /* @__PURE__ */ React.createElement("option", { value: "count" }, "COUNT(*)"), /* @__PURE__ */ React.createElement("option", { value: "count_distinct" }, "COUNT(DISTINCT)"), /* @__PURE__ */ React.createElement("option", { value: "sum" }, "SUM"), /* @__PURE__ */ React.createElement("option", { value: "avg" }, "AVG"), /* @__PURE__ */ React.createElement("option", { value: "min" }, "MIN"), /* @__PURE__ */ React.createElement("option", { value: "max" }, "MAX"), /* @__PURE__ */ React.createElement("option", { value: "percentile" }, "PERCENTILE"))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Column"), /* @__PURE__ */ React.createElement(
+            "select",
+            {
+              style: selectStyle,
+              value: draft[columnKey] || "",
+              disabled: !aggVal || aggVal === "count",
+              onChange: (e) => updateDraft(columnKey, e.target.value || null)
+            },
+            /* @__PURE__ */ React.createElement("option", { value: "" }, "\u2014 select \u2014"),
+            (aggVal === "count_distinct" ? allCols : numericCols).map((c) => /* @__PURE__ */ React.createElement("option", { key: c.name, value: c.name }, c.name))
+          )), aggVal === "percentile" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Pct (0-1)"), /* @__PURE__ */ React.createElement(
+            "input",
+            {
+              type: "number",
+              step: "0.05",
+              min: "0",
+              max: "1",
+              style: { ...inputStyle, width: "70px" },
+              value: draft[pctKey] != null ? draft[pctKey] : 0.5,
+              onChange: (e) => updateDraft(pctKey, parseFloat(e.target.value) || 0.5)
+            }
+          )));
+        };
+        return /* @__PURE__ */ React.createElement("div", { key: prefix, style: {
+          ...sectionStyle,
+          marginBottom: "8px",
+          transition: "all 0.15s ease"
+        } }, /* @__PURE__ */ React.createElement(
+          "div",
+          {
+            onClick: () => setExpandedMetricSlot(isExpanded ? null : prefix),
+            style: {
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              cursor: "pointer",
+              userSelect: "none"
+            }
+          },
+          /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: 1 } }, /* @__PURE__ */ React.createElement("span", { style: {
+            fontSize: "10px",
+            color: isDarkMode ? "#6b7280" : "#9ca3af",
+            transition: "transform 0.15s ease",
+            transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)",
+            display: "inline-block"
+          } }, "\u25B6"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: "13px", fontWeight: 700, color: isDarkMode ? "#f3f4f6" : "#111827", flexShrink: 0 } }, title), !isExpanded && /* @__PURE__ */ React.createElement("span", { style: {
+            fontSize: "11px",
+            color: isDisabled ? isDarkMode ? "#6b7280" : "#9ca3af" : isDarkMode ? "#9ca3af" : "#6b7280",
+            fontStyle: isDisabled ? "italic" : "normal",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap"
+          } }, summary)),
+          isExpanded && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: "4px", flexShrink: 0 } }, ["aggregation", "formula"].map((m) => /* @__PURE__ */ React.createElement(
+            "button",
+            {
+              key: m,
+              onClick: (e) => {
+                e.stopPropagation();
+                updateDraft(modeKey, m);
+                if (m === "formula") {
+                  updateDraft(aggKey, null);
+                  updateDraft(colKey, null);
+                }
+              },
+              style: {
+                padding: "2px 8px",
+                fontSize: "11px",
+                borderRadius: "4px",
+                cursor: "pointer",
+                fontWeight: 500,
+                border: `1px solid ${mode === m ? isDarkMode ? "#6366f1" : "#818cf8" : isDarkMode ? "#4b5563" : "#d1d5db"}`,
+                backgroundColor: mode === m ? isDarkMode ? "rgba(99,102,241,0.2)" : "rgba(99,102,241,0.1)" : "transparent",
+                color: mode === m ? isDarkMode ? "#a5b4fc" : "#4f46e5" : isDarkMode ? "#9ca3af" : "#6b7280"
+              }
+            },
+            m === "aggregation" ? "Agg" : "Formula"
+          )))
+        ), isExpanded && /* @__PURE__ */ React.createElement("div", { style: { marginTop: "10px" } }, mode === "aggregation" ? renderAggRow(aggKey, colKey, percentileKey, canDisable) : /* @__PURE__ */ React.createElement("div", { style: { padding: "8px", borderRadius: "6px", backgroundColor: isDarkMode ? "rgba(99,102,241,0.08)" : "rgba(99,102,241,0.04)", border: `1px solid ${isDarkMode ? "#4b5563" : "#e5e7eb"}` } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", fontWeight: 600, marginBottom: "4px", color: isDarkMode ? "#9ca3af" : "#6b7280" } }, "Numerator"), renderAggRow(fNumAggKey, fNumColKey, fNumPctKey, false), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "center", margin: "6px 0" } }, /* @__PURE__ */ React.createElement(
+          "select",
+          {
+            style: { ...selectStyle, width: "50px", textAlign: "center", padding: "4px", fontSize: "14px", fontWeight: 700 },
+            value: draft[formulaOpKey] || "/",
+            onChange: (e) => updateDraft(formulaOpKey, e.target.value)
+          },
+          /* @__PURE__ */ React.createElement("option", { value: "/" }, "\xF7"),
+          /* @__PURE__ */ React.createElement("option", { value: "*" }, "\xD7"),
+          /* @__PURE__ */ React.createElement("option", { value: "+" }, "+"),
+          /* @__PURE__ */ React.createElement("option", { value: "-" }, "\u2212")
+        )), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", fontWeight: 600, marginBottom: "4px", color: isDarkMode ? "#9ca3af" : "#6b7280" } }, "Denominator"), renderAggRow(fDenAggKey, fDenColKey, fDenPctKey, false)), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", gap: "6px", marginTop: "8px" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Label"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft[labelKey] || "", onChange: (e) => updateDraft(labelKey, e.target.value), placeholder: "e.g. Total" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Format"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft[formatKey] || "", onChange: (e) => updateDraft(formatKey, e.target.value), placeholder: "0,0" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Prefix"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft[prefixKey] || "", onChange: (e) => updateDraft(prefixKey, e.target.value), placeholder: "$" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Suffix"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft[suffixKey] || "", onChange: (e) => updateDraft(suffixKey, e.target.value), placeholder: "ms" })))));
+      }), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: "16px" } }, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Date Column"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.dateColumn || "", onChange: (e) => updateDraft("dateColumn", e.target.value || null) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u2014 none \u2014"), dateCols.map((c) => /* @__PURE__ */ React.createElement("option", { key: c.name, value: c.name }, c.name)))), /* @__PURE__ */ React.createElement("div", { style: sectionStyle }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "13px", fontWeight: 700, color: isDarkMode ? "#f3f4f6" : "#111827" } }, "Dimensions & Filters"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: "8px" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", liveSchemaClassified.dimensions.map((c) => c.name)), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "All"), /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", []), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "None"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } }, liveSchemaClassified.dimensions.map((c) => {
         const visible = draft.visibleDimensions ? draft.visibleDimensions.includes(c.name) : true;
         const label = c.name.replace(/^is_/, "").replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
         return /* @__PURE__ */ React.createElement(

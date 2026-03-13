@@ -158,32 +158,76 @@ export function buildLiveDimensions(schemaDims) {
 export function buildRpcMetrics(config) {
   if (!config) return [];
   const metrics = [];
-  const addMetric = (aggType, column, alias) => {
+  const addMetric = (aggType, column, alias, percentile) => {
     const agg = aggType || (column ? 'sum' : 'count');
     if (agg === 'count') {
       metrics.push({ type: "count", alias });
+    } else if (agg === 'percentile') {
+      metrics.push({ type: "percentile", column, alias, percentile: percentile || 0.5 });
     } else {
       metrics.push({ type: agg, column, alias });
     }
   };
-  addMetric(config.volumeAggType, config.volumeColumn, "volume");
-  addMetric(config.revenueAggType, config.revenueColumn, "revenue");
-  if (config.derivedAggType) {
-    addMetric(config.derivedAggType, config.derivedColumn, "derived");
-  }
+
+  // Helper: add a metric slot (simple or formula mode)
+  const addSlot = (prefix, alias) => {
+    const mode = config[prefix + 'Mode'];
+    if (mode === 'formula') {
+      addMetric(config[prefix + 'FormulaNumAggType'], config[prefix + 'FormulaNumColumn'], alias + '_num', config[prefix + 'FormulaNumPercentile']);
+      addMetric(config[prefix + 'FormulaDenAggType'], config[prefix + 'FormulaDenColumn'], alias + '_den', config[prefix + 'FormulaDenPercentile']);
+    } else {
+      const aggType = config[prefix + 'AggType'];
+      if (prefix === 'derived' && !aggType) return; // Metric 3 can be disabled
+      addMetric(aggType, config[prefix + 'Column'], alias, config[prefix + 'Percentile']);
+    }
+  };
+
+  addSlot('volume', 'volume');
+  addSlot('revenue', 'revenue');
+  addSlot('derived', 'derived');
   return metrics;
 }
 
+// Apply a formula operator to two values
+function applyOperator(a, b, op) {
+  switch (op) {
+    case '/': return b !== 0 ? a / b : 0;
+    case '*': return a * b;
+    case '+': return a + b;
+    case '-': return a - b;
+    default: return b !== 0 ? a / b : 0;
+  }
+}
+
+// Resolve a metric value from an RPC row, handling formula mode
+function resolveMetric(row, alias, formulaConfigs) {
+  const fc = formulaConfigs && formulaConfigs[alias];
+  if (fc) {
+    const num = Number(row[alias + '_num']) || 0;
+    const den = Number(row[alias + '_den']) || 0;
+    return applyOperator(num, den, fc.operator);
+  }
+  return Number(row[alias]) || 0;
+}
+
 // Transform flat RPC rows into periodAggregates format
-export function transformToPeriodAggregates(rows, hasMetric3) {
+// formulaConfigs: { volume: {operator}, revenue: {operator}, derived: {operator} } — keys present only for formula-mode slots
+export function transformToPeriodAggregates(rows, hasMetric3, formulaConfigs) {
   const aggs = {};
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const period = row.period;
     if (!period) continue;
-    const vol = Number(row.volume) || 0;
-    const rev = Number(row.revenue) || 0;
-    const m3 = hasMetric3 ? (Number(row.derived) || 0) : (vol > 0 ? (10000 * rev) / vol : 0);
+    const vol = resolveMetric(row, 'volume', formulaConfigs);
+    const rev = resolveMetric(row, 'revenue', formulaConfigs);
+    let m3;
+    if (formulaConfigs && formulaConfigs.derived) {
+      m3 = resolveMetric(row, 'derived', formulaConfigs);
+    } else if (hasMetric3) {
+      m3 = Number(row.derived) || 0;
+    } else {
+      m3 = vol > 0 ? (10000 * rev) / vol : 0;
+    }
     aggs[period] = {
       totalVolume: vol,
       totalRevenue: rev,
@@ -196,7 +240,7 @@ export function transformToPeriodAggregates(rows, hasMetric3) {
 }
 
 // Transform flat RPC rows into dimensionAggregates format (single dimension)
-export function transformToDimensionAggregates(rows, dimColumn, hasMetric3) {
+export function transformToDimensionAggregates(rows, dimColumn, hasMetric3, formulaConfigs) {
   const aggs = {};
   const categoryTotals = {};
   aggs[dimColumn] = {};
@@ -206,9 +250,16 @@ export function transformToDimensionAggregates(rows, dimColumn, hasMetric3) {
     const row = rows[i];
     const period = row.period;
     const category = row[dimColumn] || "Unknown";
-    const vol = Number(row.volume) || 0;
-    const rev = Number(row.revenue) || 0;
-    const m3 = hasMetric3 ? (Number(row.derived) || 0) : (vol > 0 ? (10000 * rev) / vol : 0);
+    const vol = resolveMetric(row, 'volume', formulaConfigs);
+    const rev = resolveMetric(row, 'revenue', formulaConfigs);
+    let m3;
+    if (formulaConfigs && formulaConfigs.derived) {
+      m3 = resolveMetric(row, 'derived', formulaConfigs);
+    } else if (hasMetric3) {
+      m3 = Number(row.derived) || 0;
+    } else {
+      m3 = vol > 0 ? (10000 * rev) / vol : 0;
+    }
 
     if (!aggs[dimColumn][period]) aggs[dimColumn][period] = {};
     aggs[dimColumn][period][category] = {
@@ -218,21 +269,38 @@ export function transformToDimensionAggregates(rows, dimColumn, hasMetric3) {
     };
 
     if (!categoryTotals[dimColumn][category]) {
-      categoryTotals[dimColumn][category] = { totalVolume: 0, totalRevenue: 0, _derivedSum: 0, _derivedCount: 0 };
+      categoryTotals[dimColumn][category] = { totalVolume: 0, totalRevenue: 0, _volNumSum: 0, _volDenSum: 0, _revNumSum: 0, _revDenSum: 0, _derNumSum: 0, _derDenSum: 0, _derivedSum: 0, _derivedCount: 0 };
     }
-    categoryTotals[dimColumn][category].totalVolume += vol;
-    categoryTotals[dimColumn][category].totalRevenue += rev;
-    if (hasMetric3) {
-      categoryTotals[dimColumn][category]._derivedSum += m3;
-      categoryTotals[dimColumn][category]._derivedCount += 1;
+    const ct = categoryTotals[dimColumn][category];
+    // Accumulate raw values for formula-mode totals
+    if (formulaConfigs && formulaConfigs.volume) {
+      ct._volNumSum += Number(row.volume_num) || 0;
+      ct._volDenSum += Number(row.volume_den) || 0;
+    } else {
+      ct.totalVolume += vol;
+    }
+    if (formulaConfigs && formulaConfigs.revenue) {
+      ct._revNumSum += Number(row.revenue_num) || 0;
+      ct._revDenSum += Number(row.revenue_den) || 0;
+    } else {
+      ct.totalRevenue += rev;
+    }
+    if (formulaConfigs && formulaConfigs.derived) {
+      ct._derNumSum += Number(row.derived_num) || 0;
+      ct._derDenSum += Number(row.derived_den) || 0;
+    } else if (hasMetric3) {
+      ct._derivedSum += m3;
+      ct._derivedCount += 1;
     }
   }
 
   Object.keys(categoryTotals[dimColumn]).forEach(cat => {
     const t = categoryTotals[dimColumn][cat];
-    t.Volume = t.totalVolume;
-    t.Revenue = t.totalRevenue;
-    if (hasMetric3) {
+    t.Volume = (formulaConfigs && formulaConfigs.volume) ? applyOperator(t._volNumSum, t._volDenSum, formulaConfigs.volume.operator) : t.totalVolume;
+    t.Revenue = (formulaConfigs && formulaConfigs.revenue) ? applyOperator(t._revNumSum, t._revDenSum, formulaConfigs.revenue.operator) : t.totalRevenue;
+    if (formulaConfigs && formulaConfigs.derived) {
+      t["Margin Rate"] = applyOperator(t._derNumSum, t._derDenSum, formulaConfigs.derived.operator);
+    } else if (hasMetric3) {
       t["Margin Rate"] = t._derivedCount > 0 ? t._derivedSum / t._derivedCount : 0;
     } else {
       t["Margin Rate"] = t.totalVolume > 0 ? (10000 * t.totalRevenue) / t.totalVolume : 0;
