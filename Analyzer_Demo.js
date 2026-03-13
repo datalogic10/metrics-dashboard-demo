@@ -8750,7 +8750,7 @@ export function render() {
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#10b981", display: "inline-block" }} />
-            <span>Connected to <strong>{connectionParams.dataset}</strong>{liveRowCount > 0 ? ` — ${liveRowCount.toLocaleString()} periods` : ''}{liveAggLoading ? ' (loading...)' : ''}</span>
+            <span>Connected to <strong>{connectionParams.dataset}</strong>{liveRowCount > 0 ? ` — ${liveRowCount.toLocaleString()} records` : ''}{liveAggLoading ? ' (loading...)' : ''}</span>
           </div>
           <button
             onClick={() => {
