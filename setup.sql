@@ -6,6 +6,9 @@
 -- Security: validates table exists, columns exist, metrics use only whitelisted aggregate functions.
 -- No raw SQL passthrough — all queries are constructed server-side from structured parameters.
 
+-- Drop old signature (10 params) to avoid ambiguity with new 11-param version
+DROP FUNCTION IF EXISTS public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer);
+
 CREATE OR REPLACE FUNCTION public.query_dataset(
   p_table text,                       -- dataset name (mapped to actual table internally)
   p_action text DEFAULT 'data',       -- 'schema' | 'distinct' | 'data'
@@ -16,7 +19,8 @@ CREATE OR REPLACE FUNCTION public.query_dataset(
   p_time_grain text DEFAULT NULL,     -- 'week' | 'month' | 'quarter' | 'year'
   p_date_column text DEFAULT NULL,    -- date column to apply time grain to
   p_order_by text DEFAULT NULL,       -- 'alias ASC/DESC'
-  p_limit integer DEFAULT 10000
+  p_limit integer DEFAULT 10000,
+  p_top_n integer DEFAULT NULL        -- top N categories for first group_by column; rest bucketed as 'Rest Combined'
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -40,6 +44,10 @@ DECLARE
   v_i integer;
   v_time_expr text;
   v_allowed_types text[] := ARRAY['count', 'count_distinct', 'sum', 'avg', 'min', 'max', 'percentile'];
+  v_top_n_col text;          -- first group_by column when p_top_n is used
+  v_top_n_expr text;         -- CASE WHEN expression for top-N bucketing
+  v_first_metric_alias text; -- alias of first metric (used for top-N ranking)
+  v_top_n_applied boolean := false;
 BEGIN
   -- ===== TABLE RESOLUTION =====
   -- Map known dataset names to actual schema.table.
@@ -186,7 +194,12 @@ BEGIN
       v_group_parts := array_append(v_group_parts, v_time_expr);
     END IF;
 
-    -- Non-time GROUP BY columns
+    -- Capture alias of first metric for top-N ranking
+    IF jsonb_array_length(p_metrics) > 0 THEN
+      v_first_metric_alias := p_metrics->0->>'alias';
+    END IF;
+
+    -- Non-time GROUP BY columns (with optional top-N bucketing on first column)
     FOR v_i IN 1..COALESCE(array_length(p_group_by, 1), 0) LOOP
       v_col := p_group_by[v_i];
       IF NOT EXISTS (
@@ -195,8 +208,29 @@ BEGIN
       ) THEN
         RETURN jsonb_build_object('error', format('Group-by column %s does not exist', v_col));
       END IF;
-      v_select_parts := array_prepend(format('COALESCE(%I::text, ''Unknown'') AS %I', v_col, v_col), v_select_parts);
-      v_group_parts := array_append(v_group_parts, format('%I', v_col));
+
+      -- Apply top-N bucketing to the first group_by column when p_top_n is set
+      IF v_i = 1 AND p_top_n IS NOT NULL AND p_top_n > 0 THEN
+        v_top_n_col := v_col;
+        v_top_n_applied := true;
+        -- Build a subquery that finds the top N category values by the first metric's total
+        -- Then CASE WHEN to bucket non-top-N into 'Rest Combined'
+        v_top_n_expr := format(
+          'CASE WHEN COALESCE(%I::text, ''Unknown'') IN (' ||
+            'SELECT cat FROM (' ||
+              'SELECT COALESCE(%I::text, ''Unknown'') AS cat, COUNT(*) AS _cnt ' ||
+              'FROM %s WHERE %s GROUP BY 1 ORDER BY _cnt DESC LIMIT %s' ||
+            ') _topn' ||
+          ') THEN COALESCE(%I::text, ''Unknown'') ELSE ''Rest Combined'' END',
+          v_col, v_col, v_fqn, array_to_string(v_where_parts, ' AND '), p_top_n,
+          v_col
+        );
+        v_select_parts := array_prepend(v_top_n_expr || format(' AS %I', v_col), v_select_parts);
+        v_group_parts := array_append(v_group_parts, v_top_n_expr);
+      ELSE
+        v_select_parts := array_prepend(format('COALESCE(%I::text, ''Unknown'') AS %I', v_col, v_col), v_select_parts);
+        v_group_parts := array_append(v_group_parts, format('%I', v_col));
+      END IF;
     END LOOP;
 
     -- WHERE clauses from filters
@@ -241,7 +275,9 @@ BEGIN
 
     RETURN jsonb_build_object(
       'rows', COALESCE(v_result, '[]'::jsonb),
-      'row_count', COALESCE(v_row_count, 0)
+      'row_count', COALESCE(v_row_count, 0),
+      'truncated', COALESCE(v_row_count, 0) >= p_limit,
+      'top_n_applied', v_top_n_applied
     );
 
   ELSE
@@ -250,8 +286,8 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer) TO anon;
-GRANT EXECUTE ON FUNCTION public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer, integer) TO anon;
+GRANT EXECUTE ON FUNCTION public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer, integer) TO authenticated;
 
 COMMENT ON FUNCTION public.query_dataset IS
   'Generic query endpoint for the Metrics Dashboard. Actions: schema (column discovery), distinct (filter values), data (aggregated metrics).';

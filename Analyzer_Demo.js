@@ -1180,6 +1180,7 @@ export function render() {
   const [liveDimensionAggregates, setLiveDimensionAggregates] = React.useState(null);
   const [liveAggLoading, setLiveAggLoading] = React.useState(false);
   const [liveRowCount, setLiveRowCount] = React.useState(0);
+  const [liveDataTruncated, setLiveDataTruncated] = React.useState(false);
 
   // Metric config for live mode — defines how columns map to the 3 metric slots
   const [liveMetricConfig, setLiveMetricConfig] = React.useState(() => {
@@ -3320,6 +3321,7 @@ export function render() {
     });
 
     // Call 2: Dimension aggregates (only if a dimension is selected)
+    // Pass p_top_n to bucket high-cardinality dimensions server-side
     const dimPromise = dimColumn
       ? cachedQuery('data', {
           p_time_grain: grain,
@@ -3327,6 +3329,7 @@ export function render() {
           p_group_by: [dimColumn],
           p_metrics: rpcMetrics,
           p_filters: pFilters,
+          ...(topX > 0 ? { p_top_n: topX } : {}),
         })
       : Promise.resolve(null);
 
@@ -3346,9 +3349,11 @@ export function render() {
           const dimAggs = transformToDimensionAggregates(dimData.rows || [], dimColumn, hasMetric3, formulaConfigsArg);
           setLiveDimensionAggregates(dimAggs);
           setLiveRowCount(dimData.row_count || (dimData.rows ? dimData.rows.length : 0));
+          setLiveDataTruncated(!!dimData.truncated);
         } else {
           setLiveDimensionAggregates({});
           setLiveRowCount(periodData.row_count || (periodData.rows ? periodData.rows.length : 0));
+          setLiveDataTruncated(!!periodData.truncated);
         }
         setLiveAggLoading(false);
       })
@@ -3357,7 +3362,7 @@ export function render() {
         console.error('[Dashboard] Aggregation fetch error:', err);
         setLiveAggLoading(false);
       });
-  }, [isLiveMode, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery]);
+  }, [isLiveMode, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX]);
 
   const periodChangeLabel = React.useMemo(() => {
     switch (dataFrequency) {
@@ -8751,7 +8756,7 @@ export function render() {
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#10b981", display: "inline-block" }} />
-            <span>Connected to <strong>{connectionParams.dataset}</strong>{liveRowCount > 0 ? ` — ${liveRowCount.toLocaleString()} records` : ''}{liveAggLoading ? ' (loading...)' : ''}</span>
+            <span>Connected to <strong>{connectionParams.dataset}</strong>{liveRowCount > 0 ? ` — ${liveRowCount.toLocaleString()} records` : ''}{liveDataTruncated ? ' (truncated — results hit row limit)' : ''}{liveAggLoading ? ' (loading...)' : ''}</span>
           </div>
           <button
             onClick={() => {

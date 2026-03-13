@@ -2353,6 +2353,7 @@ var __app = (() => {
     const [liveDimensionAggregates, setLiveDimensionAggregates] = React.useState(null);
     const [liveAggLoading, setLiveAggLoading] = React.useState(false);
     const [liveRowCount, setLiveRowCount] = React.useState(0);
+    const [liveDataTruncated, setLiveDataTruncated] = React.useState(false);
     const [liveMetricConfig, setLiveMetricConfig] = React.useState(() => {
       if (!connectionParams) return null;
       const storageKey = "metricsConfig_" + connectionParams.supabaseUrl + "_" + connectionParams.dataset;
@@ -4070,7 +4071,8 @@ var __app = (() => {
         p_date_column: dateCol,
         p_group_by: [dimColumn],
         p_metrics: rpcMetrics,
-        p_filters: pFilters
+        p_filters: pFilters,
+        ...topX > 0 ? { p_top_n: topX } : {}
       }) : Promise.resolve(null);
       const hasMetric3 = !!liveMetricConfig.derivedAggType || liveMetricConfig.derivedMode === "formula";
       const formulaConfigs = {};
@@ -4086,9 +4088,11 @@ var __app = (() => {
           const dimAggs = transformToDimensionAggregates(dimData.rows || [], dimColumn, hasMetric3, formulaConfigsArg);
           setLiveDimensionAggregates(dimAggs);
           setLiveRowCount(dimData.row_count || (dimData.rows ? dimData.rows.length : 0));
+          setLiveDataTruncated(!!dimData.truncated);
         } else {
           setLiveDimensionAggregates({});
           setLiveRowCount(periodData.row_count || (periodData.rows ? periodData.rows.length : 0));
+          setLiveDataTruncated(!!periodData.truncated);
         }
         setLiveAggLoading(false);
       }).catch((err) => {
@@ -4096,7 +4100,7 @@ var __app = (() => {
         console.error("[Dashboard] Aggregation fetch error:", err);
         setLiveAggLoading(false);
       });
-    }, [isLiveMode, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery]);
+    }, [isLiveMode, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX]);
     const periodChangeLabel = React.useMemo(() => {
       switch (dataFrequency) {
         case "Daily":
@@ -8065,7 +8069,7 @@ var __app = (() => {
       marginBottom: "12px",
       fontSize: "12px",
       color: isDarkMode ? "#6ee7b7" : "#065f46"
-    } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px" } }, /* @__PURE__ */ React.createElement("span", { style: { width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#10b981", display: "inline-block" } }), /* @__PURE__ */ React.createElement("span", null, "Connected to ", /* @__PURE__ */ React.createElement("strong", null, connectionParams.dataset), liveRowCount > 0 ? ` \u2014 ${liveRowCount.toLocaleString()} records` : "", liveAggLoading ? " (loading...)" : "")), /* @__PURE__ */ React.createElement(
+    } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px" } }, /* @__PURE__ */ React.createElement("span", { style: { width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#10b981", display: "inline-block" } }), /* @__PURE__ */ React.createElement("span", null, "Connected to ", /* @__PURE__ */ React.createElement("strong", null, connectionParams.dataset), liveRowCount > 0 ? ` \u2014 ${liveRowCount.toLocaleString()} records` : "", liveDataTruncated ? " (truncated \u2014 results hit row limit)" : "", liveAggLoading ? " (loading...)" : "")), /* @__PURE__ */ React.createElement(
       "button",
       {
         onClick: () => {
