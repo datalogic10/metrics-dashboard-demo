@@ -6736,7 +6736,7 @@ export function render() {
                         : "diamond",
                   },
                   yaxis: "y2",
-                  customdata: shares.map((share) => `${share.toFixed(1)}%`),
+                  customdata: shares.map((share) => share != null ? `${share.toFixed(1)}%` : ''),
                   hovertemplate: `[${scenarioLabel}] ${category} - %Share<br>%{customdata}<extra></extra>`,
                 });
               }
@@ -7280,7 +7280,7 @@ export function render() {
               color: categoryColor,
             },
             yaxis: "y2",
-            customdata: shares.map((share) => `${share.toFixed(1)}%`),
+            customdata: shares.map((share) => share != null ? `${share.toFixed(1)}%` : ''),
             hovertemplate: `${category} - %Share<br>%{customdata}<extra></extra>`,
           });
 

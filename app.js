@@ -6585,7 +6585,7 @@ var __app = (() => {
                       symbol: scenarioIndex === 1 ? "circle" : scenarioIndex === 2 ? "square" : "diamond"
                     },
                     yaxis: "y2",
-                    customdata: shares.map((share) => `${share.toFixed(1)}%`),
+                    customdata: shares.map((share) => share != null ? `${share.toFixed(1)}%` : ""),
                     hovertemplate: `[${scenarioLabel}] ${category} - %Share<br>%{customdata}<extra></extra>`
                   });
                 }
@@ -6959,7 +6959,7 @@ var __app = (() => {
                 color: categoryColor
               },
               yaxis: "y2",
-              customdata: shares.map((share) => `${share.toFixed(1)}%`),
+              customdata: shares.map((share) => share != null ? `${share.toFixed(1)}%` : ""),
               hovertemplate: `${category} - %Share<br>%{customdata}<extra></extra>`
             });
             const periodsForYoY = periods.slice(0, -1);
