@@ -1319,6 +1319,12 @@ export function render() {
         // Always set metric config (whether from localStorage or freshly created)
         setLiveMetricConfig(config);
 
+        // Apply default grain on first load for this dataset
+        if (config.defaultGrain) {
+          const grainToFreq = { day: 'Daily', week: 'Weekly', month: 'Monthly', quarter: 'Quarterly', year: 'Yearly' };
+          setDataFrequency(grainToFreq[config.defaultGrain] || 'Monthly');
+        }
+
         // Step 2: Fetch distinct values for all dimension columns
         const dateCol = config.dateColumn || columns.find(c => c.udt === 'date' || c.name.includes('_dt'))?.name;
         const dimCols = columns.filter(c => {
@@ -7112,6 +7118,13 @@ export function render() {
           // When server-side top-N is active, "Rest Combined" is a real category
           // in dimensionAggregates — read it directly instead of re-summing.
           if (category !== "Rest Combined" || (isLiveMode && topX > 0)) {
+            // Per-period top-N: category may not exist in every period (bucketed
+            // into "Rest Combined" for that period). Return null (gap) instead of 0
+            // so Plotly skips it in hover tooltips and doesn't draw a misleading bar.
+            if (isLiveMode && topX > 0) {
+              const periodAgg = dimensionAggregates[attribute]?.[period];
+              if (!periodAgg || !(category in periodAgg)) return null;
+            }
             return getDimMetric(
               dimensionAggregates,
               attribute,
@@ -7179,7 +7192,7 @@ export function render() {
           } else {
             // For Volume and Revenue, calculate share as usual
             percentage =
-              totalForPeriod > 0 ? (value / totalForPeriod) * 100 : 0;
+              (value !== null && totalForPeriod > 0) ? (value / totalForPeriod) * 100 : 0;
           }
 
           // Store share percentage for %Share traces (only for Volume and Revenue)
@@ -7187,10 +7200,10 @@ export function render() {
             if (!sharePercentages[category]) {
               sharePercentages[category] = [];
             }
-            sharePercentages[category].push(percentage);
+            sharePercentages[category].push(value === null ? null : percentage);
           }
 
-          if (value === 0) return "";
+          if (value === 0 || value === null) return "";
 
           return formatMetric(value) + "<br>" + percentage.toFixed(1) + "%";
         });
@@ -11399,8 +11412,8 @@ export function render() {
                 );
               })}
 
-              {/* Dataset + Date Column */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '16px' }}>
+              {/* Dataset + Date Column + Default Grain */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '16px' }}>
                 <div>
                   <label style={labelStyle}>Dataset (table name)</label>
                   <input style={inputStyle} value={draft.dataset || activeTab?.dataset || ''} onChange={e => updateDraft('dataset', e.target.value)} placeholder="schema.table_name" />
@@ -11410,6 +11423,16 @@ export function render() {
                   <select style={selectStyle} value={draft.dateColumn || ''} onChange={e => updateDraft('dateColumn', e.target.value || null)}>
                     <option value="">— none —</option>
                     {dateCols.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={labelStyle}>Default Grain</label>
+                  <select style={selectStyle} value={draft.defaultGrain || 'month'} onChange={e => updateDraft('defaultGrain', e.target.value)}>
+                    <option value="day">Daily</option>
+                    <option value="week">Weekly</option>
+                    <option value="month">Monthly</option>
+                    <option value="quarter">Quarterly</option>
+                    <option value="year">Yearly</option>
                   </select>
                 </div>
               </div>

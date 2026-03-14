@@ -2471,6 +2471,10 @@ var __app = (() => {
           }
         }
         setLiveMetricConfig(config);
+        if (config.defaultGrain) {
+          const grainToFreq = { day: "Daily", week: "Weekly", month: "Monthly", quarter: "Quarterly", year: "Yearly" };
+          setDataFrequency(grainToFreq[config.defaultGrain] || "Monthly");
+        }
         const dateCol = config.dateColumn || columns.find((c) => c.udt === "date" || c.name.includes("_dt"))?.name;
         const dimCols = columns.filter((c) => {
           if (c.name === dateCol) return false;
@@ -6825,6 +6829,10 @@ var __app = (() => {
         allCategories.forEach((category, index) => {
           const traceData = periods.map((period) => {
             if (category !== "Rest Combined" || isLiveMode && topX > 0) {
+              if (isLiveMode && topX > 0) {
+                const periodAgg = dimensionAggregates[attribute]?.[period];
+                if (!periodAgg || !(category in periodAgg)) return null;
+              }
               return getDimMetric(
                 dimensionAggregates,
                 attribute,
@@ -6875,15 +6883,15 @@ var __app = (() => {
               }
               percentage = totalVolume > 0 ? categoryVolume / totalVolume * 100 : 0;
             } else {
-              percentage = totalForPeriod > 0 ? value / totalForPeriod * 100 : 0;
+              percentage = value !== null && totalForPeriod > 0 ? value / totalForPeriod * 100 : 0;
             }
             if (metric !== "Margin Rate") {
               if (!sharePercentages[category]) {
                 sharePercentages[category] = [];
               }
-              sharePercentages[category].push(percentage);
+              sharePercentages[category].push(value === null ? null : percentage);
             }
-            if (value === 0) return "";
+            if (value === 0 || value === null) return "";
             return formatMetric(value) + "<br>" + percentage.toFixed(1) + "%";
           });
           const categoryColor = getCategoryColor(category, index);
@@ -10272,7 +10280,7 @@ var __app = (() => {
             opt.label
           );
         }), (draft[chartTypeKey] || "auto") === "auto" && /* @__PURE__ */ React.createElement("span", { style: { fontSize: "10px", color: isDarkMode ? "#6b7280" : "#9ca3af" } }, "(", mode === "formula" ? "line" : "stacked", ")"))));
-      }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginBottom: "16px" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Dataset (table name)"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.dataset || activeTab?.dataset || "", onChange: (e) => updateDraft("dataset", e.target.value), placeholder: "schema.table_name" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Date Column"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.dateColumn || "", onChange: (e) => updateDraft("dateColumn", e.target.value || null) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u2014 none \u2014"), dateCols.map((c) => /* @__PURE__ */ React.createElement("option", { key: c.name, value: c.name }, c.name))))), /* @__PURE__ */ React.createElement("div", { style: sectionStyle }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "13px", fontWeight: 700, color: isDarkMode ? "#f3f4f6" : "#111827" } }, "Dimensions & Filters"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: "8px" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", liveSchemaClassified.dimensions.map((c) => c.name)), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "All"), /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", []), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "None"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } }, liveSchemaClassified.dimensions.map((c) => {
+      }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", marginBottom: "16px" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Dataset (table name)"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.dataset || activeTab?.dataset || "", onChange: (e) => updateDraft("dataset", e.target.value), placeholder: "schema.table_name" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Date Column"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.dateColumn || "", onChange: (e) => updateDraft("dateColumn", e.target.value || null) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u2014 none \u2014"), dateCols.map((c) => /* @__PURE__ */ React.createElement("option", { key: c.name, value: c.name }, c.name)))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Default Grain"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.defaultGrain || "month", onChange: (e) => updateDraft("defaultGrain", e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "day" }, "Daily"), /* @__PURE__ */ React.createElement("option", { value: "week" }, "Weekly"), /* @__PURE__ */ React.createElement("option", { value: "month" }, "Monthly"), /* @__PURE__ */ React.createElement("option", { value: "quarter" }, "Quarterly"), /* @__PURE__ */ React.createElement("option", { value: "year" }, "Yearly")))), /* @__PURE__ */ React.createElement("div", { style: sectionStyle }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "13px", fontWeight: 700, color: isDarkMode ? "#f3f4f6" : "#111827" } }, "Dimensions & Filters"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: "8px" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", liveSchemaClassified.dimensions.map((c) => c.name)), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "All"), /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", []), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "None"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } }, liveSchemaClassified.dimensions.map((c) => {
         const visible = draft.visibleDimensions ? draft.visibleDimensions.includes(c.name) : true;
         const label = c.name.replace(/^is_/, "").replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
         return /* @__PURE__ */ React.createElement(
