@@ -7055,25 +7055,33 @@ export function render() {
       // Determine which categories to show - combine Top X and Manual selections
       let topAttributes, restAttributes;
 
-      // Always get top X categories
-      const topXCategories = sortedAttributes
-        .slice(0, topX)
-        .map((item) => item.attrValue);
+      // When server-side top-N bucketing is active (live mode with topX > 0),
+      // categories are already bucketed into top-N + "Rest Combined" — use as-is.
+      // Client-side re-slicing would create a DUPLICATE "Rest Combined" trace.
+      if (isLiveMode && topX > 0) {
+        topAttributes = attributeValues;
+        restAttributes = [];
+      } else {
+        // Always get top X categories
+        const topXCategories = sortedAttributes
+          .slice(0, topX)
+          .map((item) => item.attrValue);
 
-      // Get manually selected categories (if any)
-      const manualCategories = selectedCategories.filter((cat) =>
-        attributeValues.includes(cat)
-      );
+        // Get manually selected categories (if any)
+        const manualCategories = selectedCategories.filter((cat) =>
+          attributeValues.includes(cat)
+        );
 
-      // Combine both: Top X + Manual selections (remove duplicates)
-      const combinedCategories = Array.from(
-        new Set([...topXCategories, ...manualCategories])
-      );
+        // Combine both: Top X + Manual selections (remove duplicates)
+        const combinedCategories = Array.from(
+          new Set([...topXCategories, ...manualCategories])
+        );
 
-      topAttributes = combinedCategories;
-      restAttributes = attributeValues.filter(
-        (val) => !topAttributes.includes(val)
-      );
+        topAttributes = combinedCategories;
+        restAttributes = attributeValues.filter(
+          (val) => !topAttributes.includes(val)
+        );
+      }
 
       // Create traces for each selected/top attribute + Rest Combined
       const allCategories = [...topAttributes];
@@ -7101,7 +7109,9 @@ export function render() {
 
       allCategories.forEach((category, index) => {
         const traceData = periods.map((period) => {
-          if (category !== "Rest Combined") {
+          // When server-side top-N is active, "Rest Combined" is a real category
+          // in dimensionAggregates — read it directly instead of re-summing.
+          if (category !== "Rest Combined" || (isLiveMode && topX > 0)) {
             return getDimMetric(
               dimensionAggregates,
               attribute,
@@ -7111,7 +7121,7 @@ export function render() {
             );
           }
 
-          // For "Rest Combined": sum volumes/revenues first for Margin Rate (not the rates themselves)
+          // For client-side "Rest Combined": sum volumes/revenues first for Margin Rate (not the rates themselves)
           if (metric === "Margin Rate") {
             let totalVolume = 0,
               totalRevenue = 0;
@@ -7154,7 +7164,7 @@ export function render() {
             const totalVolume = periodTotalAgg ? periodTotalAgg.totalVolume : 0;
 
             let categoryVolume = 0;
-            if (category === "Rest Combined") {
+            if (category === "Rest Combined" && !(isLiveMode && topX > 0)) {
               restAttributes.forEach((restAttr) => {
                 const catAgg = dimAgg[period] && dimAgg[period][restAttr];
                 if (catAgg) categoryVolume += catAgg.totalVolume;
@@ -7270,7 +7280,7 @@ export function render() {
             (currentPeriod) => {
               // Get current period value for this category (from cached baseDimensionAggregates)
               let currentCategoryValue;
-              if (category === "Rest Combined") {
+              if (category === "Rest Combined" && !(isLiveMode && topX > 0)) {
                 currentCategoryValue = 0;
                 restAttributes.forEach((restAttr) => {
                   currentCategoryValue += getDimMetric(
@@ -7316,7 +7326,7 @@ export function render() {
 
               // Get previous period value for this category (from cached baseDimensionAggregates)
               let previousCategoryValue;
-              if (category === "Rest Combined") {
+              if (category === "Rest Combined" && !(isLiveMode && topX > 0)) {
                 previousCategoryValue = 0;
                 restAttributes.forEach((restAttr) => {
                   previousCategoryValue += getDimMetric(

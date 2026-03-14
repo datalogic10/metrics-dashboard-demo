@@ -249,7 +249,7 @@ BEGIN
     -- Using a CTE ensures the top-N list is computed exactly once (deterministic).
     IF v_top_n_applied THEN
       v_cte_sql := format(
-        'WITH _top_n_cats AS (' ||
+        'WITH _top_n_cats AS MATERIALIZED (' ||
           'SELECT COALESCE(%I::text, ''Unknown'') AS cat, %s AS _cnt ' ||
           'FROM %s WHERE %s GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT %s' ||
         ')',

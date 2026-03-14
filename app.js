@@ -6794,17 +6794,22 @@ var __app = (() => {
           (a, b) => b.total - a.total
         );
         let topAttributes, restAttributes;
-        const topXCategories = sortedAttributes.slice(0, topX).map((item) => item.attrValue);
-        const manualCategories = selectedCategories.filter(
-          (cat) => attributeValues.includes(cat)
-        );
-        const combinedCategories = Array.from(
-          /* @__PURE__ */ new Set([...topXCategories, ...manualCategories])
-        );
-        topAttributes = combinedCategories;
-        restAttributes = attributeValues.filter(
-          (val) => !topAttributes.includes(val)
-        );
+        if (isLiveMode && topX > 0) {
+          topAttributes = attributeValues;
+          restAttributes = [];
+        } else {
+          const topXCategories = sortedAttributes.slice(0, topX).map((item) => item.attrValue);
+          const manualCategories = selectedCategories.filter(
+            (cat) => attributeValues.includes(cat)
+          );
+          const combinedCategories = Array.from(
+            /* @__PURE__ */ new Set([...topXCategories, ...manualCategories])
+          );
+          topAttributes = combinedCategories;
+          restAttributes = attributeValues.filter(
+            (val) => !topAttributes.includes(val)
+          );
+        }
         const allCategories = [...topAttributes];
         if (restAttributes.length > 0) {
           allCategories.push("Rest Combined");
@@ -6819,7 +6824,7 @@ var __app = (() => {
         const chartData2 = [];
         allCategories.forEach((category, index) => {
           const traceData = periods.map((period) => {
-            if (category !== "Rest Combined") {
+            if (category !== "Rest Combined" || isLiveMode && topX > 0) {
               return getDimMetric(
                 dimensionAggregates,
                 attribute,
@@ -6859,7 +6864,7 @@ var __app = (() => {
             if (metric === "Margin Rate") {
               const totalVolume = periodTotalAgg ? periodTotalAgg.totalVolume : 0;
               let categoryVolume = 0;
-              if (category === "Rest Combined") {
+              if (category === "Rest Combined" && !(isLiveMode && topX > 0)) {
                 restAttributes.forEach((restAttr) => {
                   const catAgg = dimAgg[period] && dimAgg[period][restAttr];
                   if (catAgg) categoryVolume += catAgg.totalVolume;
@@ -6953,7 +6958,7 @@ var __app = (() => {
             const yoyGrowthRatesForPeriods = periodsForYoY.map(
               (currentPeriod) => {
                 let currentCategoryValue;
-                if (category === "Rest Combined") {
+                if (category === "Rest Combined" && !(isLiveMode && topX > 0)) {
                   currentCategoryValue = 0;
                   restAttributes.forEach((restAttr) => {
                     currentCategoryValue += getDimMetric(
@@ -6991,7 +6996,7 @@ var __app = (() => {
                   return null;
                 }
                 let previousCategoryValue;
-                if (category === "Rest Combined") {
+                if (category === "Rest Combined" && !(isLiveMode && topX > 0)) {
                   previousCategoryValue = 0;
                   restAttributes.forEach((restAttr) => {
                     previousCategoryValue += getDimMetric(
