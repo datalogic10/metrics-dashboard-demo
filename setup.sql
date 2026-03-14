@@ -246,21 +246,49 @@ BEGIN
     END LOOP;
 
     -- Build top-N CTE and CASE WHEN now that WHERE parts include all date/filter constraints.
-    -- Using a CTE ensures the top-N list is computed exactly once (deterministic).
+    -- Using materialized CTEs ensures deterministic, single-evaluation ranking.
     IF v_top_n_applied THEN
-      v_cte_sql := format(
-        'WITH _top_n_cats AS MATERIALIZED (' ||
-          'SELECT COALESCE(%I::text, ''Unknown'') AS cat, %s AS _cnt ' ||
-          'FROM %s WHERE %s GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT %s' ||
-        ')',
-        v_top_n_col, v_first_metric_rank_expr, v_fqn,
-        array_to_string(v_where_parts, ' AND '), p_top_n
-      );
-      v_top_n_expr := format(
-        'CASE WHEN COALESCE(%I::text, ''Unknown'') IN (SELECT cat FROM _top_n_cats) ' ||
-        'THEN COALESCE(%I::text, ''Unknown'') ELSE ''Rest Combined'' END',
-        v_top_n_col, v_top_n_col
-      );
+      IF v_time_expr IS NOT NULL THEN
+        -- Per-period top-N: rank categories independently within each time bucket.
+        -- A category can be named in one period and "Rest Combined" in another.
+        -- Two CTEs: _cat_ranked computes per-(period, category) ranking,
+        -- _top_cats materializes just the (period, cat) pairs that made the cut.
+        v_cte_sql := format(
+          'WITH _cat_ranked AS MATERIALIZED (' ||
+            'SELECT %s AS period, COALESCE(%I::text, ''Unknown'') AS cat, ' ||
+            '%s AS _metric, ' ||
+            'ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s DESC, COALESCE(%I::text, ''Unknown'')) AS _rank ' ||
+            'FROM %s WHERE %s GROUP BY 1, 2' ||
+          '), _top_cats AS MATERIALIZED (' ||
+            'SELECT period, cat FROM _cat_ranked WHERE _rank <= %s' ||
+          ')',
+          v_time_expr, v_top_n_col,
+          v_first_metric_rank_expr,
+          v_time_expr, v_first_metric_rank_expr, v_top_n_col,
+          v_fqn, array_to_string(v_where_parts, ' AND '),
+          p_top_n
+        );
+        v_top_n_expr := format(
+          'CASE WHEN (%s, COALESCE(%I::text, ''Unknown'')) IN (SELECT period, cat FROM _top_cats) ' ||
+          'THEN COALESCE(%I::text, ''Unknown'') ELSE ''Rest Combined'' END',
+          v_time_expr, v_top_n_col, v_top_n_col
+        );
+      ELSE
+        -- No time grain: global top-N fallback (single period = whole dataset)
+        v_cte_sql := format(
+          'WITH _top_n_cats AS MATERIALIZED (' ||
+            'SELECT COALESCE(%I::text, ''Unknown'') AS cat, %s AS _cnt ' ||
+            'FROM %s WHERE %s GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT %s' ||
+          ')',
+          v_top_n_col, v_first_metric_rank_expr, v_fqn,
+          array_to_string(v_where_parts, ' AND '), p_top_n
+        );
+        v_top_n_expr := format(
+          'CASE WHEN COALESCE(%I::text, ''Unknown'') IN (SELECT cat FROM _top_n_cats) ' ||
+          'THEN COALESCE(%I::text, ''Unknown'') ELSE ''Rest Combined'' END',
+          v_top_n_col, v_top_n_col
+        );
+      END IF;
       v_select_parts := array_prepend(v_top_n_expr || format(' AS %I', v_top_n_col), v_select_parts);
       v_group_parts := array_append(v_group_parts, v_top_n_expr);
     END IF;
