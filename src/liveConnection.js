@@ -46,6 +46,20 @@ export function parseConnectionParams() {
   return null;
 }
 
+// Parse base connection (URL + key) from hash, dataset optional (for tab system)
+export function parseBaseConnection() {
+  const hash = window.location.hash.replace(/^#/, '');
+  if (!hash) return null;
+  const params = new URLSearchParams(hash);
+  const supabaseUrl = params.get('supabaseUrl');
+  const apiKey = params.get('apiKey');
+  const dataset = params.get('dataset') || null;
+  if (supabaseUrl && apiKey) {
+    return { supabaseUrl, apiKey, initialDataset: dataset };
+  }
+  return null;
+}
+
 // Create an RPC caller for a given connection
 export function createRpcCaller(connectionParams) {
   return function callQueryDataset(action, params) {

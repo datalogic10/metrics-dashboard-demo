@@ -430,15 +430,15 @@ var __app = (() => {
       dateColumn: "reporting_dt"
     }
   };
-  function parseConnectionParams() {
+  function parseBaseConnection() {
     const hash = window.location.hash.replace(/^#/, "");
     if (!hash) return null;
     const params = new URLSearchParams(hash);
     const supabaseUrl = params.get("supabaseUrl");
     const apiKey = params.get("apiKey");
-    const dataset = params.get("dataset");
-    if (supabaseUrl && apiKey && dataset) {
-      return { supabaseUrl, apiKey, dataset };
+    const dataset = params.get("dataset") || null;
+    if (supabaseUrl && apiKey) {
+      return { supabaseUrl, apiKey, initialDataset: dataset };
     }
     return null;
   }
@@ -2343,7 +2343,43 @@ var __app = (() => {
       }),
       [theme, isDarkMode, showDataSummary]
     );
-    const connectionParams = React.useMemo(() => parseConnectionParams(), []);
+    const baseConnection = React.useMemo(() => parseBaseConnection(), []);
+    const [tabs, setTabs] = React.useState(() => {
+      if (!baseConnection) return [];
+      const tabsKey = "dashboardTabs_" + baseConnection.supabaseUrl;
+      try {
+        const saved = localStorage.getItem(tabsKey);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (e) {
+      }
+      if (baseConnection.initialDataset) {
+        return [{ id: "tab_1", name: baseConnection.initialDataset, dataset: baseConnection.initialDataset }];
+      }
+      return [];
+    });
+    const [activeTabId, setActiveTabId] = React.useState(() => tabs.length > 0 ? tabs[0].id : null);
+    const tabStateCacheRef = React.useRef({});
+    const [renamingTabId, setRenamingTabId] = React.useState(null);
+    const [renameText, setRenameText] = React.useState("");
+    const [showAddTab, setShowAddTab] = React.useState(false);
+    const [newTabDataset, setNewTabDataset] = React.useState("");
+    const tabNextIdRef = React.useRef(tabs.length + 1);
+    React.useEffect(() => {
+      if (!baseConnection || tabs.length === 0) return;
+      const tabsKey = "dashboardTabs_" + baseConnection.supabaseUrl;
+      try {
+        localStorage.setItem(tabsKey, JSON.stringify(tabs));
+      } catch (e) {
+      }
+    }, [tabs, baseConnection]);
+    const activeTab = tabs.find((t) => t.id === activeTabId) || null;
+    const connectionParams = React.useMemo(() => {
+      if (!baseConnection || !activeTab || !activeTab.dataset) return null;
+      return { supabaseUrl: baseConnection.supabaseUrl, apiKey: baseConnection.apiKey, dataset: activeTab.dataset };
+    }, [baseConnection, activeTab]);
     const [liveDataLoading, setLiveDataLoading] = React.useState(!!connectionParams);
     const [liveDataError, setLiveDataError] = React.useState(null);
     const [liveColumnMeta, setLiveColumnMeta] = React.useState(null);
@@ -2393,15 +2429,23 @@ var __app = (() => {
       if (!visible || !Array.isArray(visible)) return liveSchemaClassified.dimensions;
       return liveSchemaClassified.dimensions.filter((c) => visible.includes(c.name));
     }, [liveSchemaClassified.dimensions, liveMetricConfig]);
+    const loadedDatasetsRef = React.useRef(/* @__PURE__ */ new Set());
     React.useEffect(() => {
       if (!connectionParams) return;
+      if (loadedDatasetsRef.current.has(connectionParams.dataset) && liveColumnMeta) return;
       setLiveDataLoading(true);
       setLiveDataError(null);
       const { dataset } = connectionParams;
       callQueryDataset("schema", {}).then((schemaData) => {
         const columns = schemaData.columns || [];
         setLiveColumnMeta(columns);
-        let config = liveMetricConfig;
+        let config = null;
+        try {
+          const storageKey = "metricsConfig_" + connectionParams.supabaseUrl + "_" + dataset;
+          const saved = localStorage.getItem(storageKey);
+          if (saved) config = JSON.parse(saved);
+        } catch (e) {
+        }
         const isNewConnection = !config;
         if (!config) {
           config = DEFAULT_METRIC_CONFIGS[dataset] || {
@@ -2416,17 +2460,17 @@ var __app = (() => {
             derivedDivisor: 1e4,
             dateColumn: columns.find((c) => c.udt === "date" || c.name.includes("_dt"))?.name || null
           };
-          setLiveMetricConfig(config);
           try {
             const storageKey = "metricsConfig_" + connectionParams.supabaseUrl + "_" + dataset;
             localStorage.setItem(storageKey, JSON.stringify(config));
           } catch (e) {
           }
           if (!DEFAULT_METRIC_CONFIGS[dataset]) {
-            setMetricsEditorDraft({ ...config });
+            setMetricsEditorDraft({ ...config, dataset });
             setShowMetricsEditor(true);
           }
         }
+        setLiveMetricConfig(config);
         const dateCol = config.dateColumn || columns.find((c) => c.udt === "date" || c.name.includes("_dt"))?.name;
         const dimCols = columns.filter((c) => {
           if (c.name === dateCol) return false;
@@ -2446,6 +2490,7 @@ var __app = (() => {
         setLiveFilterOptions(filterOpts);
         setLiveSchemaReady(true);
         setLiveDataLoading(false);
+        loadedDatasetsRef.current.add(connectionParams.dataset);
       }).catch((err) => {
         setLiveDataError(err.message);
         setLiveDataLoading(false);
@@ -2814,6 +2859,138 @@ var __app = (() => {
     const [dateRange, setDateRange] = React.useState("1Y");
     const [showAdvancedFilters, setShowAdvancedFilters] = React.useState(false);
     const [activeInsightsTab, setActiveInsightsTab] = React.useState(null);
+    const captureTabSnapshot = React.useCallback(() => ({
+      // Live data state
+      liveColumnMeta,
+      liveSchemaReady,
+      liveFilterOptions,
+      livePeriodAggregates,
+      liveDimensionAggregates,
+      liveAggLoading,
+      liveRowCount,
+      liveDataTruncated,
+      liveMetricConfig,
+      liveDataError,
+      // UI state
+      dataFrequency,
+      metric,
+      view,
+      topX,
+      categorySelectionMode,
+      selectedCategories,
+      dynamicFilters,
+      dateRange,
+      activeOverlays,
+      smaWindow,
+      activeInsightsTab
+    }), [
+      liveColumnMeta,
+      liveSchemaReady,
+      liveFilterOptions,
+      livePeriodAggregates,
+      liveDimensionAggregates,
+      liveAggLoading,
+      liveRowCount,
+      liveDataTruncated,
+      liveMetricConfig,
+      liveDataError,
+      dataFrequency,
+      metric,
+      view,
+      topX,
+      categorySelectionMode,
+      selectedCategories,
+      dynamicFilters,
+      dateRange,
+      activeOverlays,
+      smaWindow,
+      activeInsightsTab
+    ]);
+    const restoreTabSnapshot = React.useCallback((snap) => {
+      setLiveColumnMeta(snap.liveColumnMeta || null);
+      setLiveSchemaReady(snap.liveSchemaReady || false);
+      setLiveFilterOptions(snap.liveFilterOptions || {});
+      setLivePeriodAggregates(snap.livePeriodAggregates || null);
+      setLiveDimensionAggregates(snap.liveDimensionAggregates || null);
+      setLiveAggLoading(snap.liveAggLoading || false);
+      setLiveRowCount(snap.liveRowCount || 0);
+      setLiveDataTruncated(snap.liveDataTruncated || false);
+      setLiveMetricConfig(snap.liveMetricConfig || null);
+      setLiveDataError(snap.liveDataError || null);
+      setDataFrequency(snap.dataFrequency || "Monthly");
+      setMetric(snap.metric || "Revenue");
+      setView(snap.view || "Overall");
+      setTopX(snap.topX != null ? snap.topX : 3);
+      setCategorySelectionMode(snap.categorySelectionMode || "topX");
+      setSelectedCategories(snap.selectedCategories || []);
+      setDynamicFilters(snap.dynamicFilters || {});
+      setDateRange(snap.dateRange || "1Y");
+      setActiveOverlays(snap.activeOverlays || { yoy: true });
+      setSmaWindow(snap.smaWindow || 3);
+      setActiveInsightsTab(snap.activeInsightsTab || null);
+    }, []);
+    const switchTab = React.useCallback((targetTabId) => {
+      if (targetTabId === activeTabId) return;
+      if (activeTabId) {
+        tabStateCacheRef.current[activeTabId] = captureTabSnapshot();
+      }
+      const cached = tabStateCacheRef.current[targetTabId];
+      if (cached) {
+        restoreTabSnapshot(cached);
+      } else {
+        restoreTabSnapshot({});
+        setLiveDataLoading(true);
+      }
+      queryCacheRef.current.clear();
+      setActiveTabId(targetTabId);
+    }, [activeTabId, captureTabSnapshot, restoreTabSnapshot]);
+    const addTab = React.useCallback((name, dataset) => {
+      const id = "tab_" + ++tabNextIdRef.current;
+      const newTab = { id, name, dataset: dataset || null };
+      if (activeTabId) {
+        tabStateCacheRef.current[activeTabId] = captureTabSnapshot();
+      }
+      setTabs((prev) => [...prev, newTab]);
+      setActiveTabId(id);
+      restoreTabSnapshot({});
+      queryCacheRef.current.clear();
+      if (dataset) {
+        setLiveDataLoading(true);
+      } else {
+        setLiveDataLoading(false);
+        setLiveSchemaReady(false);
+        setTimeout(() => {
+          setMetricsEditorDraft({});
+          setMetricsEditorError("");
+          setExpandedMetricSlot(null);
+          setShowMetricsEditor(true);
+        }, 50);
+      }
+    }, [activeTabId, captureTabSnapshot, restoreTabSnapshot]);
+    const removeTab = React.useCallback((tabId) => {
+      setTabs((prev) => {
+        const remaining = prev.filter((t) => t.id !== tabId);
+        if (remaining.length === 0) return prev;
+        delete tabStateCacheRef.current[tabId];
+        if (tabId === activeTabId) {
+          const idx = prev.findIndex((t) => t.id === tabId);
+          const nextTab = remaining[Math.min(idx, remaining.length - 1)];
+          const cached = tabStateCacheRef.current[nextTab.id];
+          if (cached) {
+            restoreTabSnapshot(cached);
+          } else {
+            restoreTabSnapshot({});
+            setLiveDataLoading(true);
+          }
+          queryCacheRef.current.clear();
+          setActiveTabId(nextTab.id);
+        }
+        return remaining;
+      });
+    }, [activeTabId, restoreTabSnapshot]);
+    const renameTab = React.useCallback((tabId, newName) => {
+      setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, name: newName } : t));
+    }, []);
     const styles = React.useMemo(
       () => ({
         ...STATIC_STYLES,
@@ -3681,12 +3858,16 @@ var __app = (() => {
         if (showFilterSuggestions && filterSearchInputRef.current && filterSuggestionsDropdownRef.current && !filterSearchInputRef.current.contains(event.target) && !filterSuggestionsDropdownRef.current.contains(event.target)) {
           setShowFilterSuggestions(false);
         }
+        if (showAddTab && !event.target.closest("[data-add-tab]")) {
+          setShowAddTab(false);
+          setNewTabDataset("");
+        }
       };
       document.addEventListener("mousedown", handleClickOutside);
       return () => {
         document.removeEventListener("mousedown", handleClickOutside);
       };
-    }, [showTopXControl, showFilterSuggestions]);
+    }, [showTopXControl, showFilterSuggestions, showAddTab]);
     React.useEffect(() => {
       const timer = setTimeout(() => {
         setShowGuideButton(false);
@@ -8035,7 +8216,204 @@ var __app = (() => {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
           }
-        `), liveDataLoading && /* @__PURE__ */ React.createElement("div", { style: {
+        `), baseConnection && tabs.length > 0 && /* @__PURE__ */ React.createElement("div", { style: {
+      display: "flex",
+      alignItems: "center",
+      gap: "0",
+      marginBottom: "12px",
+      borderBottom: `2px solid ${isDarkMode ? "#374151" : "#e5e7eb"}`
+    } }, tabs.map((tab) => {
+      const isActive = tab.id === activeTabId;
+      const isRenaming = renamingTabId === tab.id;
+      return /* @__PURE__ */ React.createElement(
+        "div",
+        {
+          key: tab.id,
+          style: {
+            display: "flex",
+            alignItems: "center",
+            gap: "4px",
+            padding: "8px 16px",
+            fontSize: "13px",
+            fontWeight: isActive ? 600 : 400,
+            cursor: "pointer",
+            userSelect: "none",
+            position: "relative",
+            color: isActive ? isDarkMode ? "#f3f4f6" : "#111827" : isDarkMode ? "#9ca3af" : "#6b7280",
+            backgroundColor: isActive ? isDarkMode ? "rgba(99,102,241,0.1)" : "rgba(99,102,241,0.05)" : "transparent",
+            borderBottom: isActive ? `2px solid ${isDarkMode ? "#818cf8" : "#6366f1"}` : "2px solid transparent",
+            marginBottom: "-2px",
+            borderRadius: "6px 6px 0 0",
+            transition: "all 0.15s ease"
+          },
+          onClick: () => {
+            if (!isRenaming) switchTab(tab.id);
+          },
+          onDoubleClick: () => {
+            setRenamingTabId(tab.id);
+            setRenameText(tab.name);
+          }
+        },
+        isActive && /* @__PURE__ */ React.createElement("span", { style: {
+          width: "6px",
+          height: "6px",
+          borderRadius: "50%",
+          backgroundColor: liveDataLoading ? "#818cf8" : liveDataError ? "#ef4444" : "#10b981",
+          display: "inline-block",
+          flexShrink: 0
+        } }),
+        isRenaming ? /* @__PURE__ */ React.createElement(
+          "input",
+          {
+            autoFocus: true,
+            value: renameText,
+            onChange: (e) => setRenameText(e.target.value),
+            onBlur: () => {
+              if (renameText.trim()) renameTab(tab.id, renameText.trim());
+              setRenamingTabId(null);
+            },
+            onKeyDown: (e) => {
+              if (e.key === "Enter") {
+                if (renameText.trim()) renameTab(tab.id, renameText.trim());
+                setRenamingTabId(null);
+              }
+              if (e.key === "Escape") setRenamingTabId(null);
+            },
+            onClick: (e) => e.stopPropagation(),
+            style: {
+              background: "transparent",
+              border: "none",
+              borderBottom: `1px solid ${isDarkMode ? "#818cf8" : "#6366f1"}`,
+              color: "inherit",
+              fontSize: "13px",
+              fontWeight: 600,
+              padding: "0 2px",
+              width: Math.max(60, renameText.length * 8) + "px",
+              outline: "none"
+            }
+          }
+        ) : /* @__PURE__ */ React.createElement("span", null, tab.name),
+        isActive && liveRowCount > 0 && !liveDataLoading && /* @__PURE__ */ React.createElement("span", { style: { fontSize: "11px", color: isDarkMode ? "#6b7280" : "#9ca3af", marginLeft: "4px" } }, "(", liveRowCount.toLocaleString(), liveDataTruncated ? "!" : "", ")"),
+        tabs.length > 1 && /* @__PURE__ */ React.createElement(
+          "button",
+          {
+            onClick: (e) => {
+              e.stopPropagation();
+              removeTab(tab.id);
+            },
+            style: {
+              background: "none",
+              border: "none",
+              color: isDarkMode ? "#6b7280" : "#9ca3af",
+              cursor: "pointer",
+              fontSize: "14px",
+              lineHeight: 1,
+              padding: "0 2px",
+              marginLeft: "4px",
+              opacity: 0.6,
+              display: "flex",
+              alignItems: "center"
+            },
+            onMouseEnter: (e) => e.target.style.opacity = 1,
+            onMouseLeave: (e) => e.target.style.opacity = 0.6
+          },
+          "\xD7"
+        )
+      );
+    }), /* @__PURE__ */ React.createElement("div", { style: { position: "relative" }, "data-add-tab": true }, /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: () => setShowAddTab(!showAddTab),
+        style: {
+          background: "none",
+          border: "none",
+          color: isDarkMode ? "#6b7280" : "#9ca3af",
+          cursor: "pointer",
+          fontSize: "18px",
+          lineHeight: 1,
+          padding: "6px 12px",
+          display: "flex",
+          alignItems: "center"
+        },
+        title: "Add dataset tab"
+      },
+      "+"
+    ), showAddTab && /* @__PURE__ */ React.createElement("div", { style: {
+      position: "absolute",
+      top: "100%",
+      left: 0,
+      zIndex: 100,
+      backgroundColor: isDarkMode ? "#1f2937" : "#ffffff",
+      border: `1px solid ${isDarkMode ? "#374151" : "#e5e7eb"}`,
+      borderRadius: "8px",
+      padding: "12px",
+      boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+      minWidth: "200px"
+    } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "12px", fontWeight: 600, marginBottom: "8px", color: isDarkMode ? "#d1d5db" : "#374151" } }, "New Tab"), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        autoFocus: true,
+        placeholder: "Tab name",
+        value: newTabDataset,
+        onChange: (e) => setNewTabDataset(e.target.value),
+        onKeyDown: (e) => {
+          if (e.key === "Enter" && newTabDataset.trim()) {
+            addTab(newTabDataset.trim());
+            setNewTabDataset("");
+            setShowAddTab(false);
+          }
+          if (e.key === "Escape") {
+            setShowAddTab(false);
+            setNewTabDataset("");
+          }
+        },
+        style: {
+          width: "100%",
+          padding: "6px 10px",
+          borderRadius: "6px",
+          fontSize: "13px",
+          border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`,
+          backgroundColor: isDarkMode ? "#111827" : "#f9fafb",
+          color: isDarkMode ? "#f3f4f6" : "#111827",
+          outline: "none",
+          boxSizing: "border-box"
+        }
+      }
+    ), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", color: isDarkMode ? "#6b7280" : "#9ca3af", marginTop: "6px" } }, "Name your tab, then set dataset in Configure Metrics"))), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: () => {
+          setMetricsEditorDraft({ ...liveMetricConfig || {}, dataset: activeTab?.dataset || "" });
+          setMetricsEditorError("");
+          setExpandedMetricSlot(null);
+          setShowMetricsEditor(true);
+        },
+        style: {
+          marginLeft: "auto",
+          padding: "4px 12px",
+          borderRadius: "6px",
+          border: `1px solid ${isDarkMode ? "rgba(16,185,129,0.4)" : "rgba(16,185,129,0.5)"}`,
+          background: "transparent",
+          color: isDarkMode ? "#6ee7b7" : "#065f46",
+          cursor: "pointer",
+          fontSize: "11px",
+          fontWeight: 500,
+          whiteSpace: "nowrap"
+        }
+      },
+      "Configure Metrics"
+    )), baseConnection && activeTab && !activeTab.dataset && !liveDataLoading && /* @__PURE__ */ React.createElement("div", { style: {
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      padding: "8px 16px",
+      backgroundColor: isDarkMode ? "rgba(245, 158, 11, 0.12)" : "rgba(245, 158, 11, 0.1)",
+      border: `1px solid ${isDarkMode ? "rgba(245, 158, 11, 0.35)" : "rgba(245, 158, 11, 0.4)"}`,
+      borderRadius: "8px",
+      marginBottom: "12px",
+      fontSize: "12px",
+      color: isDarkMode ? "#fbbf24" : "#92400e"
+    } }, /* @__PURE__ */ React.createElement("span", null, "No dataset configured. Click ", /* @__PURE__ */ React.createElement("strong", null, "Configure Metrics"), " to set the table name.")), liveDataLoading && /* @__PURE__ */ React.createElement("div", { style: {
       display: "flex",
       alignItems: "center",
       gap: "8px",
@@ -8057,40 +8435,18 @@ var __app = (() => {
       marginBottom: "12px",
       fontSize: "12px",
       color: isDarkMode ? "#fca5a5" : "#dc2626"
-    } }, /* @__PURE__ */ React.createElement("span", null, "Connection failed: ", liveDataError, ". Showing demo data instead.")), isLiveMode && /* @__PURE__ */ React.createElement("div", { style: {
+    } }, /* @__PURE__ */ React.createElement("span", null, "Connection failed: ", liveDataError, ". Showing demo data instead.")), liveDataTruncated && !liveDataLoading && /* @__PURE__ */ React.createElement("div", { style: {
       display: "flex",
       alignItems: "center",
-      justifyContent: "space-between",
       gap: "8px",
       padding: "8px 16px",
-      backgroundColor: isDarkMode ? "rgba(16, 185, 129, 0.12)" : "rgba(16, 185, 129, 0.1)",
-      border: `1px solid ${isDarkMode ? "rgba(16, 185, 129, 0.35)" : "rgba(16, 185, 129, 0.4)"}`,
+      backgroundColor: isDarkMode ? "rgba(245, 158, 11, 0.12)" : "rgba(245, 158, 11, 0.1)",
+      border: `1px solid ${isDarkMode ? "rgba(245, 158, 11, 0.35)" : "rgba(245, 158, 11, 0.4)"}`,
       borderRadius: "8px",
       marginBottom: "12px",
       fontSize: "12px",
-      color: isDarkMode ? "#6ee7b7" : "#065f46"
-    } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px" } }, /* @__PURE__ */ React.createElement("span", { style: { width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#10b981", display: "inline-block" } }), /* @__PURE__ */ React.createElement("span", null, "Connected to ", /* @__PURE__ */ React.createElement("strong", null, connectionParams.dataset), liveRowCount > 0 ? ` \u2014 ${liveRowCount.toLocaleString()} records` : "", liveDataTruncated ? " (truncated \u2014 results hit row limit)" : "", liveAggLoading ? " (loading...)" : "")), /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        onClick: () => {
-          setMetricsEditorDraft({ ...liveMetricConfig || {} });
-          setMetricsEditorError("");
-          setShowMetricsEditor(true);
-        },
-        style: {
-          padding: "4px 12px",
-          borderRadius: "6px",
-          border: "1px solid currentColor",
-          background: "transparent",
-          color: "inherit",
-          cursor: "pointer",
-          fontSize: "11px",
-          fontWeight: 500,
-          whiteSpace: "nowrap"
-        }
-      },
-      "Configure Metrics"
-    )), !isLiveMode && !liveDataLoading && !liveDataError && /* @__PURE__ */ React.createElement("div", { style: {
+      color: isDarkMode ? "#fbbf24" : "#92400e"
+    } }, /* @__PURE__ */ React.createElement("span", null, "Data truncated \u2014 results hit the row limit. Metrics may be incomplete.")), !isLiveMode && !liveDataLoading && !liveDataError && /* @__PURE__ */ React.createElement("div", { style: {
       display: "flex",
       alignItems: "center",
       gap: "8px",
@@ -9596,9 +9952,17 @@ var __app = (() => {
       const updateDraft = (field, value) => setMetricsEditorDraft((prev) => ({ ...prev, [field]: value }));
       const handleSave = () => {
         const config = { ...draft };
+        const newDataset = config.dataset;
+        delete config.dataset;
+        const datasetChanged = newDataset && activeTab && newDataset !== activeTab.dataset;
+        if (datasetChanged) {
+          setTabs((prev) => prev.map((t) => t.id === activeTabId ? { ...t, dataset: newDataset } : t));
+          loadedDatasetsRef.current.delete(activeTab.dataset);
+        }
         setLiveMetricConfig(config);
+        const effectiveDataset = newDataset || (activeTab ? activeTab.dataset : connectionParams?.dataset);
         try {
-          const storageKey = "metricsConfig_" + connectionParams.supabaseUrl + "_" + connectionParams.dataset;
+          const storageKey = "metricsConfig_" + connectionParams.supabaseUrl + "_" + effectiveDataset;
           localStorage.setItem(storageKey, JSON.stringify(config));
         } catch (e) {
         }
@@ -9852,7 +10216,7 @@ var __app = (() => {
           /* @__PURE__ */ React.createElement("option", { value: "+" }, "+"),
           /* @__PURE__ */ React.createElement("option", { value: "-" }, "\u2212")
         )), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", fontWeight: 600, marginBottom: "4px", color: isDarkMode ? "#9ca3af" : "#6b7280" } }, "Denominator"), renderAggRow(fDenAggKey, fDenColKey, fDenPctKey, false)), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", gap: "6px", marginTop: "8px" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Label"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft[labelKey] || "", onChange: (e) => updateDraft(labelKey, e.target.value), placeholder: "e.g. Total" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Format"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft[formatKey] || "", onChange: (e) => updateDraft(formatKey, e.target.value), placeholder: "0,0" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Prefix"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft[prefixKey] || "", onChange: (e) => updateDraft(prefixKey, e.target.value), placeholder: "$" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Suffix"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft[suffixKey] || "", onChange: (e) => updateDraft(suffixKey, e.target.value), placeholder: "ms" })))));
-      }), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: "16px" } }, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Date Column"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.dateColumn || "", onChange: (e) => updateDraft("dateColumn", e.target.value || null) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u2014 none \u2014"), dateCols.map((c) => /* @__PURE__ */ React.createElement("option", { key: c.name, value: c.name }, c.name)))), /* @__PURE__ */ React.createElement("div", { style: sectionStyle }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "13px", fontWeight: 700, color: isDarkMode ? "#f3f4f6" : "#111827" } }, "Dimensions & Filters"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: "8px" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", liveSchemaClassified.dimensions.map((c) => c.name)), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "All"), /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", []), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "None"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } }, liveSchemaClassified.dimensions.map((c) => {
+      }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginBottom: "16px" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Dataset (table name)"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.dataset || activeTab?.dataset || "", onChange: (e) => updateDraft("dataset", e.target.value), placeholder: "schema.table_name" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Date Column"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.dateColumn || "", onChange: (e) => updateDraft("dateColumn", e.target.value || null) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u2014 none \u2014"), dateCols.map((c) => /* @__PURE__ */ React.createElement("option", { key: c.name, value: c.name }, c.name))))), /* @__PURE__ */ React.createElement("div", { style: sectionStyle }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "13px", fontWeight: 700, color: isDarkMode ? "#f3f4f6" : "#111827" } }, "Dimensions & Filters"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: "8px" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", liveSchemaClassified.dimensions.map((c) => c.name)), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "All"), /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", []), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "None"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } }, liveSchemaClassified.dimensions.map((c) => {
         const visible = draft.visibleDimensions ? draft.visibleDimensions.includes(c.name) : true;
         const label = c.name.replace(/^is_/, "").replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
         return /* @__PURE__ */ React.createElement(

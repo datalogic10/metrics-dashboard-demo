@@ -1,7 +1,7 @@
 import { THEME_CONFIG, MODERN_COLOR_PALETTE, getCategoryColor } from './src/theme.js';
 import { generateSyntheticData, DEMO_COLUMNS, DEMO_DIMENSION_DEFINITIONS } from './src/syntheticData.js';
 import {
-  DEFAULT_METRIC_CONFIGS, parseConnectionParams, createRpcCaller, createQueryCache,
+  DEFAULT_METRIC_CONFIGS, parseConnectionParams, parseBaseConnection, createRpcCaller, createQueryCache,
   classifySchema, detectDateColumn, buildLiveColumns, buildLiveDimensions,
   buildRpcMetrics, transformToPeriodAggregates, transformToDimensionAggregates,
   frequencyToGrain, LLM_WORKER_URL,
@@ -1168,8 +1168,48 @@ export function render() {
     [theme, isDarkMode, showDataSummary]
   );
 
-  // ===== LIVE DATA CONNECTION =====
-  const connectionParams = React.useMemo(() => parseConnectionParams(), []);
+  // ===== LIVE DATA CONNECTION + TAB SYSTEM =====
+  const baseConnection = React.useMemo(() => parseBaseConnection(), []);
+
+  // Tab system: each tab has { id, name, dataset }
+  const [tabs, setTabs] = React.useState(() => {
+    if (!baseConnection) return [];
+    // Try to restore tabs from localStorage
+    const tabsKey = 'dashboardTabs_' + baseConnection.supabaseUrl;
+    try {
+      const saved = localStorage.getItem(tabsKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {}
+    // Initialize with single tab from URL hash dataset (or empty)
+    if (baseConnection.initialDataset) {
+      return [{ id: 'tab_1', name: baseConnection.initialDataset, dataset: baseConnection.initialDataset }];
+    }
+    return [];
+  });
+  const [activeTabId, setActiveTabId] = React.useState(() => tabs.length > 0 ? tabs[0].id : null);
+  const tabStateCacheRef = React.useRef({}); // { [tabId]: { snapshot of per-tab state } }
+  const [renamingTabId, setRenamingTabId] = React.useState(null);
+  const [renameText, setRenameText] = React.useState('');
+  const [showAddTab, setShowAddTab] = React.useState(false);
+  const [newTabDataset, setNewTabDataset] = React.useState('');
+  const tabNextIdRef = React.useRef(tabs.length + 1);
+
+  // Persist tabs to localStorage
+  React.useEffect(() => {
+    if (!baseConnection || tabs.length === 0) return;
+    const tabsKey = 'dashboardTabs_' + baseConnection.supabaseUrl;
+    try { localStorage.setItem(tabsKey, JSON.stringify(tabs)); } catch (e) {}
+  }, [tabs, baseConnection]);
+
+  // Derive connectionParams from baseConnection + active tab
+  const activeTab = tabs.find(t => t.id === activeTabId) || null;
+  const connectionParams = React.useMemo(() => {
+    if (!baseConnection || !activeTab || !activeTab.dataset) return null;
+    return { supabaseUrl: baseConnection.supabaseUrl, apiKey: baseConnection.apiKey, dataset: activeTab.dataset };
+  }, [baseConnection, activeTab]);
 
   const [liveDataLoading, setLiveDataLoading] = React.useState(!!connectionParams);
   const [liveDataError, setLiveDataError] = React.useState(null);
@@ -1234,8 +1274,12 @@ export function render() {
 
 
   // ===== STARTUP: FETCH SCHEMA + DISTINCT VALUES =====
+  // Track which datasets have been loaded to avoid redundant fetches on tab switch
+  const loadedDatasetsRef = React.useRef(new Set());
   React.useEffect(() => {
     if (!connectionParams) return;
+    // Skip if we already loaded this dataset (tab switch restored from cache)
+    if (loadedDatasetsRef.current.has(connectionParams.dataset) && liveColumnMeta) return;
     setLiveDataLoading(true);
     setLiveDataError(null);
 
@@ -1247,8 +1291,13 @@ export function render() {
         const columns = schemaData.columns || [];
         setLiveColumnMeta(columns);
 
-        // Determine metric config
-        let config = liveMetricConfig;
+        // Determine metric config — read from localStorage directly to avoid stale closure
+        let config = null;
+        try {
+          const storageKey = 'metricsConfig_' + connectionParams.supabaseUrl + '_' + dataset;
+          const saved = localStorage.getItem(storageKey);
+          if (saved) config = JSON.parse(saved);
+        } catch (e) {}
         const isNewConnection = !config;
         if (!config) {
           config = DEFAULT_METRIC_CONFIGS[dataset] || {
@@ -1257,17 +1306,18 @@ export function render() {
             volumeFormat: "0,0", revenueFormat: "0,0", derivedFormat: "0.0", derivedDivisor: 10000,
             dateColumn: columns.find(c => c.udt === 'date' || c.name.includes('_dt'))?.name || null,
           };
-          setLiveMetricConfig(config);
           try {
             const storageKey = 'metricsConfig_' + connectionParams.supabaseUrl + '_' + dataset;
             localStorage.setItem(storageKey, JSON.stringify(config));
           } catch (e) {}
           // Auto-open metrics editor for unknown datasets so user can configure
           if (!DEFAULT_METRIC_CONFIGS[dataset]) {
-            setMetricsEditorDraft({ ...config });
+            setMetricsEditorDraft({ ...config, dataset });
             setShowMetricsEditor(true);
           }
         }
+        // Always set metric config (whether from localStorage or freshly created)
+        setLiveMetricConfig(config);
 
         // Step 2: Fetch distinct values for all dimension columns
         const dateCol = config.dateColumn || columns.find(c => c.udt === 'date' || c.name.includes('_dt'))?.name;
@@ -1291,6 +1341,7 @@ export function render() {
         setLiveFilterOptions(filterOpts);
         setLiveSchemaReady(true);
         setLiveDataLoading(false);
+        loadedDatasetsRef.current.add(connectionParams.dataset);
       })
       .catch(err => {
         setLiveDataError(err.message);
@@ -1803,6 +1854,128 @@ export function render() {
   const [dateRange, setDateRange] = React.useState("1Y");
   const [showAdvancedFilters, setShowAdvancedFilters] = React.useState(false);
   const [activeInsightsTab, setActiveInsightsTab] = React.useState(null);
+
+  // ===== TAB SWITCHING =====
+  // Capture current per-tab state into a snapshot object
+  const captureTabSnapshot = React.useCallback(() => ({
+    // Live data state
+    liveColumnMeta, liveSchemaReady, liveFilterOptions,
+    livePeriodAggregates, liveDimensionAggregates, liveAggLoading,
+    liveRowCount, liveDataTruncated, liveMetricConfig, liveDataError,
+    // UI state
+    dataFrequency, metric, view, topX, categorySelectionMode,
+    selectedCategories, dynamicFilters, dateRange,
+    activeOverlays, smaWindow, activeInsightsTab,
+  }), [
+    liveColumnMeta, liveSchemaReady, liveFilterOptions,
+    livePeriodAggregates, liveDimensionAggregates, liveAggLoading,
+    liveRowCount, liveDataTruncated, liveMetricConfig, liveDataError,
+    dataFrequency, metric, view, topX, categorySelectionMode,
+    selectedCategories, dynamicFilters, dateRange,
+    activeOverlays, smaWindow, activeInsightsTab,
+  ]);
+
+  // Restore per-tab state from a snapshot
+  const restoreTabSnapshot = React.useCallback((snap) => {
+    // Live data state
+    setLiveColumnMeta(snap.liveColumnMeta || null);
+    setLiveSchemaReady(snap.liveSchemaReady || false);
+    setLiveFilterOptions(snap.liveFilterOptions || {});
+    setLivePeriodAggregates(snap.livePeriodAggregates || null);
+    setLiveDimensionAggregates(snap.liveDimensionAggregates || null);
+    setLiveAggLoading(snap.liveAggLoading || false);
+    setLiveRowCount(snap.liveRowCount || 0);
+    setLiveDataTruncated(snap.liveDataTruncated || false);
+    setLiveMetricConfig(snap.liveMetricConfig || null);
+    setLiveDataError(snap.liveDataError || null);
+    // UI state
+    setDataFrequency(snap.dataFrequency || 'Monthly');
+    setMetric(snap.metric || 'Revenue');
+    setView(snap.view || 'Overall');
+    setTopX(snap.topX != null ? snap.topX : 3);
+    setCategorySelectionMode(snap.categorySelectionMode || 'topX');
+    setSelectedCategories(snap.selectedCategories || []);
+    setDynamicFilters(snap.dynamicFilters || {});
+    setDateRange(snap.dateRange || '1Y');
+    setActiveOverlays(snap.activeOverlays || { yoy: true });
+    setSmaWindow(snap.smaWindow || 3);
+    setActiveInsightsTab(snap.activeInsightsTab || null);
+  }, []);
+
+  const switchTab = React.useCallback((targetTabId) => {
+    if (targetTabId === activeTabId) return;
+    // Save current tab state
+    if (activeTabId) {
+      tabStateCacheRef.current[activeTabId] = captureTabSnapshot();
+    }
+    // Restore target tab state (or defaults if first visit)
+    const cached = tabStateCacheRef.current[targetTabId];
+    if (cached) {
+      restoreTabSnapshot(cached);
+    } else {
+      // Reset to defaults — schema fetch effect will fire due to connectionParams change
+      restoreTabSnapshot({});
+      setLiveDataLoading(true);
+    }
+    // Clear query cache when switching datasets
+    queryCacheRef.current.clear();
+    setActiveTabId(targetTabId);
+  }, [activeTabId, captureTabSnapshot, restoreTabSnapshot]);
+
+  const addTab = React.useCallback((name, dataset) => {
+    const id = 'tab_' + (++tabNextIdRef.current);
+    const newTab = { id, name, dataset: dataset || null };
+    // Save current tab state before switching
+    if (activeTabId) {
+      tabStateCacheRef.current[activeTabId] = captureTabSnapshot();
+    }
+    setTabs(prev => [...prev, newTab]);
+    setActiveTabId(id);
+    // Reset state for new tab
+    restoreTabSnapshot({});
+    queryCacheRef.current.clear();
+    if (dataset) {
+      // Dataset provided — schema fetch effect will fire
+      setLiveDataLoading(true);
+    } else {
+      // No dataset yet — open Configure Metrics so user can set it
+      setLiveDataLoading(false);
+      setLiveSchemaReady(false);
+      setTimeout(() => {
+        setMetricsEditorDraft({});
+        setMetricsEditorError('');
+        setExpandedMetricSlot(null);
+        setShowMetricsEditor(true);
+      }, 50);
+    }
+  }, [activeTabId, captureTabSnapshot, restoreTabSnapshot]);
+
+  const removeTab = React.useCallback((tabId) => {
+    setTabs(prev => {
+      const remaining = prev.filter(t => t.id !== tabId);
+      if (remaining.length === 0) return prev; // Don't remove last tab
+      delete tabStateCacheRef.current[tabId];
+      // If removing active tab, switch to adjacent
+      if (tabId === activeTabId) {
+        const idx = prev.findIndex(t => t.id === tabId);
+        const nextTab = remaining[Math.min(idx, remaining.length - 1)];
+        const cached = tabStateCacheRef.current[nextTab.id];
+        if (cached) {
+          restoreTabSnapshot(cached);
+        } else {
+          restoreTabSnapshot({});
+          setLiveDataLoading(true);
+        }
+        queryCacheRef.current.clear();
+        setActiveTabId(nextTab.id);
+      }
+      return remaining;
+    });
+  }, [activeTabId, restoreTabSnapshot]);
+
+  const renameTab = React.useCallback((tabId, newName) => {
+    setTabs(prev => prev.map(t => t.id === tabId ? { ...t, name: newName } : t));
+  }, []);
 
   // Dynamic styles - only properties that change based on state (Optimization #3)
   const styles = React.useMemo(
@@ -2828,12 +3001,17 @@ export function render() {
       ) {
         setShowFilterSuggestions(false);
       }
+      // Close add-tab dropdown
+      if (showAddTab && !event.target.closest("[data-add-tab]")) {
+        setShowAddTab(false);
+        setNewTabDataset('');
+      }
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
     };
-  }, [showTopXControl, showFilterSuggestions]);
+  }, [showTopXControl, showFilterSuggestions, showAddTab]);
 
   // Hide Guide Me button after 2 minutes
   React.useEffect(() => {
@@ -8722,7 +8900,160 @@ export function render() {
           }
         `}</style>
 
+      {/* Tab Bar — only in live mode with tabs */}
+      {baseConnection && tabs.length > 0 && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: "0", marginBottom: "12px",
+          borderBottom: `2px solid ${isDarkMode ? '#374151' : '#e5e7eb'}`,
+        }}>
+          {tabs.map(tab => {
+            const isActive = tab.id === activeTabId;
+            const isRenaming = renamingTabId === tab.id;
+            return (
+              <div key={tab.id} style={{
+                display: "flex", alignItems: "center", gap: "4px",
+                padding: "8px 16px", fontSize: "13px", fontWeight: isActive ? 600 : 400,
+                cursor: "pointer", userSelect: "none", position: "relative",
+                color: isActive ? (isDarkMode ? '#f3f4f6' : '#111827') : (isDarkMode ? '#9ca3af' : '#6b7280'),
+                backgroundColor: isActive ? (isDarkMode ? 'rgba(99,102,241,0.1)' : 'rgba(99,102,241,0.05)') : 'transparent',
+                borderBottom: isActive ? `2px solid ${isDarkMode ? '#818cf8' : '#6366f1'}` : '2px solid transparent',
+                marginBottom: '-2px',
+                borderRadius: '6px 6px 0 0',
+                transition: 'all 0.15s ease',
+              }}
+                onClick={() => { if (!isRenaming) switchTab(tab.id); }}
+                onDoubleClick={() => { setRenamingTabId(tab.id); setRenameText(tab.name); }}
+              >
+                {isActive && (
+                  <span style={{ width: "6px", height: "6px", borderRadius: "50%",
+                    backgroundColor: liveDataLoading ? '#818cf8' : liveDataError ? '#ef4444' : '#10b981',
+                    display: "inline-block", flexShrink: 0 }} />
+                )}
+                {isRenaming ? (
+                  <input
+                    autoFocus
+                    value={renameText}
+                    onChange={e => setRenameText(e.target.value)}
+                    onBlur={() => { if (renameText.trim()) renameTab(tab.id, renameText.trim()); setRenamingTabId(null); }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') { if (renameText.trim()) renameTab(tab.id, renameText.trim()); setRenamingTabId(null); }
+                      if (e.key === 'Escape') setRenamingTabId(null);
+                    }}
+                    onClick={e => e.stopPropagation()}
+                    style={{
+                      background: 'transparent', border: 'none', borderBottom: `1px solid ${isDarkMode ? '#818cf8' : '#6366f1'}`,
+                      color: 'inherit', fontSize: '13px', fontWeight: 600, padding: '0 2px', width: Math.max(60, renameText.length * 8) + 'px',
+                      outline: 'none',
+                    }}
+                  />
+                ) : (
+                  <span>{tab.name}</span>
+                )}
+                {isActive && liveRowCount > 0 && !liveDataLoading && (
+                  <span style={{ fontSize: '11px', color: isDarkMode ? '#6b7280' : '#9ca3af', marginLeft: '4px' }}>
+                    ({liveRowCount.toLocaleString()}{liveDataTruncated ? '!' : ''})
+                  </span>
+                )}
+                {tabs.length > 1 && (
+                  <button
+                    onClick={e => { e.stopPropagation(); removeTab(tab.id); }}
+                    style={{
+                      background: 'none', border: 'none', color: isDarkMode ? '#6b7280' : '#9ca3af',
+                      cursor: 'pointer', fontSize: '14px', lineHeight: 1, padding: '0 2px', marginLeft: '4px',
+                      opacity: 0.6, display: 'flex', alignItems: 'center',
+                    }}
+                    onMouseEnter={e => e.target.style.opacity = 1}
+                    onMouseLeave={e => e.target.style.opacity = 0.6}
+                  >
+                    &times;
+                  </button>
+                )}
+              </div>
+            );
+          })}
+          {/* Add Tab Button */}
+          <div style={{ position: 'relative' }} data-add-tab>
+            <button
+              onClick={() => setShowAddTab(!showAddTab)}
+              style={{
+                background: 'none', border: 'none', color: isDarkMode ? '#6b7280' : '#9ca3af',
+                cursor: 'pointer', fontSize: '18px', lineHeight: 1, padding: '6px 12px',
+                display: 'flex', alignItems: 'center',
+              }}
+              title="Add dataset tab"
+            >
+              +
+            </button>
+            {showAddTab && (
+              <div style={{
+                position: 'absolute', top: '100%', left: 0, zIndex: 100,
+                backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
+                border: `1px solid ${isDarkMode ? '#374151' : '#e5e7eb'}`,
+                borderRadius: '8px', padding: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                minWidth: '200px',
+              }}>
+                <div style={{ fontSize: '12px', fontWeight: 600, marginBottom: '8px', color: isDarkMode ? '#d1d5db' : '#374151' }}>
+                  New Tab
+                </div>
+                <input
+                  autoFocus
+                  placeholder="Tab name"
+                  value={newTabDataset}
+                  onChange={e => setNewTabDataset(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && newTabDataset.trim()) {
+                      addTab(newTabDataset.trim());
+                      setNewTabDataset('');
+                      setShowAddTab(false);
+                    }
+                    if (e.key === 'Escape') { setShowAddTab(false); setNewTabDataset(''); }
+                  }}
+                  style={{
+                    width: '100%', padding: '6px 10px', borderRadius: '6px', fontSize: '13px',
+                    border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`,
+                    backgroundColor: isDarkMode ? '#111827' : '#f9fafb',
+                    color: isDarkMode ? '#f3f4f6' : '#111827',
+                    outline: 'none', boxSizing: 'border-box',
+                  }}
+                />
+                <div style={{ fontSize: '11px', color: isDarkMode ? '#6b7280' : '#9ca3af', marginTop: '6px' }}>
+                  Name your tab, then set dataset in Configure Metrics
+                </div>
+              </div>
+            )}
+          </div>
+          {/* Configure Metrics button — right-aligned */}
+          <button
+            onClick={() => {
+              setMetricsEditorDraft({ ...(liveMetricConfig || {}), dataset: activeTab?.dataset || '' });
+              setMetricsEditorError('');
+              setExpandedMetricSlot(null);
+              setShowMetricsEditor(true);
+            }}
+            style={{
+              marginLeft: 'auto', padding: "4px 12px", borderRadius: "6px",
+              border: `1px solid ${isDarkMode ? 'rgba(16,185,129,0.4)' : 'rgba(16,185,129,0.5)'}`,
+              background: "transparent", color: isDarkMode ? '#6ee7b7' : '#065f46',
+              cursor: "pointer", fontSize: "11px", fontWeight: 500, whiteSpace: "nowrap",
+            }}
+          >
+            Configure Metrics
+          </button>
+        </div>
+      )}
+
       {/* Status Banner */}
+      {baseConnection && activeTab && !activeTab.dataset && !liveDataLoading && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: "8px",
+          padding: "8px 16px", backgroundColor: isDarkMode ? "rgba(245, 158, 11, 0.12)" : "rgba(245, 158, 11, 0.1)",
+          border: `1px solid ${isDarkMode ? "rgba(245, 158, 11, 0.35)" : "rgba(245, 158, 11, 0.4)"}`,
+          borderRadius: "8px", marginBottom: "12px", fontSize: "12px",
+          color: isDarkMode ? "#fbbf24" : "#92400e",
+        }}>
+          <span>No dataset configured. Click <strong>Configure Metrics</strong> to set the table name.</span>
+        </div>
+      )}
       {liveDataLoading && (
         <div style={{
           display: "flex", alignItems: "center", gap: "8px",
@@ -8746,32 +9077,15 @@ export function render() {
           <span>Connection failed: {liveDataError}. Showing demo data instead.</span>
         </div>
       )}
-      {isLiveMode && (
+      {liveDataTruncated && !liveDataLoading && (
         <div style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px",
-          padding: "8px 16px", backgroundColor: isDarkMode ? "rgba(16, 185, 129, 0.12)" : "rgba(16, 185, 129, 0.1)",
-          border: `1px solid ${isDarkMode ? "rgba(16, 185, 129, 0.35)" : "rgba(16, 185, 129, 0.4)"}`,
+          display: "flex", alignItems: "center", gap: "8px",
+          padding: "8px 16px", backgroundColor: isDarkMode ? "rgba(245, 158, 11, 0.12)" : "rgba(245, 158, 11, 0.1)",
+          border: `1px solid ${isDarkMode ? "rgba(245, 158, 11, 0.35)" : "rgba(245, 158, 11, 0.4)"}`,
           borderRadius: "8px", marginBottom: "12px", fontSize: "12px",
-          color: isDarkMode ? "#6ee7b7" : "#065f46",
+          color: isDarkMode ? "#fbbf24" : "#92400e",
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#10b981", display: "inline-block" }} />
-            <span>Connected to <strong>{connectionParams.dataset}</strong>{liveRowCount > 0 ? ` — ${liveRowCount.toLocaleString()} records` : ''}{liveDataTruncated ? ' (truncated — results hit row limit)' : ''}{liveAggLoading ? ' (loading...)' : ''}</span>
-          </div>
-          <button
-            onClick={() => {
-              setMetricsEditorDraft({ ...(liveMetricConfig || {}) });
-              setMetricsEditorError('');
-              setShowMetricsEditor(true);
-            }}
-            style={{
-              padding: "4px 12px", borderRadius: "6px", border: "1px solid currentColor",
-              background: "transparent", color: "inherit", cursor: "pointer", fontSize: "11px",
-              fontWeight: 500, whiteSpace: "nowrap",
-            }}
-          >
-            Configure Metrics
-          </button>
+          <span>Data truncated — results hit the row limit. Metrics may be incomplete.</span>
         </div>
       )}
       {!isLiveMode && !liveDataLoading && !liveDataError && (
@@ -10680,9 +10994,19 @@ export function render() {
 
         const handleSave = () => {
           const config = { ...draft };
+          const newDataset = config.dataset;
+          delete config.dataset; // dataset is stored on the tab, not in metric config
+          const datasetChanged = newDataset && activeTab && newDataset !== activeTab.dataset;
+          // Update tab dataset if changed
+          if (datasetChanged) {
+            setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, dataset: newDataset } : t));
+            // Clear loaded datasets so schema re-fetches
+            loadedDatasetsRef.current.delete(activeTab.dataset);
+          }
           setLiveMetricConfig(config);
+          const effectiveDataset = newDataset || (activeTab ? activeTab.dataset : connectionParams?.dataset);
           try {
-            const storageKey = 'metricsConfig_' + connectionParams.supabaseUrl + '_' + connectionParams.dataset;
+            const storageKey = 'metricsConfig_' + connectionParams.supabaseUrl + '_' + effectiveDataset;
             localStorage.setItem(storageKey, JSON.stringify(config));
           } catch (e) {}
           setShowMetricsEditor(false);
@@ -11001,13 +11325,19 @@ export function render() {
                 );
               })}
 
-              {/* Date Column */}
-              <div style={{ marginBottom: '16px' }}>
-                <label style={labelStyle}>Date Column</label>
-                <select style={selectStyle} value={draft.dateColumn || ''} onChange={e => updateDraft('dateColumn', e.target.value || null)}>
-                  <option value="">— none —</option>
-                  {dateCols.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
-                </select>
+              {/* Dataset + Date Column */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '16px' }}>
+                <div>
+                  <label style={labelStyle}>Dataset (table name)</label>
+                  <input style={inputStyle} value={draft.dataset || activeTab?.dataset || ''} onChange={e => updateDraft('dataset', e.target.value)} placeholder="schema.table_name" />
+                </div>
+                <div>
+                  <label style={labelStyle}>Date Column</label>
+                  <select style={selectStyle} value={draft.dateColumn || ''} onChange={e => updateDraft('dateColumn', e.target.value || null)}>
+                    <option value="">— none —</option>
+                    {dateCols.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                  </select>
+                </div>
               </div>
 
               {/* Visible Dimensions */}
