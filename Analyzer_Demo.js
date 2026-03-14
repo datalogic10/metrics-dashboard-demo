@@ -3514,6 +3514,7 @@ export function render() {
           p_metrics: rpcMetrics,
           p_filters: pFilters,
           ...(topX > 0 ? { p_top_n: topX } : {}),
+          ...(topX > 0 && liveMetricConfig.topNRankBy ? { p_rank_by: liveMetricConfig.topNRankBy } : {}),
         })
       : Promise.resolve(null);
 
@@ -11412,8 +11413,8 @@ export function render() {
                 );
               })}
 
-              {/* Dataset + Date Column + Default Grain */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '16px' }}>
+              {/* Dataset + Date Column + Default Grain + Top-N Rank By */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px', marginBottom: '16px' }}>
                 <div>
                   <label style={labelStyle}>Dataset (table name)</label>
                   <input style={inputStyle} value={draft.dataset || activeTab?.dataset || ''} onChange={e => updateDraft('dataset', e.target.value)} placeholder="schema.table_name" />
@@ -11433,6 +11434,14 @@ export function render() {
                     <option value="month">Monthly</option>
                     <option value="quarter">Quarterly</option>
                     <option value="year">Yearly</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={labelStyle}>Sort top-N by</label>
+                  <select style={selectStyle} value={draft.topNRankBy || 'volume'} onChange={e => updateDraft('topNRankBy', e.target.value)}>
+                    <option value="volume">Metric 1</option>
+                    <option value="revenue">Metric 2</option>
+                    <option value="derived">Metric 3</option>
                   </select>
                 </div>
               </div>

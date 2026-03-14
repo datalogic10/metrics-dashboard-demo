@@ -6,8 +6,9 @@
 -- Security: validates table exists, columns exist, metrics use only whitelisted aggregate functions.
 -- No raw SQL passthrough — all queries are constructed server-side from structured parameters.
 
--- Drop old signature (10 params) to avoid ambiguity with new 11-param version
+-- Drop old signatures to avoid ambiguity
 DROP FUNCTION IF EXISTS public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer);
+DROP FUNCTION IF EXISTS public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer, integer);
 
 CREATE OR REPLACE FUNCTION public.query_dataset(
   p_table text,                       -- dataset name (mapped to actual table internally)
@@ -20,7 +21,8 @@ CREATE OR REPLACE FUNCTION public.query_dataset(
   p_date_column text DEFAULT NULL,    -- date column to apply time grain to
   p_order_by text DEFAULT NULL,       -- 'alias ASC/DESC'
   p_limit integer DEFAULT 10000,
-  p_top_n integer DEFAULT NULL        -- top N categories for first group_by column; rest bucketed as 'Rest Combined'
+  p_top_n integer DEFAULT NULL,       -- top N categories for first group_by column; rest bucketed as 'Rest Combined'
+  p_rank_by text DEFAULT NULL         -- metric alias to rank top-N by (defaults to first metric)
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -47,7 +49,10 @@ DECLARE
   v_top_n_col text;               -- first group_by column when p_top_n is used
   v_top_n_expr text;              -- CASE WHEN expression for top-N bucketing
   v_first_metric_alias text;      -- unused, kept for backward compat
-  v_first_metric_rank_expr text := 'COUNT(*)'; -- ranking expression for top-N CTE
+  v_first_metric_rank_expr text := 'COUNT(*)'; -- ranking expression for top-N CTE (default = first metric)
+  v_rank_aliases text[] := '{}'; -- parallel arrays: metric alias → rank expression
+  v_rank_exprs text[] := '{}';
+  v_j integer;
   v_cte_sql text := NULL;         -- WITH clause for top-N (built after WHERE parts)
   v_top_n_applied boolean := false;
 BEGIN
@@ -148,21 +153,33 @@ BEGIN
       CASE v_metric_rec->>'type'
         WHEN 'count' THEN
           v_select_parts := array_append(v_select_parts, format('COUNT(*) AS %I', v_metric_rec->>'alias'));
+          v_rank_aliases := array_append(v_rank_aliases, v_metric_rec->>'alias');
+          v_rank_exprs   := array_append(v_rank_exprs,   'COUNT(*)');
           IF v_i = 0 THEN v_first_metric_rank_expr := 'COUNT(*)'; END IF;
         WHEN 'count_distinct' THEN
           v_select_parts := array_append(v_select_parts, format('COUNT(DISTINCT %I) AS %I', v_metric_rec->>'column', v_metric_rec->>'alias'));
+          v_rank_aliases := array_append(v_rank_aliases, v_metric_rec->>'alias');
+          v_rank_exprs   := array_append(v_rank_exprs,   format('COUNT(DISTINCT %I)', v_metric_rec->>'column'));
           IF v_i = 0 THEN v_first_metric_rank_expr := format('COUNT(DISTINCT %I)', v_metric_rec->>'column'); END IF;
         WHEN 'sum' THEN
           v_select_parts := array_append(v_select_parts, format('COALESCE(SUM(%I), 0) AS %I', v_metric_rec->>'column', v_metric_rec->>'alias'));
+          v_rank_aliases := array_append(v_rank_aliases, v_metric_rec->>'alias');
+          v_rank_exprs   := array_append(v_rank_exprs,   format('COALESCE(SUM(%I), 0)', v_metric_rec->>'column'));
           IF v_i = 0 THEN v_first_metric_rank_expr := format('COALESCE(SUM(%I), 0)', v_metric_rec->>'column'); END IF;
         WHEN 'avg' THEN
           v_select_parts := array_append(v_select_parts, format('AVG(%I) AS %I', v_metric_rec->>'column', v_metric_rec->>'alias'));
+          v_rank_aliases := array_append(v_rank_aliases, v_metric_rec->>'alias');
+          v_rank_exprs   := array_append(v_rank_exprs,   format('AVG(%I)', v_metric_rec->>'column'));
           IF v_i = 0 THEN v_first_metric_rank_expr := format('AVG(%I)', v_metric_rec->>'column'); END IF;
         WHEN 'min' THEN
           v_select_parts := array_append(v_select_parts, format('MIN(%I) AS %I', v_metric_rec->>'column', v_metric_rec->>'alias'));
+          v_rank_aliases := array_append(v_rank_aliases, v_metric_rec->>'alias');
+          v_rank_exprs   := array_append(v_rank_exprs,   format('MIN(%I)', v_metric_rec->>'column'));
           IF v_i = 0 THEN v_first_metric_rank_expr := format('MIN(%I)', v_metric_rec->>'column'); END IF;
         WHEN 'max' THEN
           v_select_parts := array_append(v_select_parts, format('MAX(%I) AS %I', v_metric_rec->>'column', v_metric_rec->>'alias'));
+          v_rank_aliases := array_append(v_rank_aliases, v_metric_rec->>'alias');
+          v_rank_exprs   := array_append(v_rank_exprs,   format('MAX(%I)', v_metric_rec->>'column'));
           IF v_i = 0 THEN v_first_metric_rank_expr := format('MAX(%I)', v_metric_rec->>'column'); END IF;
         WHEN 'percentile' THEN
           v_select_parts := array_append(v_select_parts, format(
@@ -171,9 +188,19 @@ BEGIN
             v_metric_rec->>'column',
             v_metric_rec->>'alias'
           ));
-          -- percentile can't be used as a simple GROUP BY aggregate, keep COUNT(*) fallback
+          -- percentile can't be used as a simple GROUP BY aggregate; not added to rank lookup
       END CASE;
     END LOOP;
+
+    -- If caller specified a rank-by alias, override the default (first metric) ranking expression
+    IF p_rank_by IS NOT NULL AND array_length(v_rank_aliases, 1) > 0 THEN
+      FOR v_j IN 1..array_length(v_rank_aliases, 1) LOOP
+        IF v_rank_aliases[v_j] = p_rank_by THEN
+          v_first_metric_rank_expr := v_rank_exprs[v_j];
+          EXIT;
+        END IF;
+      END LOOP;
+    END IF;
 
     -- Time grain expression (added to SELECT and GROUP BY)
     IF p_time_grain IS NOT NULL AND p_date_column IS NOT NULL THEN
@@ -333,8 +360,8 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer, integer) TO anon;
-GRANT EXECUTE ON FUNCTION public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer, integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer, integer, text) TO anon;
+GRANT EXECUTE ON FUNCTION public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer, integer, text) TO authenticated;
 
 COMMENT ON FUNCTION public.query_dataset IS
   'Generic query endpoint for the Metrics Dashboard. Actions: schema (column discovery), distinct (filter values), data (aggregated metrics).';
