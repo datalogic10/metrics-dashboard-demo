@@ -4811,6 +4811,16 @@ var __app = (() => {
       (rows) => calculateMetricValue(rows, metric),
       [metric, calculateMetricValue]
     );
+    const resolveChartType = React.useCallback((metricName) => {
+      if (isLiveMode && liveMetricConfig) {
+        const prefix = metricName === "Volume" ? "volume" : metricName === "Revenue" ? "revenue" : "derived";
+        const configuredType = liveMetricConfig[prefix + "ChartType"] || "auto";
+        if (configuredType !== "auto") return configuredType;
+        const mode = liveMetricConfig[prefix + "Mode"] || "aggregation";
+        return mode === "formula" ? "line" : "stacked";
+      }
+      return metricName === "Margin Rate" ? "line" : "stacked";
+    }, [isLiveMode, liveMetricConfig]);
     const formatMetricValue = React.useCallback((value, metricName) => {
       if (isLiveMode && liveMetricConfig) {
         if (metricName === "Volume") {
@@ -6872,7 +6882,8 @@ var __app = (() => {
             return formatMetric(value) + "<br>" + percentage.toFixed(1) + "%";
           });
           const categoryColor = getCategoryColor(category, index);
-          if (metric === "Margin Rate") {
+          const chartType = resolveChartType(metric);
+          if (chartType === "line") {
             chartData2.push({
               type: "scatter",
               mode: "lines+markers",
@@ -6916,7 +6927,7 @@ var __app = (() => {
               hovertemplate: category + "<br>%{customdata}<extra></extra>"
             });
           }
-          if (metric !== "Margin Rate") {
+          if (chartType !== "line") {
             const shares = sharePercentages[category] || [];
             chartData2.push({
               type: "scatter",
@@ -7030,12 +7041,13 @@ var __app = (() => {
             });
           }
         });
-        const referenceLineData = metric === "Margin Rate" ? periods.map((period) => {
+        const splitChartType = resolveChartType(metric);
+        const referenceLineData = splitChartType === "line" ? periods.map((period) => {
           const agg = periodAggregates[period];
           if (!agg) return 0;
-          return agg["Margin Rate"] || 0;
+          return agg[metric] || 0;
         }) : null;
-        if (metric === "Margin Rate" && referenceLineData) {
+        if (splitChartType === "line" && referenceLineData) {
           chartData2.push({
             type: "scatter",
             mode: "lines+markers",
@@ -7062,7 +7074,7 @@ var __app = (() => {
             text: titleText,
             font: { size: 16, color: "#374151" }
           },
-          barmode: metric === "Margin Rate" ? void 0 : "relative",
+          barmode: splitChartType === "line" ? void 0 : splitChartType === "grouped" ? "group" : "relative",
           showlegend: showLegend,
           legend: {
             x: 1.02,
@@ -7093,7 +7105,7 @@ var __app = (() => {
           },
           yaxis: {
             title: {
-              text: isLiveMode ? METRIC_LABELS[metric] || metric : metric === "Margin Rate" ? "Basis Points" : "USD",
+              text: isLiveMode ? METRIC_LABELS[metric] || metric : splitChartType === "line" ? "Basis Points" : "USD",
               font: { size: 14, color: "#374151" }
             },
             tickfont: { color: "#6b7280" },
@@ -7131,7 +7143,7 @@ var __app = (() => {
           },
           hovermode: "x unified"
         };
-        if (metric !== "Margin Rate") {
+        if (splitChartType !== "line") {
           chartLayout2.yaxis2 = {
             title: {
               text: "% Share / %Growth YoY",
@@ -7288,25 +7300,37 @@ var __app = (() => {
           }
           return MODERN_COLOR_PALETTE[0];
         });
-        chartData2 = [
-          {
-            type: "bar",
-            x: periods,
-            y: barData,
-            name: metric,
-            marker: {
-              color: barColors,
-              line: { color: "rgba(255,255,255,0.3)", width: 0.5 },
-              opacity: 0.85
-            },
-            text: textAnnotations,
-            textposition: "outside",
-            textfont: { color: theme.textPrimary, size: 11 },
-            customdata: barData.map((value) => formatMetricValue(value, metric)),
-            hovertemplate: "%{customdata}<extra></extra>"
+        const overallChartType = resolveChartType(metric);
+        const mainTrace = overallChartType === "line" ? {
+          type: "scatter",
+          mode: "lines+markers",
+          x: periods,
+          y: barData,
+          name: metric,
+          line: { color: MODERN_COLOR_PALETTE[0], width: 2.5, shape: "spline", smoothing: 0.3 },
+          marker: { size: 5, color: MODERN_COLOR_PALETTE[0] },
+          text: textAnnotations,
+          textposition: "top center",
+          textfont: { color: theme.textPrimary, size: 11 },
+          customdata: barData.map((value) => formatMetricValue(value, metric)),
+          hovertemplate: "%{customdata}<extra></extra>"
+        } : {
+          type: "bar",
+          x: periods,
+          y: barData,
+          name: metric,
+          marker: {
+            color: barColors,
+            line: { color: "rgba(255,255,255,0.3)", width: 0.5 },
+            opacity: 0.85
           },
-          ...overlayTraces
-        ];
+          text: textAnnotations,
+          textposition: "outside",
+          textfont: { color: theme.textPrimary, size: 11 },
+          customdata: barData.map((value) => formatMetricValue(value, metric)),
+          hovertemplate: "%{customdata}<extra></extra>"
+        };
+        chartData2 = [mainTrace, ...overlayTraces];
         chartLayout2 = {
           title: {
             text: getSimpleChartTitle(),
@@ -7330,7 +7354,7 @@ var __app = (() => {
           },
           yaxis: {
             title: {
-              text: isLiveMode ? METRIC_LABELS[metric] || metric : metric === "Margin Rate" ? "Basis Points" : "USD",
+              text: isLiveMode ? METRIC_LABELS[metric] || metric : overallChartType === "line" ? "Basis Points" : "USD",
               font: { size: 14, color: "#374151" }
             },
             tickfont: { color: "#6b7280" },
@@ -10096,6 +10120,7 @@ var __app = (() => {
         const fDenAggKey = prefix + "FormulaDenAggType";
         const fDenColKey = prefix + "FormulaDenColumn";
         const fDenPctKey = prefix + "FormulaDenPercentile";
+        const chartTypeKey = prefix + "ChartType";
         const mode = draft[modeKey] || "aggregation";
         const isExpanded = expandedMetricSlot === prefix;
         const summaryParts = [];
@@ -10215,7 +10240,33 @@ var __app = (() => {
           /* @__PURE__ */ React.createElement("option", { value: "*" }, "\xD7"),
           /* @__PURE__ */ React.createElement("option", { value: "+" }, "+"),
           /* @__PURE__ */ React.createElement("option", { value: "-" }, "\u2212")
-        )), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", fontWeight: 600, marginBottom: "4px", color: isDarkMode ? "#9ca3af" : "#6b7280" } }, "Denominator"), renderAggRow(fDenAggKey, fDenColKey, fDenPctKey, false)), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", gap: "6px", marginTop: "8px" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Label"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft[labelKey] || "", onChange: (e) => updateDraft(labelKey, e.target.value), placeholder: "e.g. Total" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Format"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft[formatKey] || "", onChange: (e) => updateDraft(formatKey, e.target.value), placeholder: "0,0" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Prefix"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft[prefixKey] || "", onChange: (e) => updateDraft(prefixKey, e.target.value), placeholder: "$" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Suffix"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft[suffixKey] || "", onChange: (e) => updateDraft(suffixKey, e.target.value), placeholder: "ms" })))));
+        )), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", fontWeight: 600, marginBottom: "4px", color: isDarkMode ? "#9ca3af" : "#6b7280" } }, "Denominator"), renderAggRow(fDenAggKey, fDenColKey, fDenPctKey, false)), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", gap: "6px", marginTop: "8px" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Label"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft[labelKey] || "", onChange: (e) => updateDraft(labelKey, e.target.value), placeholder: "e.g. Total" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Format"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft[formatKey] || "", onChange: (e) => updateDraft(formatKey, e.target.value), placeholder: "0,0" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Prefix"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft[prefixKey] || "", onChange: (e) => updateDraft(prefixKey, e.target.value), placeholder: "$" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Suffix"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft[suffixKey] || "", onChange: (e) => updateDraft(suffixKey, e.target.value), placeholder: "ms" }))), /* @__PURE__ */ React.createElement("div", { style: { marginTop: "8px", display: "flex", alignItems: "center", gap: "6px" } }, /* @__PURE__ */ React.createElement("label", { style: { ...labelStyle, marginBottom: 0, whiteSpace: "nowrap" } }, "Chart"), [
+          { value: "auto", label: "Auto" },
+          { value: "stacked", label: "Stacked" },
+          { value: "grouped", label: "Grouped" },
+          { value: "line", label: "Line" }
+        ].map((opt) => {
+          const current = draft[chartTypeKey] || "auto";
+          const isActive = current === opt.value;
+          return /* @__PURE__ */ React.createElement(
+            "button",
+            {
+              key: opt.value,
+              onClick: () => updateDraft(chartTypeKey, opt.value),
+              style: {
+                padding: "2px 10px",
+                fontSize: "11px",
+                borderRadius: "4px",
+                cursor: "pointer",
+                fontWeight: 500,
+                border: `1px solid ${isActive ? isDarkMode ? "#6366f1" : "#818cf8" : isDarkMode ? "#4b5563" : "#d1d5db"}`,
+                backgroundColor: isActive ? isDarkMode ? "rgba(99,102,241,0.2)" : "rgba(99,102,241,0.1)" : "transparent",
+                color: isActive ? isDarkMode ? "#a5b4fc" : "#4f46e5" : isDarkMode ? "#9ca3af" : "#6b7280"
+              }
+            },
+            opt.label
+          );
+        }), (draft[chartTypeKey] || "auto") === "auto" && /* @__PURE__ */ React.createElement("span", { style: { fontSize: "10px", color: isDarkMode ? "#6b7280" : "#9ca3af" } }, "(", mode === "formula" ? "line" : "stacked", ")"))));
       }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginBottom: "16px" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Dataset (table name)"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.dataset || activeTab?.dataset || "", onChange: (e) => updateDraft("dataset", e.target.value), placeholder: "schema.table_name" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Date Column"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.dateColumn || "", onChange: (e) => updateDraft("dateColumn", e.target.value || null) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u2014 none \u2014"), dateCols.map((c) => /* @__PURE__ */ React.createElement("option", { key: c.name, value: c.name }, c.name))))), /* @__PURE__ */ React.createElement("div", { style: sectionStyle }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "13px", fontWeight: 700, color: isDarkMode ? "#f3f4f6" : "#111827" } }, "Dimensions & Filters"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: "8px" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", liveSchemaClassified.dimensions.map((c) => c.name)), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "All"), /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", []), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "None"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } }, liveSchemaClassified.dimensions.map((c) => {
         const visible = draft.visibleDimensions ? draft.visibleDimensions.includes(c.name) : true;
         const label = c.name.replace(/^is_/, "").replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());

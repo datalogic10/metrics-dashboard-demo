@@ -4288,6 +4288,21 @@ export function render() {
   );
 
   // 🆕 NEW: InsightContextBanner Component - displays context banner for drill-down
+  // Resolve effective chart type for a metric: "stacked" | "grouped" | "line"
+  // In live mode, reads from config with auto-detection. In demo mode, Margin Rate is always line.
+  const resolveChartType = React.useCallback((metricName) => {
+    if (isLiveMode && liveMetricConfig) {
+      const prefix = metricName === 'Volume' ? 'volume' : metricName === 'Revenue' ? 'revenue' : 'derived';
+      const configuredType = liveMetricConfig[prefix + 'ChartType'] || 'auto';
+      if (configuredType !== 'auto') return configuredType;
+      // Auto: formula mode → line, otherwise stacked
+      const mode = liveMetricConfig[prefix + 'Mode'] || 'aggregation';
+      return mode === 'formula' ? 'line' : 'stacked';
+    }
+    // Demo mode: Margin Rate is line, others are stacked
+    return metricName === 'Margin Rate' ? 'line' : 'stacked';
+  }, [isLiveMode, liveMetricConfig]);
+
   const formatMetricValue = React.useCallback((value, metricName) => {
     // Live mode: use metric config formatting with prefix/suffix
     if (isLiveMode && liveMetricConfig) {
@@ -7174,7 +7189,8 @@ export function render() {
         const categoryColor = getCategoryColor(category, index);
 
         // Add main metric trace (bar or line)
-        if (metric === "Margin Rate") {
+        const chartType = resolveChartType(metric);
+        if (chartType === "line") {
           chartData.push({
             type: "scatter",
             mode: "lines+markers",
@@ -7219,8 +7235,8 @@ export function render() {
           });
         }
 
-        // Add %Share and %Growth YoY traces for this category (only for Volume and Revenue)
-        if (metric !== "Margin Rate") {
+        // Add %Share and %Growth YoY traces — only for bar metrics (not line/ratio metrics)
+        if (chartType !== "line") {
           const shares = sharePercentages[category] || [];
 
           // Add %Share trace
@@ -7357,18 +7373,19 @@ export function render() {
         }
       });
 
-      // Calculate reference line data for Margin Rate (overall weighted average per period)
+      // Calculate reference line data for line metrics (overall average per period)
+      const splitChartType = resolveChartType(metric);
       const referenceLineData =
-        metric === "Margin Rate"
+        splitChartType === "line"
           ? periods.map((period) => {
               const agg = periodAggregates[period];
               if (!agg) return 0;
-              return agg["Margin Rate"] || 0;
+              return agg[metric] || 0;
             })
           : null;
 
-      // Add reference line trace for Margin Rate
-      if (metric === "Margin Rate" && referenceLineData) {
+      // Add reference line trace for line metrics
+      if (splitChartType === "line" && referenceLineData) {
         chartData.push({
           type: "scatter",
           mode: "lines+markers",
@@ -7400,7 +7417,7 @@ export function render() {
           text: titleText,
           font: { size: 16, color: "#374151" },
         },
-        barmode: metric === "Margin Rate" ? undefined : "relative",
+        barmode: splitChartType === "line" ? undefined : splitChartType === "grouped" ? "group" : "relative",
         showlegend: showLegend,
         legend: {
           x: 1.02,
@@ -7429,7 +7446,7 @@ export function render() {
         },
         yaxis: {
           title: {
-            text: isLiveMode ? (METRIC_LABELS[metric] || metric) : (metric === "Margin Rate" ? "Basis Points" : "USD"),
+            text: isLiveMode ? (METRIC_LABELS[metric] || metric) : (splitChartType === "line" ? "Basis Points" : "USD"),
             font: { size: 14, color: "#374151" },
           },
           tickfont: { color: "#6b7280" },
@@ -7479,8 +7496,8 @@ export function render() {
         hovermode: "x unified",
       };
 
-      // Add secondary y-axis for %Share and %Growth YoY (only for Volume and Revenue)
-      if (metric !== "Margin Rate") {
+      // Add secondary y-axis for %Share and %Growth YoY (only for bar metrics)
+      if (splitChartType !== "line") {
         chartLayout.yaxis2 = {
           title: {
             text: "% Share / %Growth YoY",
@@ -7655,25 +7672,40 @@ export function render() {
         return MODERN_COLOR_PALETTE[0]; // Primary color for all other bars
       });
 
-      chartData = [
-        {
-          type: "bar",
-          x: periods,
-          y: barData,
-          name: metric,
-          marker: {
-            color: barColors,
-            line: { color: "rgba(255,255,255,0.3)", width: 0.5 },
-            opacity: 0.85,
-          },
-          text: textAnnotations,
-          textposition: "outside",
-          textfont: { color: theme.textPrimary, size: 11 },
-          customdata: barData.map((value) => formatMetricValue(value, metric)),
-          hovertemplate: "%{customdata}<extra></extra>",
-        },
-        ...overlayTraces,
-      ];
+      const overallChartType = resolveChartType(metric);
+      const mainTrace = overallChartType === "line"
+        ? {
+            type: "scatter",
+            mode: "lines+markers",
+            x: periods,
+            y: barData,
+            name: metric,
+            line: { color: MODERN_COLOR_PALETTE[0], width: 2.5, shape: "spline", smoothing: 0.3 },
+            marker: { size: 5, color: MODERN_COLOR_PALETTE[0] },
+            text: textAnnotations,
+            textposition: "top center",
+            textfont: { color: theme.textPrimary, size: 11 },
+            customdata: barData.map((value) => formatMetricValue(value, metric)),
+            hovertemplate: "%{customdata}<extra></extra>",
+          }
+        : {
+            type: "bar",
+            x: periods,
+            y: barData,
+            name: metric,
+            marker: {
+              color: barColors,
+              line: { color: "rgba(255,255,255,0.3)", width: 0.5 },
+              opacity: 0.85,
+            },
+            text: textAnnotations,
+            textposition: "outside",
+            textfont: { color: theme.textPrimary, size: 11 },
+            customdata: barData.map((value) => formatMetricValue(value, metric)),
+            hovertemplate: "%{customdata}<extra></extra>",
+          };
+
+      chartData = [mainTrace, ...overlayTraces];
 
       chartLayout = {
         title: {
@@ -7697,7 +7729,7 @@ export function render() {
         },
         yaxis: {
           title: {
-            text: isLiveMode ? (METRIC_LABELS[metric] || metric) : (metric === "Margin Rate" ? "Basis Points" : "USD"),
+            text: isLiveMode ? (METRIC_LABELS[metric] || metric) : (overallChartType === "line" ? "Basis Points" : "USD"),
             font: { size: 14, color: "#374151" },
           },
           tickfont: { color: "#6b7280" },
@@ -11148,6 +11180,7 @@ export function render() {
                 const fDenAggKey = prefix + 'FormulaDenAggType';
                 const fDenColKey = prefix + 'FormulaDenColumn';
                 const fDenPctKey = prefix + 'FormulaDenPercentile';
+                const chartTypeKey = prefix + 'ChartType';
                 const mode = draft[modeKey] || 'aggregation';
                 const isExpanded = expandedMetricSlot === prefix;
 
@@ -11318,6 +11351,37 @@ export function render() {
                             <label style={labelStyle}>Suffix</label>
                             <input style={inputStyle} value={draft[suffixKey] || ''} onChange={e => updateDraft(suffixKey, e.target.value)} placeholder="ms" />
                           </div>
+                        </div>
+                        {/* Chart Type pills */}
+                        <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <label style={{ ...labelStyle, marginBottom: 0, whiteSpace: 'nowrap' }}>Chart</label>
+                          {[
+                            { value: 'auto', label: 'Auto' },
+                            { value: 'stacked', label: 'Stacked' },
+                            { value: 'grouped', label: 'Grouped' },
+                            { value: 'line', label: 'Line' },
+                          ].map(opt => {
+                            const current = draft[chartTypeKey] || 'auto';
+                            const isActive = current === opt.value;
+                            return (
+                              <button key={opt.value}
+                                onClick={() => updateDraft(chartTypeKey, opt.value)}
+                                style={{
+                                  padding: '2px 10px', fontSize: '11px', borderRadius: '4px', cursor: 'pointer', fontWeight: 500,
+                                  border: `1px solid ${isActive ? (isDarkMode ? '#6366f1' : '#818cf8') : (isDarkMode ? '#4b5563' : '#d1d5db')}`,
+                                  backgroundColor: isActive ? (isDarkMode ? 'rgba(99,102,241,0.2)' : 'rgba(99,102,241,0.1)') : 'transparent',
+                                  color: isActive ? (isDarkMode ? '#a5b4fc' : '#4f46e5') : (isDarkMode ? '#9ca3af' : '#6b7280'),
+                                }}
+                              >
+                                {opt.label}
+                              </button>
+                            );
+                          })}
+                          {(draft[chartTypeKey] || 'auto') === 'auto' && (
+                            <span style={{ fontSize: '10px', color: isDarkMode ? '#6b7280' : '#9ca3af' }}>
+                              ({mode === 'formula' ? 'line' : 'stacked'})
+                            </span>
+                          )}
                         </div>
                       </div>
                     )}
