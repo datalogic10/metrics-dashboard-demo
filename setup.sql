@@ -44,9 +44,11 @@ DECLARE
   v_i integer;
   v_time_expr text;
   v_allowed_types text[] := ARRAY['count', 'count_distinct', 'sum', 'avg', 'min', 'max', 'percentile'];
-  v_top_n_col text;          -- first group_by column when p_top_n is used
-  v_top_n_expr text;         -- CASE WHEN expression for top-N bucketing
-  v_first_metric_alias text; -- alias of first metric (used for top-N ranking)
+  v_top_n_col text;               -- first group_by column when p_top_n is used
+  v_top_n_expr text;              -- CASE WHEN expression for top-N bucketing
+  v_first_metric_alias text;      -- unused, kept for backward compat
+  v_first_metric_rank_expr text := 'COUNT(*)'; -- ranking expression for top-N CTE
+  v_cte_sql text := NULL;         -- WITH clause for top-N (built after WHERE parts)
   v_top_n_applied boolean := false;
 BEGIN
   -- ===== TABLE RESOLUTION =====
@@ -146,16 +148,22 @@ BEGIN
       CASE v_metric_rec->>'type'
         WHEN 'count' THEN
           v_select_parts := array_append(v_select_parts, format('COUNT(*) AS %I', v_metric_rec->>'alias'));
+          IF v_i = 0 THEN v_first_metric_rank_expr := 'COUNT(*)'; END IF;
         WHEN 'count_distinct' THEN
           v_select_parts := array_append(v_select_parts, format('COUNT(DISTINCT %I) AS %I', v_metric_rec->>'column', v_metric_rec->>'alias'));
+          IF v_i = 0 THEN v_first_metric_rank_expr := format('COUNT(DISTINCT %I)', v_metric_rec->>'column'); END IF;
         WHEN 'sum' THEN
           v_select_parts := array_append(v_select_parts, format('COALESCE(SUM(%I), 0) AS %I', v_metric_rec->>'column', v_metric_rec->>'alias'));
+          IF v_i = 0 THEN v_first_metric_rank_expr := format('COALESCE(SUM(%I), 0)', v_metric_rec->>'column'); END IF;
         WHEN 'avg' THEN
           v_select_parts := array_append(v_select_parts, format('AVG(%I) AS %I', v_metric_rec->>'column', v_metric_rec->>'alias'));
+          IF v_i = 0 THEN v_first_metric_rank_expr := format('AVG(%I)', v_metric_rec->>'column'); END IF;
         WHEN 'min' THEN
           v_select_parts := array_append(v_select_parts, format('MIN(%I) AS %I', v_metric_rec->>'column', v_metric_rec->>'alias'));
+          IF v_i = 0 THEN v_first_metric_rank_expr := format('MIN(%I)', v_metric_rec->>'column'); END IF;
         WHEN 'max' THEN
           v_select_parts := array_append(v_select_parts, format('MAX(%I) AS %I', v_metric_rec->>'column', v_metric_rec->>'alias'));
+          IF v_i = 0 THEN v_first_metric_rank_expr := format('MAX(%I)', v_metric_rec->>'column'); END IF;
         WHEN 'percentile' THEN
           v_select_parts := array_append(v_select_parts, format(
             'PERCENTILE_CONT(%s) WITHIN GROUP (ORDER BY %I) AS %I',
@@ -163,6 +171,7 @@ BEGIN
             v_metric_rec->>'column',
             v_metric_rec->>'alias'
           ));
+          -- percentile can't be used as a simple GROUP BY aggregate, keep COUNT(*) fallback
       END CASE;
     END LOOP;
 
@@ -209,24 +218,13 @@ BEGIN
         RETURN jsonb_build_object('error', format('Group-by column %s does not exist', v_col));
       END IF;
 
-      -- Apply top-N bucketing to the first group_by column when p_top_n is set
+      -- Apply top-N bucketing to the first group_by column when p_top_n is set.
+      -- We only record the column here; the CASE WHEN expression is built AFTER WHERE
+      -- parts are assembled so that date/filter constraints are applied to the ranking.
       IF v_i = 1 AND p_top_n IS NOT NULL AND p_top_n > 0 THEN
         v_top_n_col := v_col;
         v_top_n_applied := true;
-        -- Build a subquery that finds the top N category values by the first metric's total
-        -- Then CASE WHEN to bucket non-top-N into 'Rest Combined'
-        v_top_n_expr := format(
-          'CASE WHEN COALESCE(%I::text, ''Unknown'') IN (' ||
-            'SELECT cat FROM (' ||
-              'SELECT COALESCE(%I::text, ''Unknown'') AS cat, COUNT(*) AS _cnt ' ||
-              'FROM %s WHERE %s GROUP BY 1 ORDER BY _cnt DESC LIMIT %s' ||
-            ') _topn' ||
-          ') THEN COALESCE(%I::text, ''Unknown'') ELSE ''Rest Combined'' END',
-          v_col, v_col, v_fqn, array_to_string(v_where_parts, ' AND '), p_top_n,
-          v_col
-        );
-        v_select_parts := array_prepend(v_top_n_expr || format(' AS %I', v_col), v_select_parts);
-        v_group_parts := array_append(v_group_parts, v_top_n_expr);
+        -- v_top_n_expr built below, after WHERE filters loop
       ELSE
         v_select_parts := array_prepend(format('COALESCE(%I::text, ''Unknown'') AS %I', v_col, v_col), v_select_parts);
         v_group_parts := array_append(v_group_parts, format('%I', v_col));
@@ -247,8 +245,29 @@ BEGIN
       END IF;
     END LOOP;
 
+    -- Build top-N CTE and CASE WHEN now that WHERE parts include all date/filter constraints.
+    -- Using a CTE ensures the top-N list is computed exactly once (deterministic).
+    IF v_top_n_applied THEN
+      v_cte_sql := format(
+        'WITH _top_n_cats AS (' ||
+          'SELECT COALESCE(%I::text, ''Unknown'') AS cat, %s AS _cnt ' ||
+          'FROM %s WHERE %s GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT %s' ||
+        ')',
+        v_top_n_col, v_first_metric_rank_expr, v_fqn,
+        array_to_string(v_where_parts, ' AND '), p_top_n
+      );
+      v_top_n_expr := format(
+        'CASE WHEN COALESCE(%I::text, ''Unknown'') IN (SELECT cat FROM _top_n_cats) ' ||
+        'THEN COALESCE(%I::text, ''Unknown'') ELSE ''Rest Combined'' END',
+        v_top_n_col, v_top_n_col
+      );
+      v_select_parts := array_prepend(v_top_n_expr || format(' AS %I', v_top_n_col), v_select_parts);
+      v_group_parts := array_append(v_group_parts, v_top_n_expr);
+    END IF;
+
     -- Assemble and execute
-    v_sql := 'SELECT jsonb_agg(row_to_json(sub)), count(*) FROM (' ||
+    v_sql := COALESCE(v_cte_sql || ' ', '') ||
+      'SELECT jsonb_agg(row_to_json(sub)), count(*) FROM (' ||
       'SELECT ' || array_to_string(v_select_parts, ', ') ||
       ' FROM ' || v_fqn ||
       ' WHERE ' || array_to_string(v_where_parts, ' AND ');
