@@ -8205,17 +8205,21 @@ var __app = (() => {
       (metricName, metricStatData, isActive, accentColor, dataFrequency2, periodChangeLabel2, displayLabel) => {
         displayLabel = displayLabel || metricName;
         const periodLabel = dataFrequency2 === "Weekly" ? "Last week" : dataFrequency2 === "Monthly" ? "Last month" : dataFrequency2 === "Quarterly" ? "Last quarter" : dataFrequency2 === "Yearly" ? "Last year" : "Latest";
+        const availableComparisons = dataFrequency2 === "Daily" ? ["YoY", "DoD"] : dataFrequency2 === "Weekly" ? ["52W", "WoW"] : dataFrequency2 === "Monthly" ? ["YoY", "MoM"] : dataFrequency2 === "Quarterly" ? ["YoY", "QoQ"] : ["YoY"];
         let changeValue, changePercentValue, comparisonLabel;
-        if (activePeriodComparison === "YoY") {
+        const useYoY = activePeriodComparison === "YoY" || activePeriodComparison === "52W";
+        if (useYoY) {
           changeValue = metricStatData.yoyAbsoluteChange;
           changePercentValue = metricStatData.yoyChange;
           comparisonLabel = dataFrequency2 === "Weekly" ? "52W" : "YoY";
-        } else {
-          changeValue = metricStatData.change;
-          changePercentValue = metricStatData.changePercent;
-          comparisonLabel = periodChangeLabel2;
         }
-        const availableComparisons = dataFrequency2 === "Weekly" ? ["52W", "WoW"] : dataFrequency2 === "Monthly" ? ["YoY", "MoM"] : dataFrequency2 === "Quarterly" ? ["YoY", "QoQ"] : ["YoY"];
+        if (!useYoY || changeValue === null) {
+          if (metricStatData.change !== null) {
+            changeValue = metricStatData.change;
+            changePercentValue = metricStatData.changePercent;
+            comparisonLabel = periodChangeLabel2;
+          }
+        }
         return /* @__PURE__ */ React.createElement(
           "div",
           {

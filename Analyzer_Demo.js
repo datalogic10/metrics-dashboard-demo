@@ -8890,28 +8890,36 @@ export function render() {
           ? "Last year"
           : "Latest";
 
-      // Determine which comparison to show based on activePeriodComparison
-      let changeValue, changePercentValue, comparisonLabel;
-      if (activePeriodComparison === "YoY") {
-        changeValue = metricStatData.yoyAbsoluteChange;
-        changePercentValue = metricStatData.yoyChange;
-        comparisonLabel = dataFrequency === "Weekly" ? "52W" : "YoY";
-      } else {
-        // MoM/QoQ/WoW - use period-over-period data
-        changeValue = metricStatData.change;
-        changePercentValue = metricStatData.changePercent;
-        comparisonLabel = periodChangeLabel;
-      }
-
       // Get available comparisons based on dataFrequency
       const availableComparisons =
-        dataFrequency === "Weekly"
+        dataFrequency === "Daily"
+          ? ["YoY", "DoD"]
+          : dataFrequency === "Weekly"
           ? ["52W", "WoW"]
           : dataFrequency === "Monthly"
           ? ["YoY", "MoM"]
           : dataFrequency === "Quarterly"
           ? ["YoY", "QoQ"]
           : ["YoY"]; // Yearly only has YoY
+
+      // Determine which comparison to show based on activePeriodComparison.
+      // If the selected comparison yields null, fall back to the other option
+      // (e.g., if YoY has no data because history is <1 year, show DoD/WoW/MoM instead).
+      let changeValue, changePercentValue, comparisonLabel;
+      const useYoY = activePeriodComparison === "YoY" || activePeriodComparison === "52W";
+      if (useYoY) {
+        changeValue = metricStatData.yoyAbsoluteChange;
+        changePercentValue = metricStatData.yoyChange;
+        comparisonLabel = dataFrequency === "Weekly" ? "52W" : "YoY";
+      }
+      if (!useYoY || changeValue === null) {
+        // Use period-over-period (DoD/WoW/MoM/QoQ)
+        if (metricStatData.change !== null) {
+          changeValue = metricStatData.change;
+          changePercentValue = metricStatData.changePercent;
+          comparisonLabel = periodChangeLabel;
+        }
+      }
 
       return (
         <div
