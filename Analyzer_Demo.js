@@ -8572,19 +8572,55 @@ export function render() {
     [buildLLMSchema, applyLLMResponse, LLM_WORKER_URL]
   );
 
-  // Natural language example questions for Feeling Lucky
-  const LLM_EXAMPLE_QUESTIONS = React.useMemo(() => [
-    "How is revenue trending in EMEA?",
-    "Show me volume by product, monthly",
-    "What does margin rate look like by region over 3 years?",
-    "Compare revenue across channels quarterly",
-    "How is Enterprise Suite performing?",
-    "Break down revenue by country",
-    "Show weekly volume for Core Products",
-    "What's the revenue split by pricing type?",
-    "How does revenue break down by customer segment?",
-    "Show me quarterly margin rate trends",
-  ], []);
+  // Natural language example questions for Feeling Lucky — data-driven in live mode
+  const LLM_EXAMPLE_QUESTIONS = React.useMemo(() => {
+    if (isLiveMode && liveMetricConfig) {
+      const mLabels = [METRIC_LABELS["Volume"], METRIC_LABELS["Revenue"], METRIC_LABELS["Margin Rate"]].filter(Boolean);
+      const dimLabels = DIMENSION_DEFINITIONS.map(d => d.viewName || d.filterLabel);
+      // Collect a few real category values from the data
+      const sampleCats = [];
+      DIMENSION_DEFINITIONS.forEach(d => {
+        const col = COLUMNS[d.columnKey];
+        const totals = (dimensionCategoryTotals && dimensionCategoryTotals[col]) || {};
+        const cats = Object.keys(totals).filter(c => c && c !== 'Unknown' && c !== 'Rest Combined' && c.length < 30);
+        if (cats.length > 0) sampleCats.push(...cats.slice(0, 3));
+      });
+      const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+      const grains = ['daily', 'weekly', 'monthly', 'quarterly'];
+      const questions = [];
+      // Metric + dimension templates
+      mLabels.forEach(m => {
+        if (dimLabels.length > 0) {
+          questions.push(`How is ${m} trending by ${pick(dimLabels)}?`);
+          questions.push(`Show me ${m} by ${pick(dimLabels)}, ${pick(grains)}`);
+          questions.push(`Compare ${m} across ${pick(dimLabels)}`);
+        }
+        questions.push(`What does ${m} look like over the last year?`);
+      });
+      // Category-specific templates
+      if (sampleCats.length > 0) {
+        questions.push(`How is ${pick(sampleCats)} performing?`);
+        if (sampleCats.length > 1) questions.push(`Compare ${sampleCats[0]} vs ${sampleCats[1]}`);
+      }
+      if (dimLabels.length > 0 && mLabels.length > 0) {
+        questions.push(`Break down ${pick(mLabels)} by ${pick(dimLabels)}`);
+        questions.push(`Show ${pick(grains)} ${pick(mLabels)} trends`);
+      }
+      return questions.length > 0 ? questions : ["Show me the data trends", "Break down by category, monthly"];
+    }
+    return [
+      "How is revenue trending in EMEA?",
+      "Show me volume by product, monthly",
+      "What does margin rate look like by region over 3 years?",
+      "Compare revenue across channels quarterly",
+      "How is Enterprise Suite performing?",
+      "Break down revenue by country",
+      "Show weekly volume for Core Products",
+      "What's the revenue split by pricing type?",
+      "How does revenue break down by customer segment?",
+      "Show me quarterly margin rate trends",
+    ];
+  }, [isLiveMode, liveMetricConfig, METRIC_LABELS, DIMENSION_DEFINITIONS, COLUMNS, dimensionCategoryTotals]);
 
   // Clear query text when filters, metric, or view change (but not during state restoration or query execution)
   React.useEffect(() => {
@@ -9204,7 +9240,9 @@ export function render() {
                     <div style={styles.queryTooltipArrow}></div>
                     <div style={styles.fontWeight600}>How to Use</div>
                     <div style={styles.textGray}>
-                      Type a natural language question like "How is revenue trending in EMEA?" or click "Feeling Lucky" for examples. Press Enter or click "Ask" to query.
+                      {isLiveMode && METRIC_LABELS
+                        ? `Type a natural language question like "How is ${METRIC_LABELS["Volume"] || 'the metric'} trending${DIMENSION_DEFINITIONS.length > 0 ? ` by ${DIMENSION_DEFINITIONS[0].viewName}` : ''}?" or click "Feeling Lucky" for examples.`
+                        : 'Type a natural language question like "How is revenue trending in EMEA?" or click "Feeling Lucky" for examples. Press Enter or click "Ask" to query.'}
                     </div>
                   </div>
                 )}
@@ -9220,7 +9258,9 @@ export function render() {
                     handleLLMQuery(queryText);
                   }
                 }}
-                placeholder="Ask a question... e.g. How is revenue trending in EMEA?"
+                placeholder={isLiveMode && METRIC_LABELS
+                  ? `Ask a question... e.g. How is ${METRIC_LABELS["Volume"] || 'the metric'} trending${DIMENSION_DEFINITIONS.length > 0 ? ` by ${DIMENSION_DEFINITIONS[0].viewName}` : ''}?`
+                  : "Ask a question... e.g. How is revenue trending in EMEA?"}
                 disabled={isLLMLoading}
                 style={{
                   flex: 1,
