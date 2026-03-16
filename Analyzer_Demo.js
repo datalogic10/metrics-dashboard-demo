@@ -4793,23 +4793,38 @@ export function render() {
 
     // Exclude last period (developing data) from insights analysis
     const completePeriods = periods.slice(0, -1);
-    const completeFilteredData = filteredData.filter((row) =>
-      completePeriods.includes(row[dateField])
-    );
 
-    // Pre-group completeFilteredData by period (eliminates 13+ repeated .filter() scans)
-    const completeDataByPeriod = {};
-    for (let i = 0; i < completeFilteredData.length; i++) {
-      const row = completeFilteredData[i];
-      const period = row[dateField];
-      if (!completeDataByPeriod[period]) completeDataByPeriod[period] = [];
-      completeDataByPeriod[period].push(row);
+    // Build completeFilteredData and completeDataByPeriod:
+    // - Demo mode: filter raw rows to complete periods
+    // - Live mode: synthesize one row per period from periodAggregates (no raw rows available)
+    let completeFilteredData, completeDataByPeriod;
+    if (isLiveMode) {
+      completeFilteredData = [];
+      completeDataByPeriod = {};
+      completePeriods.forEach((period) => {
+        const agg = periodAggregates[period];
+        if (!agg) return;
+        // Synthetic row with volume/revenue columns so calculateMetric() works unchanged
+        const syntheticRow = { [dateField]: period, [COLUMNS.VOLUME]: agg.totalVolume, [COLUMNS.REVENUE]: agg.totalRevenue };
+        completeFilteredData.push(syntheticRow);
+        completeDataByPeriod[period] = [syntheticRow];
+      });
+    } else {
+      completeFilteredData = filteredData.filter((row) =>
+        completePeriods.includes(row[dateField])
+      );
+      completeDataByPeriod = {};
+      for (let i = 0; i < completeFilteredData.length; i++) {
+        const row = completeFilteredData[i];
+        const period = row[dateField];
+        if (!completeDataByPeriod[period]) completeDataByPeriod[period] = [];
+        completeDataByPeriod[period].push(row);
+      }
     }
 
-    // 🚀 PERFORMANCE: Single-pass pre-computation of aggregates per dimension×category×period.
-    // Eliminates hundreds of O(N) data scans (calculateCategoryRevShare, category grouping,
-    // period filtering, calculateMetric on filtered subsets) and replaces them with O(1) lookups.
-    // Net savings: ~20x for 13 dimensions × many categories.
+    // Pre-computation of aggregates per dimension×category×period.
+    // - Demo mode: single-pass scan of raw rows
+    // - Live mode: built from dimensionAggregates (already server-aggregated)
     const activeDimColumns = DIMENSION_DEFINITIONS
       .filter((dim) => columnExists(COLUMNS[dim.columnKey]))
       .map((dim) => COLUMNS[dim.columnKey]);
@@ -4817,30 +4832,56 @@ export function render() {
     activeDimColumns.forEach((col) => {
       precomputed[col] = {};
     });
-    for (let i = 0; i < completeFilteredData.length; i++) {
-      const row = completeFilteredData[i];
-      const period = row[dateField];
-      const volume = row[COLUMNS.VOLUME] || 0;
-      const revenue =
-        row[COLUMNS.REVENUE] || 0;
-      for (let d = 0; d < activeDimColumns.length; d++) {
-        const col = activeDimColumns[d];
-        const val = row[col];
-        if (!val) continue;
-        let cat = precomputed[col][val];
-        if (!cat) {
-          cat = { totalVolume: 0, totalRevenue: 0, byPeriod: {} };
-          precomputed[col][val] = cat;
+
+    if (isLiveMode) {
+      // Build precomputed from dimensionAggregates: {col: {period: {category: {totalVolume, totalRevenue, ...}}}}
+      activeDimColumns.forEach((col) => {
+        const dimPeriods = dimensionAggregates[col] || {};
+        Object.keys(dimPeriods).forEach((period) => {
+          if (!completePeriods.includes(period)) return;
+          const cats = dimPeriods[period];
+          Object.keys(cats).forEach((val) => {
+            if (!val || val === 'Unknown') return;
+            const catAgg = cats[val];
+            let cat = precomputed[col][val];
+            if (!cat) {
+              cat = { totalVolume: 0, totalRevenue: 0, byPeriod: {} };
+              precomputed[col][val] = cat;
+            }
+            const vol = catAgg.totalVolume || 0;
+            const rev = catAgg.totalRevenue || 0;
+            cat.totalVolume += vol;
+            cat.totalRevenue += rev;
+            cat.byPeriod[period] = { volume: vol, revenue: rev };
+          });
+        });
+      });
+    } else {
+      for (let i = 0; i < completeFilteredData.length; i++) {
+        const row = completeFilteredData[i];
+        const period = row[dateField];
+        const volume = row[COLUMNS.VOLUME] || 0;
+        const revenue =
+          row[COLUMNS.REVENUE] || 0;
+        for (let d = 0; d < activeDimColumns.length; d++) {
+          const col = activeDimColumns[d];
+          const val = row[col];
+          if (!val) continue;
+          let cat = precomputed[col][val];
+          if (!cat) {
+            cat = { totalVolume: 0, totalRevenue: 0, byPeriod: {} };
+            precomputed[col][val] = cat;
+          }
+          cat.totalVolume += volume;
+          cat.totalRevenue += revenue;
+          let pAgg = cat.byPeriod[period];
+          if (!pAgg) {
+            pAgg = { volume: 0, revenue: 0 };
+            cat.byPeriod[period] = pAgg;
+          }
+          pAgg.volume += volume;
+          pAgg.revenue += revenue;
         }
-        cat.totalVolume += volume;
-        cat.totalRevenue += revenue;
-        let pAgg = cat.byPeriod[period];
-        if (!pAgg) {
-          pAgg = { volume: 0, revenue: 0 };
-          cat.byPeriod[period] = pAgg;
-        }
-        pAgg.volume += volume;
-        pAgg.revenue += revenue;
       }
     }
     // Compute metric from pre-aggregated volume/revenue (matches calculateMetricValue logic)
@@ -5639,7 +5680,8 @@ export function render() {
         },
       ];
 
-      crossDimensionalCombos.forEach((combo) => {
+      // Cross-dimensional combos require raw rows (multi-column grouping) — skip in live mode
+      if (!isLiveMode) crossDimensionalCombos.forEach((combo) => {
         const hasVariation = combo.filters.some(
           (filter) => Array.isArray(filter) && filter.length === 0
         );
@@ -6140,6 +6182,9 @@ export function render() {
     productGroupFilter,
     productSubFilter,
     insightContext, // 🆕 CRITICAL: Must include insightContext so insights regenerate when drilling down
+    isLiveMode,
+    periodAggregates,
+    dimensionAggregates,
   ]);
 
   // Filter insights based on selected Split By dimension (view)
