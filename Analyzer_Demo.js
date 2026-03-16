@@ -4765,7 +4765,7 @@ export function render() {
   );
 
   const generateStructuredInsights = (tabType) => {
-    if (isLiveMode || periods.length < 3 || filteredData.length === 0) {
+    if (periods.length < 3 || (!isLiveMode && filteredData.length === 0)) {
       return {
         basicInsights: {
           decomposition: [], // 🆕 NEW
