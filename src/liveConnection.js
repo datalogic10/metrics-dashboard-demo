@@ -254,7 +254,8 @@ export function transformToPeriodAggregates(rows, hasMetric3, formulaConfigs) {
 }
 
 // Transform flat RPC rows into dimensionAggregates format (single dimension)
-export function transformToDimensionAggregates(rows, dimColumn, hasMetric3, formulaConfigs) {
+export function transformToDimensionAggregates(rows, dimColumn, hasMetric3, formulaConfigs, boolColumns) {
+  const isBoolDim = boolColumns && boolColumns.has(dimColumn);
   const aggs = {};
   const categoryTotals = {};
   aggs[dimColumn] = {};
@@ -263,7 +264,10 @@ export function transformToDimensionAggregates(rows, dimColumn, hasMetric3, form
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const period = row.period;
-    const category = row[dimColumn] || "Unknown";
+    const rawCat = row[dimColumn];
+    const category = rawCat == null ? "Unknown"
+      : isBoolDim ? dimColumn + '_' + String(rawCat).toLowerCase()
+      : rawCat || "Unknown";
     const vol = resolveMetric(row, 'volume', formulaConfigs);
     const rev = resolveMetric(row, 'revenue', formulaConfigs);
     let m3;

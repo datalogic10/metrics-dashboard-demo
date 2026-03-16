@@ -1272,6 +1272,12 @@ export function render() {
     return liveSchemaClassified.dimensions.filter(c => visible.includes(c.name));
   }, [liveSchemaClassified.dimensions, liveMetricConfig]);
 
+  // Detect boolean columns from schema (udt 'bool') for display-friendly labels
+  const liveBooleanColumns = React.useMemo(() => {
+    if (!liveColumnMeta) return new Set();
+    return new Set(liveColumnMeta.filter(c => c.udt === 'bool').map(c => c.name));
+  }, [liveColumnMeta]);
+
 
 
   // ===== STARTUP: FETCH SCHEMA + DISTINCT VALUES =====
@@ -1334,17 +1340,26 @@ export function render() {
           return true;
         });
 
+        // Identify boolean columns to prefix values with column name
+        const boolCols = new Set(columns.filter(c => c.udt === 'bool').map(c => c.name));
+
         return Promise.all(
           dimCols.map(c =>
             cachedQuery('distinct', { p_column: c.name })
-              .then(r => ({ column: c.name, values: r.values || [] }))
-              .catch(() => ({ column: c.name, values: [] }))
+              .then(r => ({ column: c.name, values: r.values || [], isBool: boolCols.has(c.name) }))
+              .catch(() => ({ column: c.name, values: [], isBool: boolCols.has(c.name) }))
           )
         );
       })
       .then(distinctResults => {
         const filterOpts = {};
-        distinctResults.forEach(r => { filterOpts[r.column] = r.values; });
+        distinctResults.forEach(r => {
+          if (r.isBool) {
+            filterOpts[r.column] = r.values.map(v => r.column + '_' + String(v).toLowerCase());
+          } else {
+            filterOpts[r.column] = r.values;
+          }
+        });
         setLiveFilterOptions(filterOpts);
         setLiveSchemaReady(true);
         setLiveDataLoading(false);
@@ -3490,7 +3505,15 @@ export function render() {
       if (!vals || vals.length === 0) return;
       // filterKey format: "dim_column_name_filter"
       const colName = filterKey.replace(/^dim_/, '').replace(/_filter$/, '');
-      pFilters[colName] = vals;
+      // Reverse-transform boolean display values back to raw true/false for the DB query
+      if (liveBooleanColumns.has(colName)) {
+        pFilters[colName] = vals.map(v => {
+          const suffix = v.replace(colName + '_', '');
+          return suffix === 'true' ? true : suffix === 'false' ? false : v;
+        });
+      } else {
+        pFilters[colName] = vals;
+      }
     });
 
     // Determine active dimension column for split-by view
@@ -3532,7 +3555,7 @@ export function render() {
         setLivePeriodAggregates(periodAggs);
         // Show row count from the most granular query: dimension query if active, else period query
         if (dimData && dimColumn) {
-          const dimAggs = transformToDimensionAggregates(dimData.rows || [], dimColumn, hasMetric3, formulaConfigsArg);
+          const dimAggs = transformToDimensionAggregates(dimData.rows || [], dimColumn, hasMetric3, formulaConfigsArg, liveBooleanColumns);
           setLiveDimensionAggregates(dimAggs);
           setLiveRowCount(dimData.row_count || (dimData.rows ? dimData.rows.length : 0));
           setLiveDataTruncated(!!dimData.truncated);
@@ -3548,7 +3571,7 @@ export function render() {
         console.error('[Dashboard] Aggregation fetch error:', err);
         setLiveAggLoading(false);
       });
-  }, [isLiveMode, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX]);
+  }, [isLiveMode, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX, liveBooleanColumns]);
 
   // Fetch dimension aggregates for visible dimensions when insights tab is open in live mode.
   // Uses only visibleDimensions (from Configure Metrics) and a concurrency limit of 3 to
@@ -3565,7 +3588,14 @@ export function render() {
       const vals = dynamicFilters[filterKey];
       if (!vals || vals.length === 0) return;
       const colName = filterKey.replace(/^dim_/, '').replace(/_filter$/, '');
-      pFilters[colName] = vals;
+      if (liveBooleanColumns.has(colName)) {
+        pFilters[colName] = vals.map(v => {
+          const suffix = v.replace(colName + '_', '');
+          return suffix === 'true' ? true : suffix === 'false' ? false : v;
+        });
+      } else {
+        pFilters[colName] = vals;
+      }
     });
 
     // Only fetch visible dimensions (user-configured in Configure Metrics)
@@ -3590,7 +3620,7 @@ export function render() {
         p_metrics: rpcMetrics,
         p_filters: pFilters,
       }).then(data => {
-        const aggs = transformToDimensionAggregates(data.rows || [], col, hasMetric3, formulaConfigsArg);
+        const aggs = transformToDimensionAggregates(data.rows || [], col, hasMetric3, formulaConfigsArg, liveBooleanColumns);
         Object.keys(aggs).forEach(key => {
           if (key !== '_categoryTotals') merged[key] = aggs[key];
         });
@@ -3609,7 +3639,7 @@ export function render() {
 
     return () => { cancelled = true; };
   }, [isLiveMode, activeInsightsTab, liveMetricConfig, dataFrequency, dynamicFilters,
-      visibleLiveDimensions, cachedQuery, liveDateColumn]);
+      visibleLiveDimensions, cachedQuery, liveDateColumn, liveBooleanColumns]);
 
   const periodChangeLabel = React.useMemo(() => {
     switch (dataFrequency) {
@@ -3810,14 +3840,20 @@ export function render() {
     });
     // Collect available view names from VIEW_CONFIG
     const views = ["Overall", ...Object.keys(VIEW_CONFIG)];
+    // Map internal metric keys to display labels so LLM knows what the user sees
+    const metricMap = {
+      "Volume": METRIC_LABELS["Volume"] || "Volume",
+      "Revenue": METRIC_LABELS["Revenue"] || "Revenue",
+      "Margin Rate": METRIC_LABELS["Margin Rate"] || "Margin Rate",
+    };
     return {
-      metrics: ["Revenue", "Volume", "Margin Rate"],
+      metrics: metricMap,
       views,
       dataFrequencies: isLiveMode ? ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"] : ["Weekly", "Monthly", "Quarterly", "Yearly"],
       dateRanges: ["3M", "6M", "1Y", "3Y", "All"],
       filters,
     };
-  }, [FILTER_CONFIG_STATIC, getFilterOptions, VIEW_CONFIG]);
+  }, [FILTER_CONFIG_STATIC, getFilterOptions, VIEW_CONFIG, METRIC_LABELS]);
 
   // OPTIMIZATION: Pre-compute sliced options (without "All") for rendering
   // This avoids creating new arrays on every render for each filter
@@ -8580,10 +8616,20 @@ export function render() {
     (response) => {
       isExecutingQueryRef.current = true;
 
-      // Validate and apply metric
-      const validMetrics = ["Revenue", "Volume", "Margin Rate"];
-      if (response.metric && validMetrics.includes(response.metric)) {
-        setMetric(response.metric);
+      // Validate and apply metric — accept internal keys or display labels
+      const validMetricKeys = ["Revenue", "Volume", "Margin Rate"];
+      if (response.metric) {
+        if (validMetricKeys.includes(response.metric)) {
+          setMetric(response.metric);
+        } else {
+          // LLM may return a display label — reverse-map to internal key
+          const labelToKey = Object.entries(METRIC_LABELS).find(
+            ([, label]) => label && label.toLowerCase() === response.metric.toLowerCase()
+          );
+          if (labelToKey && validMetricKeys.includes(labelToKey[0])) {
+            setMetric(labelToKey[0]);
+          }
+        }
       }
 
       // Validate and apply dataFrequency
@@ -8640,7 +8686,7 @@ export function render() {
         isExecutingQueryRef.current = false;
       }, 200);
     },
-    [FILTER_CONFIG, getFilterSetState, getFilterOptions, VIEW_CONFIG, getCategoriesForView]
+    [FILTER_CONFIG, getFilterSetState, getFilterOptions, VIEW_CONFIG, getCategoriesForView, METRIC_LABELS]
   );
 
   // Handle natural language query via LLM worker

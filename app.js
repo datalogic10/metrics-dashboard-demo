@@ -623,7 +623,8 @@ var __app = (() => {
     }
     return aggs;
   }
-  function transformToDimensionAggregates(rows, dimColumn, hasMetric3, formulaConfigs) {
+  function transformToDimensionAggregates(rows, dimColumn, hasMetric3, formulaConfigs, boolColumns) {
+    const isBoolDim = boolColumns && boolColumns.has(dimColumn);
     const aggs = {};
     const categoryTotals = {};
     aggs[dimColumn] = {};
@@ -631,7 +632,8 @@ var __app = (() => {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const period = row.period;
-      const category = row[dimColumn] || "Unknown";
+      const rawCat = row[dimColumn];
+      const category = rawCat == null ? "Unknown" : isBoolDim ? dimColumn + "_" + String(rawCat).toLowerCase() : rawCat || "Unknown";
       const vol = resolveMetric(row, "volume", formulaConfigs);
       const rev = resolveMetric(row, "revenue", formulaConfigs);
       let m3;
@@ -2437,6 +2439,10 @@ var __app = (() => {
       if (!visible || !Array.isArray(visible)) return liveSchemaClassified.dimensions;
       return liveSchemaClassified.dimensions.filter((c) => visible.includes(c.name));
     }, [liveSchemaClassified.dimensions, liveMetricConfig]);
+    const liveBooleanColumns = React.useMemo(() => {
+      if (!liveColumnMeta) return /* @__PURE__ */ new Set();
+      return new Set(liveColumnMeta.filter((c) => c.udt === "bool").map((c) => c.name));
+    }, [liveColumnMeta]);
     const loadedDatasetsRef = React.useRef(/* @__PURE__ */ new Set());
     React.useEffect(() => {
       if (!connectionParams) return;
@@ -2489,15 +2495,20 @@ var __app = (() => {
           if (c.udt === "int4" || c.udt === "int8" || c.udt === "float4" || c.udt === "float8" || c.udt === "numeric") return false;
           return true;
         });
+        const boolCols = new Set(columns.filter((c) => c.udt === "bool").map((c) => c.name));
         return Promise.all(
           dimCols.map(
-            (c) => cachedQuery("distinct", { p_column: c.name }).then((r) => ({ column: c.name, values: r.values || [] })).catch(() => ({ column: c.name, values: [] }))
+            (c) => cachedQuery("distinct", { p_column: c.name }).then((r) => ({ column: c.name, values: r.values || [], isBool: boolCols.has(c.name) })).catch(() => ({ column: c.name, values: [], isBool: boolCols.has(c.name) }))
           )
         );
       }).then((distinctResults) => {
         const filterOpts = {};
         distinctResults.forEach((r) => {
-          filterOpts[r.column] = r.values;
+          if (r.isBool) {
+            filterOpts[r.column] = r.values.map((v) => r.column + "_" + String(v).toLowerCase());
+          } else {
+            filterOpts[r.column] = r.values;
+          }
         });
         setLiveFilterOptions(filterOpts);
         setLiveSchemaReady(true);
@@ -4249,7 +4260,14 @@ var __app = (() => {
         const vals = dynamicFilters[filterKey];
         if (!vals || vals.length === 0) return;
         const colName = filterKey.replace(/^dim_/, "").replace(/_filter$/, "");
-        pFilters[colName] = vals;
+        if (liveBooleanColumns.has(colName)) {
+          pFilters[colName] = vals.map((v) => {
+            const suffix = v.replace(colName + "_", "");
+            return suffix === "true" ? true : suffix === "false" ? false : v;
+          });
+        } else {
+          pFilters[colName] = vals;
+        }
       });
       const viewConfig = view !== "Overall" ? VIEW_CONFIG[view] : null;
       const dimColumn = viewConfig ? viewConfig.column : null;
@@ -4279,7 +4297,7 @@ var __app = (() => {
         const periodAggs = transformToPeriodAggregates(periodData.rows || [], hasMetric3, formulaConfigsArg);
         setLivePeriodAggregates(periodAggs);
         if (dimData && dimColumn) {
-          const dimAggs = transformToDimensionAggregates(dimData.rows || [], dimColumn, hasMetric3, formulaConfigsArg);
+          const dimAggs = transformToDimensionAggregates(dimData.rows || [], dimColumn, hasMetric3, formulaConfigsArg, liveBooleanColumns);
           setLiveDimensionAggregates(dimAggs);
           setLiveRowCount(dimData.row_count || (dimData.rows ? dimData.rows.length : 0));
           setLiveDataTruncated(!!dimData.truncated);
@@ -4294,7 +4312,7 @@ var __app = (() => {
         console.error("[Dashboard] Aggregation fetch error:", err);
         setLiveAggLoading(false);
       });
-    }, [isLiveMode, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX]);
+    }, [isLiveMode, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX, liveBooleanColumns]);
     React.useEffect(() => {
       if (!isLiveMode || !activeInsightsTab || !liveMetricConfig) return;
       let cancelled = false;
@@ -4306,7 +4324,14 @@ var __app = (() => {
         const vals = dynamicFilters[filterKey];
         if (!vals || vals.length === 0) return;
         const colName = filterKey.replace(/^dim_/, "").replace(/_filter$/, "");
-        pFilters[colName] = vals;
+        if (liveBooleanColumns.has(colName)) {
+          pFilters[colName] = vals.map((v) => {
+            const suffix = v.replace(colName + "_", "");
+            return suffix === "true" ? true : suffix === "false" ? false : v;
+          });
+        } else {
+          pFilters[colName] = vals;
+        }
       });
       const dimCols = visibleLiveDimensions.map((d) => d.name);
       if (dimCols.length === 0) return;
@@ -4325,7 +4350,7 @@ var __app = (() => {
         p_metrics: rpcMetrics,
         p_filters: pFilters
       }).then((data) => {
-        const aggs = transformToDimensionAggregates(data.rows || [], col, hasMetric3, formulaConfigsArg);
+        const aggs = transformToDimensionAggregates(data.rows || [], col, hasMetric3, formulaConfigsArg, liveBooleanColumns);
         Object.keys(aggs).forEach((key) => {
           if (key !== "_categoryTotals") merged[key] = aggs[key];
         });
@@ -4350,7 +4375,8 @@ var __app = (() => {
       dynamicFilters,
       visibleLiveDimensions,
       cachedQuery,
-      liveDateColumn
+      liveDateColumn,
+      liveBooleanColumns
     ]);
     const periodChangeLabel = React.useMemo(() => {
       switch (dataFrequency) {
@@ -4492,14 +4518,19 @@ var __app = (() => {
         }
       });
       const views = ["Overall", ...Object.keys(VIEW_CONFIG)];
+      const metricMap = {
+        "Volume": METRIC_LABELS["Volume"] || "Volume",
+        "Revenue": METRIC_LABELS["Revenue"] || "Revenue",
+        "Margin Rate": METRIC_LABELS["Margin Rate"] || "Margin Rate"
+      };
       return {
-        metrics: ["Revenue", "Volume", "Margin Rate"],
+        metrics: metricMap,
         views,
         dataFrequencies: isLiveMode ? ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"] : ["Weekly", "Monthly", "Quarterly", "Yearly"],
         dateRanges: ["3M", "6M", "1Y", "3Y", "All"],
         filters
       };
-    }, [FILTER_CONFIG_STATIC, getFilterOptions, VIEW_CONFIG]);
+    }, [FILTER_CONFIG_STATIC, getFilterOptions, VIEW_CONFIG, METRIC_LABELS]);
     const filterOptionsWithoutAll = React.useMemo(() => {
       const map = {};
       Object.keys(filterOptionsMap).forEach((key) => {
@@ -8004,9 +8035,18 @@ var __app = (() => {
     const applyLLMResponse = React.useCallback(
       (response) => {
         isExecutingQueryRef.current = true;
-        const validMetrics = ["Revenue", "Volume", "Margin Rate"];
-        if (response.metric && validMetrics.includes(response.metric)) {
-          setMetric(response.metric);
+        const validMetricKeys = ["Revenue", "Volume", "Margin Rate"];
+        if (response.metric) {
+          if (validMetricKeys.includes(response.metric)) {
+            setMetric(response.metric);
+          } else {
+            const labelToKey = Object.entries(METRIC_LABELS).find(
+              ([, label]) => label && label.toLowerCase() === response.metric.toLowerCase()
+            );
+            if (labelToKey && validMetricKeys.includes(labelToKey[0])) {
+              setMetric(labelToKey[0]);
+            }
+          }
         }
         const validFreqs = isLiveMode ? ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"] : ["Weekly", "Monthly", "Quarterly", "Yearly"];
         if (response.dataFrequency && validFreqs.includes(response.dataFrequency)) {
@@ -8052,7 +8092,7 @@ var __app = (() => {
           isExecutingQueryRef.current = false;
         }, 200);
       },
-      [FILTER_CONFIG, getFilterSetState, getFilterOptions, VIEW_CONFIG, getCategoriesForView]
+      [FILTER_CONFIG, getFilterSetState, getFilterOptions, VIEW_CONFIG, getCategoriesForView, METRIC_LABELS]
     );
     const handleLLMQuery = React.useCallback(
       async (query) => {

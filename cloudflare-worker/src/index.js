@@ -42,51 +42,106 @@ function corsHeaders(origin) {
   };
 }
 
-const SYSTEM_PROMPT = `You are a dashboard query assistant. The user will ask a natural language question about business metrics. You must respond with ONLY a JSON object (no markdown, no explanation outside JSON) that configures the dashboard.
+// Build a dynamic system prompt from the schema the frontend sends
+function buildSystemPrompt(schema) {
+  // Build metric description from schema
+  let metricDesc;
+  let metricExamples = {};
+  if (schema && schema.metrics && typeof schema.metrics === 'object' && !Array.isArray(schema.metrics)) {
+    // metrics is a map: { internalKey: displayLabel }
+    const entries = Object.entries(schema.metrics);
+    metricDesc = entries.map(([key, label]) => `"${key}" (displayed as "${label}")`).join(', ');
+    metricExamples = schema.metrics;
+  } else if (schema && Array.isArray(schema.metrics)) {
+    metricDesc = schema.metrics.map(m => `"${m}"`).join(', ');
+  } else {
+    metricDesc = '"Revenue", "Volume", "Margin Rate"';
+  }
+
+  const viewsList = schema && schema.views ? schema.views.join(', ') : 'Overall';
+  const freqList = schema && schema.dataFrequencies ? schema.dataFrequencies.join(', ') : 'Weekly, Monthly, Quarterly, Yearly';
+  const rangeList = schema && schema.dateRanges ? schema.dateRanges.join(', ') : '3M, 6M, 1Y, 3Y, All';
+
+  // Build filter description
+  let filterDesc = '';
+  if (schema && schema.filters) {
+    const filterLines = Object.entries(schema.filters).map(([key, { label, values }]) => {
+      const sampleVals = values.slice(0, 8).map(v => `"${v}"`).join(', ');
+      const more = values.length > 8 ? ` ... (${values.length} total)` : '';
+      return `  - ${key} (${label}): [${sampleVals}${more}]`;
+    });
+    filterDesc = filterLines.join('\n');
+  }
+
+  // Pick a sample metric label and view for examples
+  const metricEntries = schema && schema.metrics && typeof schema.metrics === 'object' && !Array.isArray(schema.metrics)
+    ? Object.entries(schema.metrics) : [];
+  const sampleMetricKey = metricEntries.length > 0 ? metricEntries[0][0] : 'Volume';
+  const sampleMetricLabel = metricEntries.length > 0 ? metricEntries[0][1] : 'Volume';
+  const sampleView = schema && schema.views && schema.views.length > 1 ? schema.views[1] : 'Category';
+
+  // Pick sample filter key/value for examples
+  let sampleFilterKey = '';
+  let sampleFilterValue = '';
+  if (schema && schema.filters) {
+    const firstFilter = Object.entries(schema.filters)[0];
+    if (firstFilter) {
+      sampleFilterKey = firstFilter[0];
+      sampleFilterValue = firstFilter[1].values[0] || 'SomeValue';
+    }
+  }
+
+  return `You are a dashboard query assistant. The user will ask a natural language question about metrics. You must respond with ONLY a JSON object (no markdown, no explanation outside JSON) that configures the dashboard.
 
 The dashboard has these controls:
-- metric: one of "Revenue", "Volume", "Margin Rate"
-- view: "Overall" (default, no breakdown) or a dimension name to split by. "Overall" shows an aggregate trend line. A dimension name (e.g. "Region") splits the chart into one line per category in that dimension.
-- dataFrequency: "Weekly", "Monthly", "Quarterly", "Yearly"
-- dateRange: "3M", "6M", "1Y", "3Y", "All"
-- selectedCategories: array of specific category values to highlight in the chart (only used when view is a dimension)
-- filters: object mapping filter keys to arrays of values — this narrows the data WITHOUT changing the chart breakdown
+- metric: use the INTERNAL KEY (not the display label). Available metrics: ${metricDesc}
+- view: one of: ${viewsList}. "Overall" (default) shows an aggregate trend line. Other values split the chart by that dimension.
+- dataFrequency: one of: ${freqList}
+- dateRange: one of: ${rangeList}
+- selectedCategories: array of specific category values to highlight (only when view is a dimension)
+- filters: object mapping filter keys to arrays of values — narrows data WITHOUT changing chart breakdown
 
-The user will provide a schema with the available filter keys and their current valid values, plus the available view/dimension names.
+${filterDesc ? `Available filters:\n${filterDesc}` : ''}
 
 CRITICAL RULES — follow these strictly:
+- The "metric" field must be an INTERNAL KEY (e.g. "${sampleMetricKey}"), even if the user refers to it by its display label (e.g. "${sampleMetricLabel}"). Map the user's words to the closest matching internal key.
 - ONLY include fields the user EXPLICITLY mentions or clearly implies. If the user does not mention a time period, do NOT set dateRange. If the user does not mention a frequency, do NOT set dataFrequency. When in doubt, OMIT the field.
-- "filters" vs "view" distinction: When a user mentions a specific value like "EMEA" or "Enterprise Suite", that usually means FILTER to that value (use "filters"), NOT split/break down by that dimension. Only set "view" to a dimension when the user explicitly asks to "break down by", "compare across", "split by", or "by region/product/etc." as a comparison.
-  - Example: "How is EMEA doing?" → filters: {revenueRegionFilter: ["EMEA"]}, view is NOT set (stays Overall)
-  - Example: "Compare revenue across regions" → view: "Region", no filters
-  - Example: "How is EMEA doing compared to other regions?" → view: "Region", selectedCategories: ["EMEA"]
-- "share" queries: The pattern is "[X]'s share of [metric] in [Y]". X is the SUBJECT whose share you want to see. Y is an additional FILTER constraint.
-  - The SUBJECT (X) determines the view and selectedCategories: set "view" to the dimension X belongs to, put X in "selectedCategories".
-  - The CONSTRAINT (Y, after "in"/"within"/"for") goes in "filters" — find which dimension Y belongs to and filter by it.
-  - Think step by step: (1) identify the subject X, (2) find which dimension X belongs to in the schema, (3) set view to that dimension, (4) put X in selectedCategories, (5) if there's a constraint Y, find its dimension and put it in filters.
-  - Example: "What's Mexico's share of Revenue?" → Mexico is in Country dimension → view: "Country", selectedCategories: ["Mexico"], metric: "Revenue"
-  - Example: "What's Mexico's share of Revenue in Growth Products?" → Mexico is in Country, Growth Products is in Product Group → view: "Country", selectedCategories: ["Mexico"], filters: {productGroupFilter: ["Growth Products"]}
-  - Example: "What's Partnership's share of Volume in Brazil?" → Partnership is in Acquisition Channel, Brazil is in Country → view: "Acquisition Channel", selectedCategories: ["Partnership"], filters: {revenueCountryFilter: ["Brazil"]}
-- For "filters", only use the exact filter keys and values from the provided schema.
+- "filters" vs "view" distinction: When a user mentions a specific value like "${sampleFilterValue}", that usually means FILTER to that value (use "filters"), NOT split by that dimension. Only set "view" to a dimension when the user explicitly asks to "break down by", "compare across", "split by", or "by [dimension]" as a comparison.
+- "share" queries: "[X]'s share of [metric] in [Y]". X determines view + selectedCategories. Y goes in filters.
+- For "filters", only use exact filter keys and values from the schema above.
 - For "selectedCategories", only use values that exist in the relevant dimension.
 - Always include an "explanation" field (string) briefly describing what you understood.
 - Never invent or assume values not in the schema.
 
 Examples:
-Q: "What's EMEA growth in Net Revenue?"
-A: {"metric": "Revenue", "filters": {"revenueRegionFilter": ["EMEA"]}, "explanation": "Showing revenue filtered to EMEA"}
+Q: "How is ${sampleMetricLabel} trending by ${sampleView}?"
+A: {"metric": "${sampleMetricKey}", "view": "${sampleView}", "explanation": "Showing ${sampleMetricLabel} trend split by ${sampleView}"}
 
-Q: "Break down volume by product monthly"
-A: {"metric": "Volume", "view": "Product", "dataFrequency": "Monthly", "explanation": "Showing monthly volume split by product"}
+${sampleFilterKey ? `Q: "How is ${sampleFilterValue} doing?"
+A: {"filters": {"${sampleFilterKey}": ["${sampleFilterValue}"]}, "explanation": "Filtered to ${sampleFilterValue}"}` : ''}
 
-Q: "How is Enterprise Suite doing?"
-A: {"filters": {"productNameFilter": ["Enterprise Suite"]}, "explanation": "Filtered to Enterprise Suite"}
+Q: "Break down ${sampleMetricLabel} by ${sampleView} monthly"
+A: {"metric": "${sampleMetricKey}", "view": "${sampleView}", "dataFrequency": "Monthly", "explanation": "Showing monthly ${sampleMetricLabel} split by ${sampleView}"}
 
-Q: "What's Mexico's share of Revenue in Growth Products?"
-A: {"metric": "Revenue", "view": "Country", "selectedCategories": ["Mexico"], "filters": {"productGroupFilter": ["Growth Products"]}, "explanation": "Showing revenue by country with Mexico highlighted, filtered to Growth Products"}
+Respond with ONLY the JSON object. No markdown fences, no extra text.`;
+}
 
-Q: "What is Partnership's share of Volume in Brazil?"
-A: {"metric": "Volume", "view": "Acquisition Channel", "selectedCategories": ["Partnership"], "filters": {"revenueCountryFilter": ["Brazil"]}, "explanation": "Showing volume by acquisition channel with Partnership highlighted, filtered to Brazil"}
+// Fallback static prompt when no schema is provided
+const STATIC_SYSTEM_PROMPT = `You are a dashboard query assistant. The user will ask a natural language question about metrics. You must respond with ONLY a JSON object (no markdown, no explanation outside JSON) that configures the dashboard.
+
+The dashboard has these controls:
+- metric: one of "Revenue", "Volume", "Margin Rate"
+- view: "Overall" (default, no breakdown) or a dimension name to split by
+- dataFrequency: "Weekly", "Monthly", "Quarterly", "Yearly"
+- dateRange: "3M", "6M", "1Y", "3Y", "All"
+- selectedCategories: array of specific category values to highlight in the chart
+- filters: object mapping filter keys to arrays of values
+
+CRITICAL RULES:
+- ONLY include fields the user EXPLICITLY mentions or clearly implies. When in doubt, OMIT.
+- "filters" vs "view": Specific values go in filters. Only set view when user asks to "break down by" / "compare across" / "split by".
+- Always include an "explanation" field.
+- Never invent values not in the schema.
 
 Respond with ONLY the JSON object. No markdown fences, no extra text.`;
 
@@ -264,10 +319,10 @@ export default {
       });
     }
 
-    const userMessage = schema
-      ? `Dashboard schema:\n${JSON.stringify(schema, null, 2)}\n\nUser question: ${message}`
-      : `User question: ${message}`;
+    // Build dynamic system prompt from schema, or fall back to static
+    const systemPrompt = schema ? buildSystemPrompt(schema) : STATIC_SYSTEM_PROMPT;
+    const userMessage = `User question: ${message}`;
 
-    return callWithFallback(env, SYSTEM_PROMPT, userMessage, headers);
+    return callWithFallback(env, systemPrompt, userMessage, headers);
   },
 };
