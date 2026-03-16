@@ -127,6 +127,13 @@ export function formatPeriodDate(periodString, dataFrequency) {
     return periodString;
   } else if (dataFrequency === "Yearly") {
     return periodString;
+  } else if (dataFrequency === "Daily") {
+    const dateMatch = periodString.match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (dateMatch) {
+      const [, year, month, day] = dateMatch;
+      return `${MONTH_NAMES[parseInt(month) - 1]} ${parseInt(day)}'${year.substring(2)}`;
+    }
+    return periodString;
   }
 
   return periodString;

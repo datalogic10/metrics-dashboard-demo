@@ -3695,23 +3695,28 @@ export function render() {
       "-" +
       now.getDate().toString().padStart(2, "0");
 
-    const threeMonthsAgo = new Date(now);
-    threeMonthsAgo.setMonth(now.getMonth() - 3);
-    const oneQuarterAgo =
-      threeMonthsAgo.getFullYear() +
-      "-" +
-      (threeMonthsAgo.getMonth() + 1).toString().padStart(2, "0") +
-      "-" +
-      threeMonthsAgo.getDate().toString().padStart(2, "0");
+    const computeAgo = (months) => {
+      const d = new Date(now);
+      d.setMonth(d.getMonth() - months);
+      return d.getFullYear() + "-" + (d.getMonth() + 1).toString().padStart(2, "0") + "-" + d.getDate().toString().padStart(2, "0");
+    };
 
     // Compare by converting each period to a date string first
     switch (dateRange) {
+      case "3M":
+        return allDates.filter((date) => periodToDateStr(date) >= computeAgo(3));
+      case "6M":
+        return allDates.filter((date) => periodToDateStr(date) >= computeAgo(6));
       case "1Y":
         return allDates.filter((date) => periodToDateStr(date) >= oneYearAgo);
+      case "3Y": {
+        const threeYearsAgo = (now.getFullYear() - 3) + "-" + (now.getMonth() + 1).toString().padStart(2, "0") + "-" + now.getDate().toString().padStart(2, "0");
+        return allDates.filter((date) => periodToDateStr(date) >= threeYearsAgo);
+      }
       case "YTD":
         return allDates.filter((date) => periodToDateStr(date) >= yearStart);
       case "QTD":
-        return allDates.filter((date) => periodToDateStr(date) >= oneQuarterAgo);
+        return allDates.filter((date) => periodToDateStr(date) >= computeAgo(3));
       default:
         return allDates;
     }
