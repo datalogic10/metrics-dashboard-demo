@@ -5261,6 +5261,19 @@ var __app = (() => {
     const dimensionCategoryTotals = React.useMemo(() => {
       return dimensionAggregates._categoryTotals || {};
     }, [dimensionAggregates]);
+    const categoryColorMap = React.useMemo(() => {
+      const map = {};
+      Object.keys(dimensionCategoryTotals).forEach((dimCol) => {
+        const cats = Object.keys(dimensionCategoryTotals[dimCol]).filter((c) => c && c !== "Unknown").sort((a, b) => b.localeCompare(a));
+        const dimMap = {};
+        cats.forEach((cat, i) => {
+          dimMap[cat] = MODERN_COLOR_PALETTE[i % MODERN_COLOR_PALETTE.length];
+        });
+        dimMap["Rest Combined"] = "#9ca3af";
+        map[dimCol] = dimMap;
+      });
+      return map;
+    }, [dimensionCategoryTotals]);
     const periods = React.useMemo(() => {
       return Object.keys(periodAggregates).sort();
     }, [periodAggregates]);
@@ -7409,7 +7422,8 @@ var __app = (() => {
             if (value === 0 || value === null) return "";
             return formatMetric(value) + "<br>" + percentage.toFixed(1) + "%";
           });
-          const categoryColor = getCategoryColor(category, index);
+          const dimColorMap = categoryColorMap[attribute] || {};
+          const categoryColor = dimColorMap[category] || getCategoryColor(category, index);
           const chartType = resolveChartType(metric);
           if (chartType === "line") {
             chartData2.push({
@@ -7720,7 +7734,8 @@ var __app = (() => {
         // Theme
         isDarkMode,
         theme,
-        METRIC_LABELS
+        METRIC_LABELS,
+        categoryColorMap
       ]
     );
     const getVisibleTraceNames = React.useCallback(() => {

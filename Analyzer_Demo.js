@@ -4150,6 +4150,24 @@ export function render() {
     return dimensionAggregates._categoryTotals || {};
   }, [dimensionAggregates]);
 
+  // Stable color assignment per dimension: categories sorted alphabetically → fixed color index.
+  // Two categories from different dimensions may share a color (they're never shown together).
+  const categoryColorMap = React.useMemo(() => {
+    const map = {};
+    Object.keys(dimensionCategoryTotals).forEach((dimCol) => {
+      const cats = Object.keys(dimensionCategoryTotals[dimCol])
+        .filter(c => c && c !== "Unknown")
+        .sort((a, b) => b.localeCompare(a));
+      const dimMap = {};
+      cats.forEach((cat, i) => {
+        dimMap[cat] = MODERN_COLOR_PALETTE[i % MODERN_COLOR_PALETTE.length];
+      });
+      dimMap["Rest Combined"] = "#9ca3af";
+      map[dimCol] = dimMap;
+    });
+    return map;
+  }, [dimensionCategoryTotals]);
+
   // Get unique dates/periods — always from periodAggregates (works in both modes)
   const periods = React.useMemo(() => {
     return Object.keys(periodAggregates).sort();
@@ -7147,8 +7165,9 @@ export function render() {
           return formatMetric(value) + "<br>" + percentage.toFixed(1) + "%";
         });
 
-        // Get consistent color for category
-        const categoryColor = getCategoryColor(category, index);
+        // Stable color from dimension-level map (survives grain/top-N changes)
+        const dimColorMap = categoryColorMap[attribute] || {};
+        const categoryColor = dimColorMap[category] || getCategoryColor(category, index);
 
         // Add main metric trace (bar or line)
         const chartType = resolveChartType(metric);
@@ -7510,6 +7529,7 @@ export function render() {
       isDarkMode,
       theme,
       METRIC_LABELS,
+      categoryColorMap,
     ]
   );
 
