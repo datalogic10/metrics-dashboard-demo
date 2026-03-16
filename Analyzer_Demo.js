@@ -3550,10 +3550,12 @@ export function render() {
       });
   }, [isLiveMode, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX]);
 
-  // Fetch dimension aggregates for ALL dimensions when insights tab is open in live mode.
-  // The main agg effect only fetches the selected split-by dimension; insights need all of them.
+  // Fetch dimension aggregates for visible dimensions when insights tab is open in live mode.
+  // Uses only visibleDimensions (from Configure Metrics) and a concurrency limit of 3 to
+  // avoid overwhelming Supabase with parallel requests.
   React.useEffect(() => {
     if (!isLiveMode || !activeInsightsTab || !liveMetricConfig) return;
+    let cancelled = false;
 
     const grain = frequencyToGrain[dataFrequency] || "month";
     const dateCol = liveMetricConfig.dateColumn || liveDateColumn;
@@ -3566,10 +3568,8 @@ export function render() {
       pFilters[colName] = vals;
     });
 
-    const dimCols = DIMENSION_DEFINITIONS
-      .filter(dim => columnExists(COLUMNS[dim.columnKey]))
-      .map(dim => COLUMNS[dim.columnKey]);
-
+    // Only fetch visible dimensions (user-configured in Configure Metrics)
+    const dimCols = visibleLiveDimensions.map(d => d.name);
     if (dimCols.length === 0) return;
 
     const hasMetric3 = !!liveMetricConfig.derivedAggType || liveMetricConfig.derivedMode === 'formula';
@@ -3579,8 +3579,10 @@ export function render() {
     if (liveMetricConfig.derivedMode === 'formula') formulaConfigs.derived = { operator: liveMetricConfig.derivedFormulaOperator || '/' };
     const formulaConfigsArg = Object.keys(formulaConfigs).length > 0 ? formulaConfigs : null;
 
-    // Fetch all dimensions in parallel (no top-N bucketing — insights need full category lists)
-    Promise.all(dimCols.map(col =>
+    // Fetch with concurrency limit of 3 to avoid overwhelming Supabase
+    const CONCURRENCY = 3;
+    const merged = {};
+    const fetchDim = (col) =>
       cachedQuery('data', {
         p_time_grain: grain,
         p_date_column: dateCol,
@@ -3589,20 +3591,25 @@ export function render() {
         p_filters: pFilters,
       }).then(data => {
         const aggs = transformToDimensionAggregates(data.rows || [], col, hasMetric3, formulaConfigsArg);
-        return { col, aggs };
-      })
-    )).then(results => {
-      const merged = {};
-      results.forEach(({ col, aggs }) => {
         Object.keys(aggs).forEach(key => {
-          if (key === '_categoryTotals') return;
-          merged[key] = aggs[key];
+          if (key !== '_categoryTotals') merged[key] = aggs[key];
         });
       });
-      setLiveInsightsDimAggs(merged);
-    });
+
+    // Process in batches of CONCURRENCY
+    const processBatches = async () => {
+      for (let i = 0; i < dimCols.length; i += CONCURRENCY) {
+        if (cancelled) return;
+        const batch = dimCols.slice(i, i + CONCURRENCY);
+        await Promise.all(batch.map(fetchDim));
+      }
+      if (!cancelled) setLiveInsightsDimAggs({ ...merged });
+    };
+    processBatches();
+
+    return () => { cancelled = true; };
   }, [isLiveMode, activeInsightsTab, liveMetricConfig, dataFrequency, dynamicFilters,
-      DIMENSION_DEFINITIONS, COLUMNS, columnExists, cachedQuery, liveDateColumn]);
+      visibleLiveDimensions, cachedQuery, liveDateColumn]);
 
   const periodChangeLabel = React.useMemo(() => {
     switch (dataFrequency) {

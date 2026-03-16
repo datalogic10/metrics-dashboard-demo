@@ -4297,6 +4297,7 @@ var __app = (() => {
     }, [isLiveMode, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX]);
     React.useEffect(() => {
       if (!isLiveMode || !activeInsightsTab || !liveMetricConfig) return;
+      let cancelled = false;
       const grain = frequencyToGrain[dataFrequency] || "month";
       const dateCol = liveMetricConfig.dateColumn || liveDateColumn;
       const rpcMetrics = buildRpcMetrics(liveMetricConfig);
@@ -4307,7 +4308,7 @@ var __app = (() => {
         const colName = filterKey.replace(/^dim_/, "").replace(/_filter$/, "");
         pFilters[colName] = vals;
       });
-      const dimCols = DIMENSION_DEFINITIONS.filter((dim) => columnExists(COLUMNS[dim.columnKey])).map((dim) => COLUMNS[dim.columnKey]);
+      const dimCols = visibleLiveDimensions.map((d) => d.name);
       if (dimCols.length === 0) return;
       const hasMetric3 = !!liveMetricConfig.derivedAggType || liveMetricConfig.derivedMode === "formula";
       const formulaConfigs = {};
@@ -4315,36 +4316,39 @@ var __app = (() => {
       if (liveMetricConfig.revenueMode === "formula") formulaConfigs.revenue = { operator: liveMetricConfig.revenueFormulaOperator || "/" };
       if (liveMetricConfig.derivedMode === "formula") formulaConfigs.derived = { operator: liveMetricConfig.derivedFormulaOperator || "/" };
       const formulaConfigsArg = Object.keys(formulaConfigs).length > 0 ? formulaConfigs : null;
-      Promise.all(dimCols.map(
-        (col) => cachedQuery("data", {
-          p_time_grain: grain,
-          p_date_column: dateCol,
-          p_group_by: [col],
-          p_metrics: rpcMetrics,
-          p_filters: pFilters
-        }).then((data) => {
-          const aggs = transformToDimensionAggregates(data.rows || [], col, hasMetric3, formulaConfigsArg);
-          return { col, aggs };
-        })
-      )).then((results) => {
-        const merged = {};
-        results.forEach(({ col, aggs }) => {
-          Object.keys(aggs).forEach((key) => {
-            if (key === "_categoryTotals") return;
-            merged[key] = aggs[key];
-          });
+      const CONCURRENCY = 3;
+      const merged = {};
+      const fetchDim = (col) => cachedQuery("data", {
+        p_time_grain: grain,
+        p_date_column: dateCol,
+        p_group_by: [col],
+        p_metrics: rpcMetrics,
+        p_filters: pFilters
+      }).then((data) => {
+        const aggs = transformToDimensionAggregates(data.rows || [], col, hasMetric3, formulaConfigsArg);
+        Object.keys(aggs).forEach((key) => {
+          if (key !== "_categoryTotals") merged[key] = aggs[key];
         });
-        setLiveInsightsDimAggs(merged);
       });
+      const processBatches = async () => {
+        for (let i = 0; i < dimCols.length; i += CONCURRENCY) {
+          if (cancelled) return;
+          const batch = dimCols.slice(i, i + CONCURRENCY);
+          await Promise.all(batch.map(fetchDim));
+        }
+        if (!cancelled) setLiveInsightsDimAggs({ ...merged });
+      };
+      processBatches();
+      return () => {
+        cancelled = true;
+      };
     }, [
       isLiveMode,
       activeInsightsTab,
       liveMetricConfig,
       dataFrequency,
       dynamicFilters,
-      DIMENSION_DEFINITIONS,
-      COLUMNS,
-      columnExists,
+      visibleLiveDimensions,
       cachedQuery,
       liveDateColumn
     ]);
