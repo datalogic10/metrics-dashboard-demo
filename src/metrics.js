@@ -80,6 +80,7 @@ export function getWeekNumber(date) {
 }
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const DATE_REGEX = /(\d{4})-(\d{2})-(\d{2})/;
 
 /**
  * Format a period string for display based on dataFrequency.
@@ -95,7 +96,7 @@ export function formatPeriodDate(periodString, dataFrequency) {
         return `W${match[2]}'${match[1].substring(2)}`;
       }
     }
-    const dateMatch = periodString.match(/(\d{4})-(\d{2})-(\d{2})/);
+    const dateMatch = periodString.match(DATE_REGEX);
     if (dateMatch) {
       const [, year, month, day] = dateMatch;
       const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
@@ -128,7 +129,7 @@ export function formatPeriodDate(periodString, dataFrequency) {
   } else if (dataFrequency === "Yearly") {
     return periodString;
   } else if (dataFrequency === "Daily") {
-    const dateMatch = periodString.match(/(\d{4})-(\d{2})-(\d{2})/);
+    const dateMatch = periodString.match(DATE_REGEX);
     if (dateMatch) {
       const [, year, month, day] = dateMatch;
       return `${MONTH_NAMES[parseInt(month) - 1]} ${parseInt(day)}'${year.substring(2)}`;
@@ -192,12 +193,18 @@ export function calculatePeriodChange(currentIndex, currentValue, lookbackEntrie
  * Simple moving average over barData. Returns null for entries before the window fills.
  */
 export function calculateSMA(barData, windowSize) {
-  return barData.map((_, i) => {
-    if (i < windowSize - 1) return null;
-    let sum = 0;
-    for (let j = i - windowSize + 1; j <= i; j++) sum += barData[j];
-    return sum / windowSize;
-  });
+  const result = new Array(barData.length);
+  let sum = 0;
+  for (let i = 0; i < barData.length; i++) {
+    sum += barData[i];
+    if (i < windowSize - 1) {
+      result[i] = null;
+    } else {
+      if (i >= windowSize) sum -= barData[i - windowSize];
+      result[i] = sum / windowSize;
+    }
+  }
+  return result;
 }
 
 /**

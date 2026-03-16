@@ -1,24 +1,19 @@
 import { THEME_CONFIG, MODERN_COLOR_PALETTE, getCategoryColor } from './src/theme.js';
 import { generateSyntheticData, DEMO_COLUMNS, DEMO_DIMENSION_DEFINITIONS } from './src/syntheticData.js';
 import {
-  DEFAULT_METRIC_CONFIGS, parseConnectionParams, parseBaseConnection, createRpcCaller, createQueryCache,
+  DEFAULT_METRIC_CONFIGS, parseBaseConnection, createRpcCaller, createQueryCache,
   classifySchema, detectDateColumn, buildLiveColumns, buildLiveDimensions,
   buildRpcMetrics, transformToPeriodAggregates, transformToDimensionAggregates,
   frequencyToGrain, LLM_WORKER_URL,
 } from './src/liveConnection.js';
 import {
   compressState as compressStateUtil,
-  expandState as expandStateUtil,
   generateShareCode as generateShareCodeUtil,
   decodeShareCode as decodeShareCodeUtil,
-  base64UrlEncode, base64UrlDecode,
-  VALUE_ABBREVIATIONS as VALUE_ABBREVIATIONS_MAP,
-  REVERSE_ABBREVIATIONS as REVERSE_ABBREVIATIONS_MAP,
 } from './src/shareCode.js';
 import {
   calculatePercentageChange as calculatePercentageChangeUtil,
   calculateGrowthMetrics as calculateGrowthMetricsUtil,
-  getWeekNumber,
   formatPeriodDate as formatPeriodDateUtil,
   formatYoYValue as formatYoYValueUtil,
   capYoYForDisplay as capYoYForDisplayUtil,
@@ -36,6 +31,12 @@ import {
   SENTIMENT_KEYWORDS,
 } from './src/formatUtils.js';
 import { InsightContextBanner } from './src/components/InsightContextBanner.js';
+import { MetricsEditorModal } from './src/components/MetricsEditorModal.js';
+import { StatBox } from './src/components/StatBox.js';
+import {
+  buildPeriodAggregates as buildPeriodAggregatesUtil,
+  buildDimensionAggregates as buildDimensionAggregatesUtil,
+} from './src/aggregation.js';
 
 export function render() {
 
@@ -1243,6 +1244,76 @@ export function render() {
   const [metricsEditorError, setMetricsEditorError] = React.useState('');
   const [expandedMetricSlot, setExpandedMetricSlot] = React.useState(null);
 
+  // Metrics Editor save handler — persists config to localStorage and applies to UI
+  const handleMetricsEditorSave = React.useCallback(() => {
+    const config = { ...metricsEditorDraft };
+    const newDataset = config.dataset;
+    delete config.dataset;
+    const datasetChanged = newDataset && activeTab && newDataset !== activeTab.dataset;
+    if (datasetChanged) {
+      setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, dataset: newDataset } : t));
+      loadedDatasetsRef.current.delete(activeTab.dataset);
+    }
+    setLiveMetricConfig(config);
+    const effectiveDataset = newDataset || (activeTab ? activeTab.dataset : connectionParams?.dataset);
+    try {
+      const storageKey = 'metricsConfig_' + connectionParams.supabaseUrl + '_' + effectiveDataset;
+      localStorage.setItem(storageKey, JSON.stringify(config));
+    } catch (e) {}
+    setShowMetricsEditor(false);
+    queryCacheRef.current.clear();
+  }, [metricsEditorDraft, activeTab, activeTabId, connectionParams]);
+
+  // Metrics Editor AI suggestion handler — calls LLM worker to auto-configure metrics
+  const handleMetricsEditorSuggest = React.useCallback(async () => {
+    setMetricsEditorSuggesting(true);
+    setMetricsEditorError('');
+    try {
+      const res = await fetch(LLM_WORKER_URL + '/suggest-metrics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ columns: liveColumnMeta }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Request failed');
+      }
+      const suggestion = await res.json();
+      const allCols = liveColumnMeta || [];
+      const validDate = allCols.filter(c => c.udt === 'date' || c.udt === 'timestamp' || c.udt === 'timestamptz').map(c => c.name);
+      const validAllCols = allCols.map(c => c.name);
+      const allowedAggs = ['count', 'count_distinct', 'sum', 'avg', 'min', 'max'];
+      setMetricsEditorDraft(prev => ({
+        ...prev,
+        volumeAggType: suggestion.volumeAggType && allowedAggs.includes(suggestion.volumeAggType) ? suggestion.volumeAggType : (suggestion.volumeColumn ? 'sum' : 'count'),
+        volumeColumn: suggestion.volumeColumn && validAllCols.includes(suggestion.volumeColumn) ? suggestion.volumeColumn : prev.volumeColumn,
+        revenueAggType: suggestion.revenueAggType && allowedAggs.includes(suggestion.revenueAggType) ? suggestion.revenueAggType : (suggestion.revenueColumn ? 'sum' : 'count'),
+        revenueColumn: suggestion.revenueColumn && validAllCols.includes(suggestion.revenueColumn) ? suggestion.revenueColumn : prev.revenueColumn,
+        derivedMode: 'aggregation',
+        formulaOperator: prev.formulaOperator || '/',
+        derivedAggType: suggestion.derivedAggType && allowedAggs.includes(suggestion.derivedAggType) ? suggestion.derivedAggType : prev.derivedAggType,
+        derivedColumn: suggestion.derivedColumn && validAllCols.includes(suggestion.derivedColumn) ? suggestion.derivedColumn : prev.derivedColumn,
+        volumeLabel: suggestion.volumeLabel || prev.volumeLabel,
+        revenueLabel: suggestion.revenueLabel || prev.revenueLabel,
+        derivedLabel: suggestion.derivedLabel || prev.derivedLabel,
+        volumeFormat: suggestion.volumeFormat || prev.volumeFormat,
+        revenueFormat: suggestion.revenueFormat || prev.revenueFormat,
+        derivedFormat: suggestion.derivedFormat || prev.derivedFormat,
+        volumePrefix: suggestion.volumePrefix != null ? suggestion.volumePrefix : (prev.volumePrefix || ""),
+        volumeSuffix: suggestion.volumeSuffix != null ? suggestion.volumeSuffix : (prev.volumeSuffix || ""),
+        revenuePrefix: suggestion.revenuePrefix != null ? suggestion.revenuePrefix : (prev.revenuePrefix || ""),
+        revenueSuffix: suggestion.revenueSuffix != null ? suggestion.revenueSuffix : (prev.revenueSuffix || ""),
+        derivedPrefix: suggestion.derivedPrefix != null ? suggestion.derivedPrefix : (prev.derivedPrefix || ""),
+        derivedSuffix: suggestion.derivedSuffix != null ? suggestion.derivedSuffix : (prev.derivedSuffix || ""),
+        dateColumn: suggestion.dateColumn && validDate.includes(suggestion.dateColumn) ? suggestion.dateColumn : prev.dateColumn,
+      }));
+    } catch (err) {
+      setMetricsEditorError(err.message || 'Suggestion failed');
+    } finally {
+      setMetricsEditorSuggesting(false);
+    }
+  }, [liveColumnMeta]);
+
   // ===== RPC CALL HELPER =====
   const callQueryDataset = React.useMemo(
     () => createRpcCaller(connectionParams),
@@ -1374,23 +1445,19 @@ export function render() {
   // Dynamic filters for live mode (single state object)
   const [dynamicFilters, setDynamicFilters] = React.useState({});
 
-  const setDynamicFilter = React.useCallback((filterKey, value) => {
-    setDynamicFilters(prev => ({ ...prev, [filterKey]: value }));
-  }, []);
-
   const COLUMNS = isLiveMode ? buildLiveColumns(visibleLiveDimensions) : DEMO_COLUMNS;
 
   const DIMENSION_DEFINITIONS = isLiveMode ? buildLiveDimensions(visibleLiveDimensions) : DEMO_DIMENSION_DEFINITIONS;
 
   // Metric display labels — in live mode, use labels from metric config
   const METRIC_LABELS = isLiveMode && liveMetricConfig ? {
-    "Volume": liveMetricConfig.volumeLabel,
-    "Revenue": liveMetricConfig.revenueLabel,
-    "Margin Rate": liveMetricConfig.derivedLabel,
+    metric1: liveMetricConfig.volumeLabel,
+    metric2: liveMetricConfig.revenueLabel,
+    metric3: liveMetricConfig.derivedLabel,
   } : {
-    "Volume": "Gross Volume",
-    "Revenue": "Net Revenue",
-    "Margin Rate": "Margin Rate",
+    metric1: "Gross Volume",
+    metric2: "Net Revenue",
+    metric3: "Margin Rate",
   };
 
   // Data source: live Supabase data when connected, synthetic data for demo mode
@@ -1559,101 +1626,6 @@ export function render() {
   // View label overrides for cleaner display
   const VIEW_LABEL_OVERRIDES = {};
 
-  // Helper function to render action buttons with color-coding (DRY)
-  const renderActionButton = (
-    label,
-    onClick,
-    title,
-    dataGuide,
-    isActive = false,
-    isReset = false
-  ) => {
-    // Color-code actions for better UX - light translucent colors
-    const getActionColors = () => {
-      if (isReset)
-        return {
-          bg: theme.danger,
-          border: "none",
-          text: "white",
-        };
-      if (label.includes("Save"))
-        return {
-          bg: theme.successBg,
-          border: theme.successBorder,
-          text: theme.successText,
-        };
-      if (label.includes("Compare"))
-        return {
-          bg: isDarkMode
-            ? "rgba(139, 92, 246, 0.15)"
-            : "rgba(139, 92, 246, 0.12)",
-          border: isDarkMode
-            ? "rgba(139, 92, 246, 0.4)"
-            : "rgba(139, 92, 246, 0.3)",
-          text: isDarkMode ? "#c4b5fd" : "#7c3aed",
-        };
-      if (label.includes("Share"))
-        return {
-          bg: isDarkMode
-            ? "rgba(59, 130, 246, 0.15)"
-            : "rgba(59, 130, 246, 0.12)",
-          border: isDarkMode
-            ? "rgba(59, 130, 246, 0.4)"
-            : "rgba(59, 130, 246, 0.3)",
-          text: isDarkMode ? "#93c5fd" : "#2563eb",
-        };
-      return isActive
-        ? {
-            bg: theme.accentPrimary,
-            border: theme.accentPrimary,
-            text: "white",
-          }
-        : {
-            bg: "transparent",
-            border: theme.borderSecondary,
-            text: theme.textSecondary,
-          };
-    };
-
-    const { bg, border, text } = getActionColors();
-
-    return (
-      <button
-        style={{
-          ...styles.resetButton,
-          backgroundColor: bg,
-          border: border === "none" ? "none" : `1px solid ${border}`,
-          color: text,
-          fontSize: "12px",
-          padding: "6px 12px",
-          transform: "scale(1)",
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.transform = "scale(1.03)";
-          e.currentTarget.style.boxShadow = "0 4px 6px -1px rgba(0, 0, 0, 0.1)";
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.transform = "scale(1)";
-          e.currentTarget.style.boxShadow = "none";
-        }}
-        onMouseDown={(e) => {
-          e.currentTarget.style.transform = "scale(0.97)";
-        }}
-        onMouseUp={(e) => {
-          e.currentTarget.style.transform = "scale(1.03)";
-        }}
-        onClick={(e) => {
-          e.stopPropagation();
-          onClick();
-        }}
-        title={title}
-        data-guide={dataGuide}
-      >
-        {label}
-      </button>
-    );
-  };
-
   const GUIDE_STEPS = [
     {
       id: "quick-query",
@@ -1735,7 +1707,7 @@ export function render() {
   ];
 
   const [dataFrequency, setDataFrequency] = React.useState("Monthly");
-  const [metric, setMetric] = React.useState("Revenue");
+  const [metric, setMetric] = React.useState("metric2");
   const [activePeriodComparison, setActivePeriodComparison] =
     React.useState("YoY"); // YoY, MoM, QoQ, WoW (stat boxes)
   const [activeOverlays, setActiveOverlays] = React.useState({ yoy: true }); // chart overlay toggles
@@ -2665,46 +2637,6 @@ export function render() {
     setShareCode(code);
     setShowShareModal(true);
   }, [generateShareCode]);
-
-  const handleCopyShareCode = React.useCallback(() => {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard
-        .writeText(shareCode)
-        .then(() => {
-          // Show temporary success feedback
-          const copyButton = document.getElementById("copy-share-code-btn");
-          if (copyButton) {
-            const originalText = copyButton.textContent;
-            copyButton.textContent = "Copied!";
-            copyButton.style.backgroundColor = "#10b981";
-            setTimeout(() => {
-              copyButton.textContent = originalText;
-              copyButton.style.backgroundColor = "#6366f1";
-            }, 2000);
-          }
-        })
-        .catch((error) => {
-          console.error("Failed to copy code:", error);
-          // Fallback: select text for manual copy
-          const codeInput = document.getElementById("share-code-input");
-          if (codeInput && codeInput.select) {
-            codeInput.select();
-            if (codeInput.setSelectionRange) {
-              codeInput.setSelectionRange(0, 99999);
-            }
-          }
-        });
-    } else {
-      // Fallback: select text for manual copy
-      const codeInput = document.getElementById("share-code-input");
-      if (codeInput && codeInput.select) {
-        codeInput.select();
-        if (codeInput.setSelectionRange) {
-          codeInput.setSelectionRange(0, 99999);
-        }
-      }
-    }
-  }, [shareCode]);
 
   const extractCodeFromUrl = React.useCallback((input) => {
     const trimmed = input.trim();
@@ -3842,9 +3774,9 @@ export function render() {
     const views = ["Overall", ...Object.keys(VIEW_CONFIG)];
     // Map internal metric keys to display labels so LLM knows what the user sees
     const metricMap = {
-      "Volume": METRIC_LABELS["Volume"] || "Volume",
-      "Revenue": METRIC_LABELS["Revenue"] || "Revenue",
-      "Margin Rate": METRIC_LABELS["Margin Rate"] || "Margin Rate",
+      metric1: METRIC_LABELS.metric1 || "Metric 1",
+      metric2: METRIC_LABELS.metric2 || "Metric 2",
+      metric3: METRIC_LABELS.metric3 || "Metric 3",
     };
     return {
       metrics: metricMap,
@@ -4039,11 +3971,6 @@ export function render() {
     [formatFilterName, dateRange, FILTER_CONFIG]
   );
 
-  // Helper function to get active filters description
-  const getActiveFiltersDescription = React.useCallback(() => {
-    return buildFilterDescription("active", ", ", " (Filtered: ", ")");
-  }, [buildFilterDescription]);
-
   // Simple chart title helper - just metric name + optional filters
   const getSimpleChartTitle = React.useCallback(() => {
     const displayMetric = METRIC_LABELS[metric] || metric;
@@ -4123,39 +4050,8 @@ export function render() {
     return grouped;
   }, [filteredData, dateField]);
 
-  // ===== OPTIMIZATION: Shared period-level aggregation builder (DRY) =====
-  // Used by both periodAggregates (filteredData) and baseDataAggregatesByPeriod (baseFilteredData)
-  // All three metrics are derived from just two base values: totalVolume and totalRevenue
-  const buildPeriodAggregates = (data, dtField) => {
-    const aggregates = {};
-    const volCol = COLUMNS.VOLUME;
-    const revCol = COLUMNS.REVENUE;
-    const n = data.length;
-
-    for (let i = 0; i < n; i++) {
-      const row = data[i];
-      const period = row[dtField];
-
-      if (!aggregates[period]) {
-        aggregates[period] = { totalVolume: 0, totalRevenue: 0 };
-      }
-
-      aggregates[period].totalVolume += row[volCol] || 0;
-      aggregates[period].totalRevenue += row[revCol] || 0;
-    }
-
-    // Pre-compute all derived metrics
-    const periods = Object.keys(aggregates);
-    for (let p = 0; p < periods.length; p++) {
-      const agg = aggregates[periods[p]];
-      agg.Volume = agg.totalVolume;
-      agg.Revenue = agg.totalRevenue;
-      agg["Margin Rate"] =
-        agg.totalVolume > 0 ? (10000 * agg.totalRevenue) / agg.totalVolume : 0;
-    }
-
-    return aggregates;
-  };
+  // Period-level aggregation: delegates to extracted utility, binding COLUMNS
+  const buildPeriodAggregates = (data, dtField) => buildPeriodAggregatesUtil(data, dtField, COLUMNS);
 
   // OPTIMIZATION (Opportunity 2): Compute base aggregates once, derive filtered version cheaply
   // In live mode: use server-provided aggregates directly
@@ -4185,104 +4081,8 @@ export function render() {
   }, [baseDataAggregatesByPeriod, filteredDatesSet]);
 
   // ===== OPTIMIZATION: Shared dimension-level aggregation builder (DRY) =====
-  // Structure: { dimensionColumn: { period: { categoryValue: { totalVolume, totalRevenue, Volume, Revenue, MarginRate } } } }
-  // Used by both dimensionAggregates (filteredData) and baseDimensionAggregates (baseFilteredData)
-  // VECTORIZATION: Heavily optimized for 800K+ rows using index-based loops
-  const buildDimensionAggregates = (data, dtField) => {
-    const aggregates = {};
-    const categoryTotals = {};
-
-    // Pre-filter valid dimensions and pre-allocate structures
-    const validDims = [];
-    for (let d = 0; d < DIMENSION_DEFINITIONS.length; d++) {
-      const dim = DIMENSION_DEFINITIONS[d];
-      const column = COLUMNS[dim.columnKey];
-      if (column) {
-        validDims.push({ column });
-        aggregates[column] = {};
-        categoryTotals[column] = {};
-      }
-    }
-
-    const dimCount = validDims.length;
-    if (dimCount === 0) {
-      aggregates._categoryTotals = categoryTotals;
-      return aggregates;
-    }
-
-    const volCol = COLUMNS.VOLUME;
-    const revCol = COLUMNS.REVENUE;
-    const n = data.length;
-
-    // CRITICAL OPTIMIZATION: Use for loop instead of forEach (2-3x faster on large datasets)
-    for (let i = 0; i < n; i++) {
-      const row = data[i];
-      const period = row[dtField];
-      if (!period) continue;
-
-      const volume = row[volCol] || 0;
-      const revenue = row[revCol] || 0;
-
-      for (let d = 0; d < dimCount; d++) {
-        const { column } = validDims[d];
-        const categoryValue = row[column] || "Unknown";
-
-        if (!aggregates[column][period]) {
-          aggregates[column][period] = {};
-        }
-
-        if (!aggregates[column][period][categoryValue]) {
-          aggregates[column][period][categoryValue] = {
-            totalVolume: 0,
-            totalRevenue: 0,
-          };
-        }
-
-        aggregates[column][period][categoryValue].totalVolume += volume;
-        aggregates[column][period][categoryValue].totalRevenue += revenue;
-
-        // OPTIMIZATION (Opportunity 3): Accumulate category totals across all periods
-        // in the same pass, eliminating a separate triple-nested loop
-        if (!categoryTotals[column][categoryValue]) {
-          categoryTotals[column][categoryValue] = {
-            totalVolume: 0,
-            totalRevenue: 0,
-          };
-        }
-        categoryTotals[column][categoryValue].totalVolume += volume;
-        categoryTotals[column][categoryValue].totalRevenue += revenue;
-      }
-    }
-
-    // Second pass: compute derived metrics for per-period aggregates
-    Object.keys(aggregates).forEach((column) => {
-      Object.keys(aggregates[column]).forEach((period) => {
-        Object.keys(aggregates[column][period]).forEach((categoryValue) => {
-          const agg = aggregates[column][period][categoryValue];
-          agg.Volume = agg.totalVolume;
-          agg.Revenue = agg.totalRevenue;
-          agg["Margin Rate"] =
-            agg.totalVolume > 0
-              ? (10000 * agg.totalRevenue) / agg.totalVolume
-              : 0;
-        });
-      });
-    });
-
-    // Compute derived metrics for category totals
-    Object.keys(categoryTotals).forEach((column) => {
-      Object.keys(categoryTotals[column]).forEach((categoryValue) => {
-        const t = categoryTotals[column][categoryValue];
-        t.Volume = t.totalVolume;
-        t.Revenue = t.totalRevenue;
-        t["Margin Rate"] =
-          t.totalVolume > 0 ? (10000 * t.totalRevenue) / t.totalVolume : 0;
-      });
-    });
-
-    aggregates._categoryTotals = categoryTotals;
-    return aggregates;
-  };
+  // Dimension-level aggregation: delegates to extracted utility, binding COLUMNS + DIMENSION_DEFINITIONS
+  const buildDimensionAggregates = (data, dtField) => buildDimensionAggregatesUtil(data, dtField, COLUMNS, DIMENSION_DEFINITIONS);
 
   // OPTIMIZATION (Opportunity 2): Compute base dimension aggregates once on baseFilteredData (O(N×M)),
   // then derive the date-filtered version cheaply (O(D×P×C)) instead of a second O(N×M) scan
@@ -4315,23 +4115,21 @@ export function render() {
           var cat = cats[k];
           var agg = base[col][period][cat];
           if (!categoryTotals[col][cat]) {
-            categoryTotals[col][cat] = { totalVolume: 0, totalRevenue: 0 };
+            categoryTotals[col][cat] = { metric1: 0, metric2: 0 };
           }
-          categoryTotals[col][cat].totalVolume += agg.totalVolume;
-          categoryTotals[col][cat].totalRevenue += agg.totalRevenue;
+          categoryTotals[col][cat].metric1 += agg.metric1;
+          categoryTotals[col][cat].metric2 += agg.metric2;
         }
       }
     }
-    // Compute derived metrics for category totals
+    // Compute derived metric3 for category totals
     var ctCols = Object.keys(categoryTotals);
     for (var ci = 0; ci < ctCols.length; ci++) {
       var catKeys = Object.keys(categoryTotals[ctCols[ci]]);
       for (var ki = 0; ki < catKeys.length; ki++) {
         var t = categoryTotals[ctCols[ci]][catKeys[ki]];
-        t.Volume = t.totalVolume;
-        t.Revenue = t.totalRevenue;
-        t["Margin Rate"] =
-          t.totalVolume > 0 ? (10000 * t.totalRevenue) / t.totalVolume : 0;
+        t.metric3 =
+          t.metric1 > 0 ? (10000 * t.metric2) / t.metric1 : 0;
       }
     }
     result._categoryTotals = categoryTotals;
@@ -4357,39 +4155,27 @@ export function render() {
     return Object.keys(periodAggregates).sort();
   }, [periodAggregates]);
 
-  // Optimized: Get pre-computed metric value from periodAggregates when available
-  const getMetricFromAggregate = React.useCallback(
-    (period, metricName) => {
-      const agg = periodAggregates[period];
-      if (!agg) return 0;
-      return agg[metricName] !== undefined ? agg[metricName] : agg.Volume;
-    },
-    [periodAggregates]
-  );
-
   // Calculate metrics from rows (fallback for non-period-grouped data)
   const calculateMetricValue = React.useCallback((rows, metricName) => {
-    // Fast path: if rows is empty, return 0
     if (!rows || rows.length === 0) return 0;
 
-    let totalVolume = 0;
-    let totalRevenue = 0;
-    // Single pass through rows to compute both aggregates
+    let m1 = 0;
+    let m2 = 0;
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      totalVolume += row[COLUMNS.VOLUME] || 0;
-      totalRevenue += row[COLUMNS.REVENUE] || 0;
+      m1 += row[COLUMNS.METRIC1] || 0;
+      m2 += row[COLUMNS.METRIC2] || 0;
     }
 
     switch (metricName) {
-      case "Volume":
-        return totalVolume;
-      case "Revenue":
-        return totalRevenue;
-      case "Margin Rate":
-        return totalVolume > 0 ? (10000 * totalRevenue) / totalVolume : 0;
+      case "metric1":
+        return m1;
+      case "metric2":
+        return m2;
+      case "metric3":
+        return m1 > 0 ? (10000 * m2) / m1 : 0;
       default:
-        return totalVolume;
+        return m1;
     }
   }, []);
 
@@ -4403,29 +4189,29 @@ export function render() {
   // In live mode, reads from config with auto-detection. In demo mode, Margin Rate is always line.
   const resolveChartType = React.useCallback((metricName) => {
     if (isLiveMode && liveMetricConfig) {
-      const prefix = metricName === 'Volume' ? 'volume' : metricName === 'Revenue' ? 'revenue' : 'derived';
+      const prefix = metricName === 'metric1' ? 'volume' : metricName === 'metric2' ? 'revenue' : 'derived';
       const configuredType = liveMetricConfig[prefix + 'ChartType'] || 'auto';
       if (configuredType !== 'auto') return configuredType;
       // Auto: formula mode → line, otherwise stacked
       const mode = liveMetricConfig[prefix + 'Mode'] || 'aggregation';
       return mode === 'formula' ? 'line' : 'stacked';
     }
-    // Demo mode: Margin Rate is line, others are stacked
-    return metricName === 'Margin Rate' ? 'line' : 'stacked';
+    // Demo mode: metric3 (derived) is line, others are stacked
+    return metricName === 'metric3' ? 'line' : 'stacked';
   }, [isLiveMode, liveMetricConfig]);
 
   const formatMetricValue = React.useCallback((value, metricName) => {
     // Live mode: use metric config formatting with prefix/suffix
     if (isLiveMode && liveMetricConfig) {
-      if (metricName === "Volume") {
+      if (metricName === "metric1") {
         const formatted = numeral(value).format(liveMetricConfig.volumeFormat);
         return (liveMetricConfig.volumePrefix || "") + formatted + (liveMetricConfig.volumeSuffix || "");
       }
-      if (metricName === "Revenue") {
+      if (metricName === "metric2") {
         const formatted = numeral(value).format(liveMetricConfig.revenueFormat);
         return (liveMetricConfig.revenuePrefix || "") + formatted + (liveMetricConfig.revenueSuffix || "");
       }
-      if (metricName === "Margin Rate") {
+      if (metricName === "metric3") {
         const displayValue = (liveMetricConfig.derivedMode !== 'formula' && liveMetricConfig.derivedDivisor) ? value / liveMetricConfig.derivedDivisor : value;
         const formatted = numeral(displayValue).format(liveMetricConfig.derivedFormat);
         return (liveMetricConfig.derivedPrefix || "") + formatted + (liveMetricConfig.derivedSuffix || "");
@@ -4433,11 +4219,11 @@ export function render() {
     }
     // Demo mode: prefix/suffix baked in
     switch (metricName) {
-      case "Volume":
+      case "metric1":
         return "$" + numeral(value).format("0.0a");
-      case "Revenue":
+      case "metric2":
         return "$" + numeral(value).format("0.0a");
-      case "Margin Rate":
+      case "metric3":
         return numeral(value).format("0.0") + " bps";
       default:
         return numeral(value).format("0.0a");
@@ -4520,10 +4306,10 @@ export function render() {
 
       // Parent Revenue values (needed for Margin Rate weighting) - computed once
       const parentFirstRev = periodAggregates[firstPeriod]
-        ? periodAggregates[firstPeriod].Revenue || 0
+        ? periodAggregates[firstPeriod].metric2 || 0
         : 0;
       const parentLastRev = periodAggregates[lastPeriod]
-        ? periodAggregates[lastPeriod].Revenue || 0
+        ? periodAggregates[lastPeriod].metric2 || 0
         : 0;
 
       if (parentFirstValue === 0) {
@@ -4594,20 +4380,20 @@ export function render() {
 
         let baseShare, excessContribution, pctOfExcess;
 
-        if (metric === "Margin Rate") {
+        if (metric === "metric3") {
           const categoryFirstRev = getDimAggMetric(
             dimensionAggregates,
             column,
             firstPeriod,
             categoryValue,
-            "Revenue"
+            "metric2"
           );
           const categoryLastRev = getDimAggMetric(
             dimensionAggregates,
             column,
             lastPeriod,
             categoryValue,
-            "Revenue"
+            "metric2"
           );
           const avgCategoryRev = (categoryFirstRev + categoryLastRev) / 2;
           const avgParentRev = (parentFirstRev + parentLastRev) / 2;
@@ -4908,7 +4694,7 @@ export function render() {
         const agg = periodAggregates[period];
         if (!agg) return;
         // Synthetic row with volume/revenue columns so calculateMetric() works unchanged
-        const syntheticRow = { [dateField]: period, [COLUMNS.VOLUME]: agg.totalVolume, [COLUMNS.REVENUE]: agg.totalRevenue };
+        const syntheticRow = { [dateField]: period, [COLUMNS.METRIC1]: agg.metric1, [COLUMNS.METRIC2]: agg.metric2 };
         completeFilteredData.push(syntheticRow);
         completeDataByPeriod[period] = [syntheticRow];
       });
@@ -4948,14 +4734,14 @@ export function render() {
             const catAgg = cats[val];
             let cat = precomputed[col][val];
             if (!cat) {
-              cat = { totalVolume: 0, totalRevenue: 0, byPeriod: {} };
+              cat = { metric1: 0, metric2: 0, byPeriod: {} };
               precomputed[col][val] = cat;
             }
-            const vol = catAgg.totalVolume || 0;
-            const rev = catAgg.totalRevenue || 0;
-            cat.totalVolume += vol;
-            cat.totalRevenue += rev;
-            cat.byPeriod[period] = { volume: vol, revenue: rev };
+            const vol = catAgg.metric1 || 0;
+            const rev = catAgg.metric2 || 0;
+            cat.metric1 += vol;
+            cat.metric2 += rev;
+            cat.byPeriod[period] = { metric1: vol, metric2: rev };
           });
         });
       });
@@ -4963,48 +4749,48 @@ export function render() {
       for (let i = 0; i < completeFilteredData.length; i++) {
         const row = completeFilteredData[i];
         const period = row[dateField];
-        const volume = row[COLUMNS.VOLUME] || 0;
+        const volume = row[COLUMNS.METRIC1] || 0;
         const revenue =
-          row[COLUMNS.REVENUE] || 0;
+          row[COLUMNS.METRIC2] || 0;
         for (let d = 0; d < activeDimColumns.length; d++) {
           const col = activeDimColumns[d];
           const val = row[col];
           if (!val) continue;
           let cat = precomputed[col][val];
           if (!cat) {
-            cat = { totalVolume: 0, totalRevenue: 0, byPeriod: {} };
+            cat = { metric1: 0, metric2: 0, byPeriod: {} };
             precomputed[col][val] = cat;
           }
-          cat.totalVolume += volume;
-          cat.totalRevenue += revenue;
+          cat.metric1 += volume;
+          cat.metric2 += revenue;
           let pAgg = cat.byPeriod[period];
           if (!pAgg) {
-            pAgg = { volume: 0, revenue: 0 };
+            pAgg = { metric1: 0, metric2: 0 };
             cat.byPeriod[period] = pAgg;
           }
-          pAgg.volume += volume;
-          pAgg.revenue += revenue;
+          pAgg.metric1 += volume;
+          pAgg.metric2 += revenue;
         }
       }
     }
     // Compute metric from pre-aggregated volume/revenue (matches calculateMetricValue logic)
-    const metricFromAgg = (volume, revenue) => {
+    const metricFromAgg = (m1, m2) => {
       switch (metric) {
-        case "Volume":
-          return volume;
-        case "Revenue":
-          return revenue;
-        case "Margin Rate":
-          return volume > 0 ? (10000 * revenue) / volume : 0;
+        case "metric1":
+          return m1;
+        case "metric2":
+          return m2;
+        case "metric3":
+          return m1 > 0 ? (10000 * m2) / m1 : 0;
         default:
-          return volume;
+          return m1;
       }
     };
 
     const totalMarketValue = calculateMetric(completeFilteredData);
     const totalRevShare = completeFilteredData.reduce(
       (sum, row) =>
-        sum + (row[COLUMNS.REVENUE] || 0),
+        sum + (row[COLUMNS.METRIC2] || 0),
       0
     );
 
@@ -5050,7 +4836,7 @@ export function render() {
     const calculateCategoryRevShare = (columnName, categoryValue) => {
       var dimData = precomputed[columnName];
       var catData = dimData && dimData[categoryValue];
-      return (catData && catData.totalRevenue) || 0;
+      return (catData && catData.metric2) || 0;
     };
 
     // Pre-compute common thresholds used across multiple functions
@@ -5321,16 +5107,16 @@ export function render() {
         if (!catAgg) return;
 
         // Revenue from precomputed (O(1) vs O(N))
-        if (catAgg.totalRevenue < minRevThreshold) return;
+        if (catAgg.metric2 < minRevThreshold) return;
 
         // Period metrics from precomputed (O(1) vs O(N) filter + reduce)
         const firstAgg = catAgg.byPeriod[firstPeriod];
         const lastAgg = catAgg.byPeriod[lastPeriod];
         const firstCatMetric = firstAgg
-          ? metricFromAgg(firstAgg.volume, firstAgg.revenue)
+          ? metricFromAgg(firstAgg.metric1, firstAgg.metric2)
           : 0;
         const lastCatMetric = lastAgg
-          ? metricFromAgg(lastAgg.volume, lastAgg.revenue)
+          ? metricFromAgg(lastAgg.metric1, lastAgg.metric2)
           : 0;
 
         firstPeriodShare[option] =
@@ -5409,7 +5195,7 @@ export function render() {
       if (completePeriods.length < 2) return [];
 
       // Market share shifts don't make sense for Margin Rate metric
-      if (metric === "Margin Rate") return [];
+      if (metric === "metric3") return [];
 
       const insights = DIMENSION_DEFINITIONS.flatMap((dim) => {
         const column = COLUMNS[dim.columnKey];
@@ -5614,7 +5400,7 @@ export function render() {
       Object.keys(dimData).forEach((value) => {
         if (value === "Unknown" || shouldExcludeCategory(value)) return;
         const cat = dimData[value];
-        analysis[value] = metricFromAgg(cat.totalVolume, cat.totalRevenue);
+        analysis[value] = metricFromAgg(cat.metric1, cat.metric2);
       });
 
       const sorted = Object.entries(analysis).sort((a, b) => b[1] - a[1]);
@@ -5624,12 +5410,12 @@ export function render() {
 
       // Calculate market share and display value
       let marketShare, displayValue;
-      if (metric === "Margin Rate") {
+      if (metric === "metric3") {
         // 🚀 PERFORMANCE: Use precomputed aggregates instead of row-level reduce
         const catData = dimData[topValue];
         displayValue = topMetricValue;
         marketShare =
-          totalRevShare > 0 ? (catData.totalRevenue / totalRevShare) * 100 : 0;
+          totalRevShare > 0 ? (catData.metric2 / totalRevShare) * 100 : 0;
       } else {
         marketShare = (topMetricValue / totalMarketValue) * 100;
         displayValue = topMetricValue;
@@ -5640,11 +5426,11 @@ export function render() {
       const isNear100Percent = marketShare >= 99.5;
 
       if (
-        (metric === "Margin Rate" || marketShare > minThreshold) &&
+        (metric === "metric3" || marketShare > minThreshold) &&
         !isNear100Percent
       ) {
         const shareText =
-          metric === "Margin Rate"
+          metric === "metric3"
             ? formatMetric(displayValue)
             : `${marketShare.toFixed(1)}% share (${formatMetric(
                 displayValue
@@ -5978,7 +5764,7 @@ export function render() {
             const catAgg = dimData[categoryValue];
 
             // Revenue from precomputed (O(1) vs O(N) filter+reduce)
-            const categoryRev = catAgg.totalRevenue;
+            const categoryRev = catAgg.metric2;
             if (categoryRev < minRevThreshold) return;
 
             // Period metrics from precomputed (O(1) vs O(N) filter + calculateMetric)
@@ -5987,10 +5773,10 @@ export function render() {
               catAgg.byPeriod[recentPeriods[recentPeriods.length - 1]];
 
             const categoryFirstValue = firstPeriodAgg
-              ? metricFromAgg(firstPeriodAgg.volume, firstPeriodAgg.revenue)
+              ? metricFromAgg(firstPeriodAgg.metric1, firstPeriodAgg.metric2)
               : 0;
             const categoryLastValue = lastPeriodAgg
-              ? metricFromAgg(lastPeriodAgg.volume, lastPeriodAgg.revenue)
+              ? metricFromAgg(lastPeriodAgg.metric1, lastPeriodAgg.metric2)
               : 0;
 
             if (categoryFirstValue === 0 || categoryFirstValue === null) return;
@@ -6420,7 +6206,7 @@ export function render() {
   // Instead of calling getStatBoxDataForMetric 3 times, compute all metrics together
   const allMetricsStatData = React.useMemo(() => {
     if (periods.length === 0) {
-      return { Volume: null, Revenue: null, "Margin Rate": null };
+      return { metric1: null, metric2: null, metric3: null };
     }
 
     // Use second-to-last period as the main period (since last is developing)
@@ -6453,7 +6239,7 @@ export function render() {
     const yoyAgg = yoyPeriod ? baseDataAggregatesByPeriod[yoyPeriod] : null;
 
     // Calculate stats for all metrics in one pass
-    const metrics = ["Volume", "Revenue", "Margin Rate"];
+    const metrics = ["metric1", "metric2", "metric3"];
     const result = {};
 
     metrics.forEach((metricName) => {
@@ -6506,7 +6292,7 @@ export function render() {
       if (!scenarioSnapshot) return [];
 
       // Get scenario configuration
-      const scenarioMetric = scenarioSnapshot.metric || "Revenue";
+      const scenarioMetric = scenarioSnapshot.metric || "metric2";
       const scenarioView = scenarioSnapshot.view || "Overall";
       const scenarioDateRange = scenarioSnapshot.dateRange || "YTD";
       const scenarioDataFrequency = scenarioSnapshot.dataFrequency || "Monthly";
@@ -6754,11 +6540,11 @@ export function render() {
                 row[attribute] === attrValue
             );
             let total;
-            if (scenarioMetric === "Margin Rate") {
+            if (scenarioMetric === "metric3") {
               total = attrRows.reduce(
                 (sum, row) =>
                   sum +
-                  (row[COLUMNS.REVENUE] || 0),
+                  (row[COLUMNS.METRIC2] || 0),
                 0
               );
             } else {
@@ -6808,7 +6594,7 @@ export function render() {
             const categoryColor = getCategoryColor(category, index);
             const blendedColor = scenarioColor; // Use scenario color instead
 
-            if (scenarioMetric === "Margin Rate") {
+            if (scenarioMetric === "metric3") {
               scenarioTraces.push({
                 type: "scatter",
                 mode: "lines+markers",
@@ -7195,14 +6981,14 @@ export function render() {
       // Use pre-computed totals for sorting (O(1) lookup instead of O(n) filter + reduce)
       const attributeTotals = attributeValues.map((attrValue) => {
         const totals = dimTotals[attrValue] || {
-          totalVolume: 0,
-          totalRevenue: 0,
+          metric1: 0,
+          metric2: 0,
         };
-        // For Margin Rate metric, use Revenue for sorting instead of Margin Rate
+        // For metric3 (derived), use metric2 for sorting instead of the ratio
         const total =
-          metric === "Margin Rate"
-            ? totals.totalRevenue
-            : totals[metric] || totals.Volume;
+          metric === "metric3"
+            ? totals.metric2
+            : totals[metric] || totals.metric1;
         return { attrValue, total };
       });
 
@@ -7252,7 +7038,7 @@ export function render() {
       const periodTotals = periods.map((period) => {
         const agg = periodAggregates[period];
         if (!agg) return 0;
-        return agg[metric] || agg.Volume;
+        return agg[metric] || agg.metric1;
       });
 
       // Store share percentages for %Share and %Share Growth Rate traces
@@ -7287,23 +7073,23 @@ export function render() {
             );
           }
 
-          // For client-side "Rest Combined": sum volumes/revenues first for Margin Rate (not the rates themselves)
-          if (metric === "Margin Rate") {
-            let totalVolume = 0,
-              totalRevenue = 0;
+          // For client-side "Rest Combined": sum base metrics first for metric3 (not the ratios themselves)
+          if (metric === "metric3") {
+            let m1Sum = 0,
+              m2Sum = 0;
             const dimAgg = dimensionAggregates[attribute];
             restAttributes.forEach((restAttr) => {
               const catAgg =
                 dimAgg && dimAgg[period] && dimAgg[period][restAttr];
               if (catAgg) {
-                totalVolume += catAgg.totalVolume || 0;
-                totalRevenue += catAgg.totalRevenue || 0;
+                m1Sum += catAgg.metric1 || 0;
+                m2Sum += catAgg.metric2 || 0;
               }
             });
-            return totalVolume > 0 ? (10000 * totalRevenue) / totalVolume : 0;
+            return m1Sum > 0 ? (10000 * m2Sum) / m1Sum : 0;
           }
 
-          // For Volume/Revenue, sum metric values directly
+          // For metric1/metric2, sum metric values directly
           return restAttributes.reduce(
             (sum, attr) =>
               sum +
@@ -7325,31 +7111,31 @@ export function render() {
           const periodTotalAgg = periodAggregates[period];
           let percentage;
 
-          if (metric === "Margin Rate") {
-            // For Margin Rate, calculate share based on volume using pre-computed aggregates
-            const totalVolume = periodTotalAgg ? periodTotalAgg.totalVolume : 0;
+          if (metric === "metric3") {
+            // For metric3 (derived), calculate share based on metric1 using pre-computed aggregates
+            const totalM1 = periodTotalAgg ? periodTotalAgg.metric1 : 0;
 
-            let categoryVolume = 0;
+            let categoryM1 = 0;
             if (category === "Rest Combined" && !(isLiveMode && topX > 0)) {
               restAttributes.forEach((restAttr) => {
                 const catAgg = dimAgg[period] && dimAgg[period][restAttr];
-                if (catAgg) categoryVolume += catAgg.totalVolume;
+                if (catAgg) categoryM1 += catAgg.metric1;
               });
             } else {
               const catAgg = dimAgg[period] && dimAgg[period][category];
-              if (catAgg) categoryVolume = catAgg.totalVolume;
+              if (catAgg) categoryM1 = catAgg.metric1;
             }
 
             percentage =
-              totalVolume > 0 ? (categoryVolume / totalVolume) * 100 : 0;
+              totalM1 > 0 ? (categoryM1 / totalM1) * 100 : 0;
           } else {
-            // For Volume and Revenue, calculate share as usual
+            // For metric1 and metric2, calculate share as usual
             percentage =
               (value !== null && totalForPeriod > 0) ? (value / totalForPeriod) * 100 : 0;
           }
 
           // Store share percentage for %Share traces (only for Volume and Revenue)
-          if (metric !== "Margin Rate") {
+          if (metric !== "metric3") {
             if (!sharePercentages[category]) {
               sharePercentages[category] = [];
             }
@@ -8244,9 +8030,9 @@ export function render() {
       // 3. "What is <category>'s <metric> Share [within <filter>]" -> Category's dimension view, filter on category + optional filters
 
       const metricPatterns = {
-        Revenue: "Revenue",
-        Volume: "Volume",
-        "Margin Rate": "Margin Rate",
+        [METRIC_LABELS.metric2 || "metric2"]: "metric2",
+        [METRIC_LABELS.metric1 || "metric1"]: "metric1",
+        [METRIC_LABELS.metric3 || "metric3"]: "metric3",
       };
 
       let parsed = {
@@ -8381,243 +8167,13 @@ export function render() {
     [formatFilterName]
   );
 
-  // Helper function to check if query has required phrases (category and metric)
-  const isQueryValid = React.useCallback(
-    (query) => {
-      if (!query || !query.trim()) return false;
-      // Prepend "What is" since it's now permanent text and not stored in queryText
-      const fullQuery = query.trim() ? `What is ${query.trim()}` : query;
-      const parsed = parseQuery(fullQuery);
-      return parsed.isValid && !!parsed.categoryValue;
-    },
-    [parseQuery]
-  );
-
-  // Generate random example question for "Feeling Lucky" button
-  const generateRandomQuestion = React.useCallback(() => {
-    // Get all available categories from all dimensions, tracking which dimension they belong to
-    const categoriesByDimension = {};
-    FILTER_CONFIG_STATIC.forEach(({ column }) => {
-      const dimTotals = dimensionCategoryTotals[column] || {};
-      const categories = Object.keys(dimTotals).filter((val) => {
-        if (!val || val === "Unknown") return false;
-        const lowerVal = String(val).toLowerCase();
-        if (lowerVal === "other" || lowerVal === "uncategorized" || lowerVal === "n/a" || lowerVal === "null") return false;
-        return true;
-      });
-      categoriesByDimension[column] = categories.filter((cat) => cat.length < 30);
-    });
-
-    // Flatten all categories for main category selection
-    const allDimensions = Object.keys(categoriesByDimension);
-    const allCategories = allDimensions.flatMap(
-      (dim) => categoriesByDimension[dim]
-    );
-
-    const sampleCategories =
-      allCategories.length > 0
-        ? allCategories
-        : ["Enterprise SaaS", "SMB SaaS", "Marketplace", "EMEA", "NA", "APAC"];
-
-    const metrics = ["Volume", "Revenue", "Margin Rate"];
-
-    // Pick main category
-    const rawCategory =
-      sampleCategories[
-        Math.floor(Math.random() * Math.min(15, sampleCategories.length))
-      ];
-
-    // Find which dimension the main category belongs to
-    let mainCategoryDimension = null;
-    for (const dim of allDimensions) {
-      if (categoriesByDimension[dim].includes(rawCategory)) {
-        mainCategoryDimension = dim;
-        break;
-      }
-    }
-
-    // Build filter options from OTHER dimensions only
-    // Exclude dimensions from the same product hierarchy group
-    let filterOptions = ["", "", ""]; // 3 empty strings = 75% chance no filter
-    if (mainCategoryDimension && allDimensions.length > 1) {
-      const isMainCategoryProduct = PRODUCT_DIMENSIONS.includes(
-        mainCategoryDimension
-      );
-
-      // Filter out dimensions from the same product group
-      const otherDimensions = allDimensions.filter((dim) => {
-        if (dim === mainCategoryDimension) return false; // Same dimension
-        if (isMainCategoryProduct && PRODUCT_DIMENSIONS.includes(dim))
-          return false; // Both product-related
-        return true;
-      });
-
-      const otherCategories = otherDimensions.flatMap(
-        (dim) => categoriesByDimension[dim]
-      );
-      if (otherCategories.length > 0) {
-        filterOptions = ["", "", "", ...otherCategories.slice(0, 10)];
-      }
-    }
-
-    // Pick random elements
-    const metric = metrics[Math.floor(Math.random() * metrics.length)];
-    const rawFilter =
-      filterOptions[Math.floor(Math.random() * filterOptions.length)];
-
-    // Pick action based on metric - now MANDATORY (no empty string)
-    let action;
-    if (metric === "Margin Rate") {
-      // For Margin Rate: Bps or Share
-      const marginActions = [" Bps", " Share"];
-      action = marginActions[Math.floor(Math.random() * marginActions.length)];
-    } else {
-      // For Volume and Revenue: Amount, Growth, or Share
-      const valueActions = [" Amount", " Growth", " Share"];
-      action = valueActions[Math.floor(Math.random() * valueActions.length)];
-    }
-
-    // Format category and filter names
-    const category = formatFilterName(rawCategory);
-    const filter = rawFilter ? ` within ${formatFilterName(rawFilter)}` : "";
-
-    // Format metric display
-    const metricDisplay = metric;
-
-    return `${category}'s ${metricDisplay}${action}${filter}`;
-  }, [FILTER_CONFIG, dimensionCategoryTotals, formatFilterName]);
-
-  // Execute query - simplified logic
-  const executeQuery = React.useCallback(
-    (query) => {
-      // Prepend "What is" since it's now permanent text and not stored in queryText
-      const fullQuery = query.trim() ? `What is ${query.trim()}` : query;
-      const parsed = parseQuery(fullQuery);
-
-      if (!parsed.isValid || !parsed.categoryValue) {
-        return false;
-      }
-
-      // Set flag to prevent clearing query text during execution
-      isExecutingQueryRef.current = true;
-
-      FILTER_CONFIG.forEach(({ setState }) => setState([]));
-      setSelectedCategories([]);
-      setInsightContext(null); // Clear decomposition context when loading from URL
-
-      // Update metric
-      if (parsed.metric) {
-        setMetric(parsed.metric);
-      }
-
-      // Determine view and action
-      if (parsed.action === "share") {
-        // For Share: use category for View (dimension), not Filter
-        // Find which dimension view this category belongs to
-        let categoryFound = false;
-
-        for (const [viewName, config] of Object.entries(VIEW_CONFIG)) {
-          const categories = getCategoriesForView(config);
-          if (categories.includes(parsed.categoryValue)) {
-            categoryFound = true;
-            setViewAndCategory(viewName, parsed.categoryValue);
-            break;
-          }
-        }
-
-        if (!categoryFound && parsed.category) {
-          const categoryLower = parsed.category.toLowerCase();
-          for (const [viewName, config] of Object.entries(VIEW_CONFIG)) {
-            const categories = getCategoriesForView(config);
-            const matchedCategory = categories.find(
-              (cat) =>
-                formatFilterName(cat).toLowerCase() === categoryLower ||
-                String(cat).toLowerCase() === categoryLower
-            );
-            if (matchedCategory) {
-              categoryFound = true;
-              setViewAndCategory(viewName, matchedCategory);
-              break;
-            }
-          }
-        }
-
-        // Apply additional filters if specified (but NOT the category itself)
-        if (parsed.filters.length > 0) {
-          FILTER_CONFIG.forEach(({ key, setState, formatValue }) => {
-            const optionsArray = getFilterOptions(key);
-            if (optionsArray && optionsArray.length > 1) {
-              const matchedFilters = matchFiltersToOptions(
-                parsed.filters,
-                optionsArray
-              );
-              if (matchedFilters.length > 0) {
-                setState(matchedFilters);
-              }
-            }
-          });
-        }
-      } else {
-        // For Growth or no action: Filter by category, show Default view
-        FILTER_CONFIG.forEach(({ key, setState }) => {
-          const optionsArray = getFilterOptions(key);
-          if (optionsArray && optionsArray.includes(parsed.categoryValue)) {
-            setState([parsed.categoryValue]);
-          }
-        });
-
-        // Apply additional filters if specified (for Growth queries with "within")
-        if (parsed.filters.length > 0) {
-          FILTER_CONFIG.forEach(({ key, setState, formatValue }) => {
-            const optionsArray = getFilterOptions(key);
-            if (optionsArray && optionsArray.length > 1) {
-              const matchedFilters = matchFiltersToOptions(
-                parsed.filters,
-                optionsArray
-              );
-              if (matchedFilters.length > 0) {
-                setState(matchedFilters);
-              }
-            }
-          });
-        }
-
-        setView("Overall");
-        setSelectedCategories([]);
-      }
-
-      // Reset flag after state updates complete
-      setTimeout(() => {
-        isExecutingQueryRef.current = false;
-      }, 100);
-
-      // Store executed query to prevent suggestions from reappearing
-      lastExecutedQueryRef.current = query;
-
-      return true;
-    },
-    [
-      parseQuery,
-      setMetric,
-      FILTER_CONFIG,
-      getFilterOptions,
-      formatFilterName,
-      baseFilteredData,
-      VIEW_CONFIG,
-      getCategoriesForView,
-      setViewAndCategory,
-      matchFiltersToOptions,
-    ]
-  );
-
-
   // Apply structured LLM response to dashboard controls
   const applyLLMResponse = React.useCallback(
     (response) => {
       isExecutingQueryRef.current = true;
 
       // Validate and apply metric — accept internal keys or display labels
-      const validMetricKeys = ["Revenue", "Volume", "Margin Rate"];
+      const validMetricKeys = ["metric1", "metric2", "metric3"];
       if (response.metric) {
         if (validMetricKeys.includes(response.metric)) {
           setMetric(response.metric);
@@ -8739,7 +8295,7 @@ export function render() {
   // Natural language example questions for Feeling Lucky — data-driven in live mode
   const LLM_EXAMPLE_QUESTIONS = React.useMemo(() => {
     if (isLiveMode && liveMetricConfig) {
-      const mLabels = [METRIC_LABELS["Volume"], METRIC_LABELS["Revenue"], METRIC_LABELS["Margin Rate"]].filter(Boolean);
+      const mLabels = [METRIC_LABELS.metric1, METRIC_LABELS.metric2, METRIC_LABELS.metric3].filter(Boolean);
       const dimLabels = DIMENSION_DEFINITIONS.map(d => d.viewName || d.filterLabel);
       // Collect a few real category values from the data
       const sampleCats = [];
@@ -8876,283 +8432,7 @@ export function render() {
     return saved;
   }, [scenario1, scenario2, scenario3, activeScenarios, scenarioLabels]);
 
-  const renderChangeDisplay = React.useCallback(
-    (
-      change,
-      changePercent,
-      metricName,
-      label,
-      isActive = true,
-      availableComparisons = []
-    ) => {
-      if (change === null) return null;
-      const isPositive = change >= 0;
-      const isPositivePercent = changePercent >= 0;
-      const trendIcon = isPositive ? (
-        <span style={{ fontSize: "14px", lineHeight: "1" }}>↑</span>
-      ) : (
-        <span style={{ fontSize: "14px", lineHeight: "1" }}>↓</span>
-      );
-
-      // Map comparison types for consistent handling
-      const comparisonMapping = {
-        "52W": "YoY",
-        YoY: "YoY",
-        MoM: "MoM",
-        QoQ: "QoQ",
-        WoW: "WoW",
-      };
-
-      return (
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: "4px",
-            alignItems: "center",
-          }}
-        >
-          <div style={styles.changeContainer}>
-            <span
-              style={{
-                ...styles.changeValue,
-                color: isActive
-                  ? isPositive
-                    ? theme.successText
-                    : theme.dangerText
-                  : theme.textQuaternary,
-              }}
-            >
-              {trendIcon}
-              {isPositive ? "+" : ""}
-              {formatMetricValue(change, metricName)}
-            </span>
-            {changePercent !== null && (
-              <span
-                style={{
-                  ...styles.changePercent,
-                  backgroundColor: isActive
-                    ? isPositivePercent
-                      ? isDarkMode
-                        ? "rgba(16, 185, 129, 0.2)"
-                        : "#d1fae5"
-                      : isDarkMode
-                      ? "rgba(239, 68, 68, 0.2)"
-                      : "#fee2e2"
-                    : theme.bgQuaternary,
-                  color: isActive
-                    ? isPositivePercent
-                      ? isDarkMode
-                        ? "#6ee7b7"
-                        : "#065f46"
-                      : isDarkMode
-                      ? "#fca5a5"
-                      : "#991b1b"
-                    : theme.textQuaternary,
-                  border: `1px solid ${
-                    isActive
-                      ? isPositivePercent
-                        ? isDarkMode
-                          ? "rgba(16, 185, 129, 0.4)"
-                          : "#a7f3d0"
-                        : isDarkMode
-                        ? "rgba(239, 68, 68, 0.4)"
-                        : "#fecaca"
-                      : theme.borderPrimary
-                  }`,
-                }}
-              >
-                {formatYoYValue(changePercent)} {label}
-              </span>
-            )}
-          </div>
-          {/* Carousel dots */}
-          {availableComparisons.length > 1 && (
-            <div
-              style={{
-                display: "flex",
-                gap: "6px",
-                justifyContent: "center",
-                marginTop: "2px",
-              }}
-            >
-              {availableComparisons.map((comp) => {
-                const mappedComp = comparisonMapping[comp] || comp;
-                const isActiveDot =
-                  activePeriodComparison === mappedComp ||
-                  (mappedComp === "YoY" &&
-                    comp === "52W" &&
-                    activePeriodComparison === "YoY");
-                return (
-                  <div
-                    key={comp}
-                    title={comp}
-                    onClick={(e) => {
-                      e.stopPropagation(); // Prevent triggering stat box click
-                      setActivePeriodComparison(mappedComp);
-                    }}
-                    style={{
-                      width: "6px",
-                      height: "6px",
-                      borderRadius: "50%",
-                      backgroundColor: isActiveDot ? "#6366f1" : "#d1d5db",
-                      cursor: "pointer",
-                      transition: "all 0.2s ease",
-                      border: isActiveDot
-                        ? "2px solid #4f46e5"
-                        : "1px solid #9ca3af",
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!isActiveDot) {
-                        e.currentTarget.style.backgroundColor = "#9ca3af";
-                        e.currentTarget.style.transform = "scale(1.2)";
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      if (!isActiveDot) {
-                        e.currentTarget.style.backgroundColor = "#d1d5db";
-                        e.currentTarget.style.transform = "scale(1)";
-                      }
-                    }}
-                  />
-                );
-              })}
-            </div>
-          )}
-        </div>
-      );
-    },
-    [
-      formatMetricValue,
-      styles,
-      activePeriodComparison,
-      setActivePeriodComparison,
-      theme,
-      isDarkMode,
-    ]
-  );
-
-  const renderStatBox = React.useCallback(
-    (
-      metricName,
-      metricStatData,
-      isActive,
-      accentColor,
-      dataFrequency,
-      periodChangeLabel,
-      displayLabel
-    ) => {
-      displayLabel = displayLabel || metricName;
-      const periodLabel =
-        dataFrequency === "Weekly"
-          ? "Last week"
-          : dataFrequency === "Monthly"
-          ? "Last month"
-          : dataFrequency === "Quarterly"
-          ? "Last quarter"
-          : dataFrequency === "Yearly"
-          ? "Last year"
-          : "Latest";
-
-      // Get available comparisons based on dataFrequency
-      const availableComparisons =
-        dataFrequency === "Daily"
-          ? ["YoY", "DoD"]
-          : dataFrequency === "Weekly"
-          ? ["52W", "WoW"]
-          : dataFrequency === "Monthly"
-          ? ["YoY", "MoM"]
-          : dataFrequency === "Quarterly"
-          ? ["YoY", "QoQ"]
-          : ["YoY"]; // Yearly only has YoY
-
-      // Determine which comparison to show based on activePeriodComparison.
-      // If the selected comparison yields null, fall back to the other option
-      // (e.g., if YoY has no data because history is <1 year, show DoD/WoW/MoM instead).
-      let changeValue, changePercentValue, comparisonLabel;
-      const useYoY = activePeriodComparison === "YoY" || activePeriodComparison === "52W";
-      if (useYoY) {
-        changeValue = metricStatData.yoyAbsoluteChange;
-        changePercentValue = metricStatData.yoyChange;
-        comparisonLabel = dataFrequency === "Weekly" ? "52W" : "YoY";
-      }
-      if (!useYoY || changeValue === null) {
-        // Use period-over-period (DoD/WoW/MoM/QoQ)
-        if (metricStatData.change !== null) {
-          changeValue = metricStatData.change;
-          changePercentValue = metricStatData.changePercent;
-          comparisonLabel = periodChangeLabel;
-        }
-      }
-
-      return (
-        <div
-          key={metricName}
-          style={{
-            ...styles.statBox,
-            ...(isActive ? styles.statBoxActive : styles.statBoxInactive),
-            ...(isActive && { borderColor: accentColor }),
-          }}
-          onClick={() => {
-            setMetric(metricName);
-            setInsightContext(null); // Clear decomposition context when switching metrics
-          }}
-        >
-          {isActive && (
-            <div
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                right: 0,
-                height: "4px",
-                backgroundColor: accentColor,
-              }}
-            />
-          )}
-          <div style={styles.statBoxLeft}>
-            <div
-              style={{
-                ...styles.statTitle,
-                color: isActive ? accentColor : "#6b7280",
-              }}
-            >
-              {periodLabel} {displayLabel}
-            </div>
-            <div
-              style={{
-                ...styles.statValue,
-                color: isActive ? accentColor : "#9ca3af",
-              }}
-            >
-              {formatMetricValue(metricStatData.lastValue, metricName)}
-            </div>
-            <div style={styles.statPeriod}>
-              <span style={{ fontSize: "10px" }}>📅</span>
-              {metricStatData.lastPeriod}
-            </div>
-          </div>
-          <div style={styles.statBoxRight}>
-            {renderChangeDisplay(
-              changeValue,
-              changePercentValue,
-              metricName,
-              comparisonLabel,
-              isActive,
-              availableComparisons
-            )}
-          </div>
-        </div>
-      );
-    },
-    [
-      setMetric,
-      formatMetricValue,
-      renderChangeDisplay,
-      styles,
-      activePeriodComparison,
-    ]
-  );
+  // StatBox rendering delegated to extracted component (src/components/StatBox.js)
 
   return (
     <div style={styles.container}>
@@ -9413,7 +8693,7 @@ export function render() {
                     <div style={styles.fontWeight600}>How to Use</div>
                     <div style={styles.textGray}>
                       {isLiveMode && METRIC_LABELS
-                        ? `Type a natural language question like "How is ${METRIC_LABELS["Volume"] || 'the metric'} trending${DIMENSION_DEFINITIONS.length > 0 ? ` by ${DIMENSION_DEFINITIONS[0].viewName}` : ''}?" or click "Feeling Lucky" for examples.`
+                        ? `Type a natural language question like "How is ${METRIC_LABELS.metric1 || 'the metric'} trending${DIMENSION_DEFINITIONS.length > 0 ? ` by ${DIMENSION_DEFINITIONS[0].viewName}` : ''}?" or click "Feeling Lucky" for examples.`
                         : 'Type a natural language question like "How is revenue trending in EMEA?" or click "Feeling Lucky" for examples. Press Enter or click "Ask" to query.'}
                     </div>
                   </div>
@@ -9431,7 +8711,7 @@ export function render() {
                   }
                 }}
                 placeholder={isLiveMode && METRIC_LABELS
-                  ? `Ask a question... e.g. How is ${METRIC_LABELS["Volume"] || 'the metric'} trending${DIMENSION_DEFINITIONS.length > 0 ? ` by ${DIMENSION_DEFINITIONS[0].viewName}` : ''}?`
+                  ? `Ask a question... e.g. How is ${METRIC_LABELS.metric1 || 'the metric'} trending${DIMENSION_DEFINITIONS.length > 0 ? ` by ${DIMENSION_DEFINITIONS[0].viewName}` : ''}?`
                   : "Ask a question... e.g. How is revenue trending in EMEA?"}
                 disabled={isLLMLoading}
                 style={{
@@ -9551,20 +8831,31 @@ export function render() {
 
         <div style={styles.statBoxContainer} data-guide="metric-statboxes">
           {(isLiveMode && liveMetricConfig && !liveMetricConfig.derivedAggType && liveMetricConfig.derivedMode !== 'formula'
-            ? ["Volume", "Revenue"]
-            : ["Volume", "Revenue", "Margin Rate"]
+            ? ["metric1", "metric2"]
+            : ["metric1", "metric2", "metric3"]
           ).map((metricName) => {
             const metricStatData = allMetricsStatData[metricName];
             if (!metricStatData) return null;
             const displayLabel = METRIC_LABELS[metricName] || metricName;
-            return renderStatBox(
-              metricName,
-              metricStatData,
-              metric === metricName,
-              "#6366f1",
-              dataFrequency,
-              periodChangeLabel,
-              displayLabel
+            return (
+              <StatBox
+                key={metricName}
+                metricName={metricName}
+                metricStatData={metricStatData}
+                isActive={metric === metricName}
+                accentColor="#6366f1"
+                dataFrequency={dataFrequency}
+                periodChangeLabel={periodChangeLabel}
+                displayLabel={displayLabel}
+                activePeriodComparison={activePeriodComparison}
+                setActivePeriodComparison={setActivePeriodComparison}
+                setMetric={setMetric}
+                setInsightContext={setInsightContext}
+                formatMetricValue={formatMetricValue}
+                styles={styles}
+                theme={theme}
+                isDarkMode={isDarkMode}
+              />
             );
           })}
         </div>
@@ -10599,7 +9890,7 @@ export function render() {
           )}
 
           {/* Toggle buttons for $ Share, %Share and %Share Growth traces (only for Volume and Revenue) */}
-          {view !== "Overall" && metric !== "Margin Rate" && (
+          {view !== "Overall" && metric !== "metric3" && (
             <div
               style={{
                 display: "flex",
@@ -11249,465 +10540,23 @@ export function render() {
         })()}
 
       {/* Metrics Editor Modal */}
-      {showMetricsEditor && metricsEditorDraft && (() => {
-        const allCols = liveColumnMeta || [];
-        const numericCols = allCols.filter(c =>
-          c.udt === 'int4' || c.udt === 'int8' || c.udt === 'float4' || c.udt === 'float8' || c.udt === 'numeric'
-        );
-        const dateCols = allCols.filter(c =>
-          c.udt === 'date' || c.udt === 'timestamp' || c.udt === 'timestamptz'
-        );
-        const draft = metricsEditorDraft;
-        const updateDraft = (field, value) => setMetricsEditorDraft(prev => ({ ...prev, [field]: value }));
-
-        const handleSave = () => {
-          const config = { ...draft };
-          const newDataset = config.dataset;
-          delete config.dataset; // dataset is stored on the tab, not in metric config
-          const datasetChanged = newDataset && activeTab && newDataset !== activeTab.dataset;
-          // Update tab dataset if changed
-          if (datasetChanged) {
-            setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, dataset: newDataset } : t));
-            // Clear loaded datasets so schema re-fetches
-            loadedDatasetsRef.current.delete(activeTab.dataset);
-          }
-          setLiveMetricConfig(config);
-          const effectiveDataset = newDataset || (activeTab ? activeTab.dataset : connectionParams?.dataset);
-          try {
-            const storageKey = 'metricsConfig_' + connectionParams.supabaseUrl + '_' + effectiveDataset;
-            localStorage.setItem(storageKey, JSON.stringify(config));
-          } catch (e) {}
-          setShowMetricsEditor(false);
-          // Clear cache so new metrics take effect
-          queryCacheRef.current.clear();
-        };
-
-        const handleSuggest = async () => {
-          setMetricsEditorSuggesting(true);
-          setMetricsEditorError('');
-          try {
-            const res = await fetch(LLM_WORKER_URL + '/suggest-metrics', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ columns: liveColumnMeta }),
-            });
-            if (!res.ok) {
-              const err = await res.json().catch(() => ({}));
-              throw new Error(err.error || 'Request failed');
-            }
-            const suggestion = await res.json();
-            // Validate suggested columns exist
-            const validNumeric = numericCols.map(c => c.name);
-            const validDate = dateCols.map(c => c.name);
-            const validAllCols = allCols.map(c => c.name);
-            const allowedAggs = ['count', 'count_distinct', 'sum', 'avg', 'min', 'max'];
-            setMetricsEditorDraft(prev => ({
-              ...prev,
-              volumeAggType: suggestion.volumeAggType && allowedAggs.includes(suggestion.volumeAggType) ? suggestion.volumeAggType : (suggestion.volumeColumn ? 'sum' : 'count'),
-              volumeColumn: suggestion.volumeColumn && validAllCols.includes(suggestion.volumeColumn) ? suggestion.volumeColumn : prev.volumeColumn,
-              revenueAggType: suggestion.revenueAggType && allowedAggs.includes(suggestion.revenueAggType) ? suggestion.revenueAggType : (suggestion.revenueColumn ? 'sum' : 'count'),
-              revenueColumn: suggestion.revenueColumn && validAllCols.includes(suggestion.revenueColumn) ? suggestion.revenueColumn : prev.revenueColumn,
-              derivedMode: 'aggregation',
-              formulaOperator: prev.formulaOperator || '/',
-              derivedAggType: suggestion.derivedAggType && allowedAggs.includes(suggestion.derivedAggType) ? suggestion.derivedAggType : prev.derivedAggType,
-              derivedColumn: suggestion.derivedColumn && validAllCols.includes(suggestion.derivedColumn) ? suggestion.derivedColumn : prev.derivedColumn,
-              volumeLabel: suggestion.volumeLabel || prev.volumeLabel,
-              revenueLabel: suggestion.revenueLabel || prev.revenueLabel,
-              derivedLabel: suggestion.derivedLabel || prev.derivedLabel,
-              volumeFormat: suggestion.volumeFormat || prev.volumeFormat,
-              revenueFormat: suggestion.revenueFormat || prev.revenueFormat,
-              derivedFormat: suggestion.derivedFormat || prev.derivedFormat,
-              volumePrefix: suggestion.volumePrefix != null ? suggestion.volumePrefix : (prev.volumePrefix || ""),
-              volumeSuffix: suggestion.volumeSuffix != null ? suggestion.volumeSuffix : (prev.volumeSuffix || ""),
-              revenuePrefix: suggestion.revenuePrefix != null ? suggestion.revenuePrefix : (prev.revenuePrefix || ""),
-              revenueSuffix: suggestion.revenueSuffix != null ? suggestion.revenueSuffix : (prev.revenueSuffix || ""),
-              derivedPrefix: suggestion.derivedPrefix != null ? suggestion.derivedPrefix : (prev.derivedPrefix || ""),
-              derivedSuffix: suggestion.derivedSuffix != null ? suggestion.derivedSuffix : (prev.derivedSuffix || ""),
-              dateColumn: suggestion.dateColumn && validDate.includes(suggestion.dateColumn) ? suggestion.dateColumn : prev.dateColumn,
-            }));
-          } catch (err) {
-            setMetricsEditorError(err.message || 'Suggestion failed');
-          } finally {
-            setMetricsEditorSuggesting(false);
-          }
-        };
-
-        const overlayStyle = {
-          position: 'fixed', inset: 0, zIndex: 10000,
-          backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex',
-          alignItems: 'center', justifyContent: 'center',
-        };
-        const modalStyle = {
-          backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
-          color: isDarkMode ? '#f3f4f6' : '#111827',
-          borderRadius: '12px', padding: '24px', width: '480px', maxWidth: '90vw',
-          maxHeight: '85vh', overflowY: 'auto',
-          boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
-          border: `1px solid ${isDarkMode ? '#374151' : '#e5e7eb'}`,
-        };
-        const labelStyle = { fontSize: '12px', fontWeight: 600, marginBottom: '4px', display: 'block', color: isDarkMode ? '#9ca3af' : '#6b7280' };
-        const inputStyle = {
-          width: '100%', padding: '6px 10px', borderRadius: '6px', fontSize: '13px',
-          border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`,
-          backgroundColor: isDarkMode ? '#111827' : '#f9fafb',
-          color: isDarkMode ? '#f3f4f6' : '#111827',
-          outline: 'none',
-        };
-        const selectStyle = { ...inputStyle, cursor: 'pointer' };
-        const sectionStyle = { marginBottom: '16px', padding: '12px', borderRadius: '8px', backgroundColor: isDarkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', border: `1px solid ${isDarkMode ? '#374151' : '#f3f4f6'}` };
-        const rowStyle = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '6px' };
-
-        return (
-          <div style={overlayStyle} onClick={() => setShowMetricsEditor(false)}>
-            <div style={modalStyle} onClick={e => e.stopPropagation()}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Configure Metrics</h3>
-                <button onClick={() => setShowMetricsEditor(false)} style={{ background: 'none', border: 'none', color: isDarkMode ? '#9ca3af' : '#6b7280', cursor: 'pointer', fontSize: '18px', lineHeight: 1 }}>&times;</button>
-              </div>
-
-              {metricsEditorError && (
-                <div style={{ padding: '8px 12px', marginBottom: '12px', borderRadius: '6px', fontSize: '12px', backgroundColor: isDarkMode ? 'rgba(239,68,68,0.15)' : '#fef2f2', color: isDarkMode ? '#fca5a5' : '#dc2626', border: `1px solid ${isDarkMode ? 'rgba(239,68,68,0.3)' : '#fecaca'}` }}>
-                  {metricsEditorError}
-                </div>
-              )}
-
-              {/* AI Suggest Button */}
-              <button
-                onClick={handleSuggest}
-                disabled={metricsEditorSuggesting}
-                style={{
-                  width: '100%', padding: '8px', marginBottom: '16px', borderRadius: '8px',
-                  border: `1px solid ${isDarkMode ? '#6366f1' : '#818cf8'}`,
-                  backgroundColor: isDarkMode ? 'rgba(99,102,241,0.15)' : 'rgba(99,102,241,0.08)',
-                  color: isDarkMode ? '#a5b4fc' : '#4f46e5',
-                  cursor: metricsEditorSuggesting ? 'wait' : 'pointer', fontSize: '13px', fontWeight: 600,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
-                  opacity: metricsEditorSuggesting ? 0.7 : 1,
-                }}
-              >
-                {metricsEditorSuggesting ? (
-                  <>
-                    <span style={{ width: '14px', height: '14px', border: '2px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite', display: 'inline-block' }} />
-                    Analyzing schema...
-                  </>
-                ) : (
-                  'AI Suggest Metrics'
-                )}
-              </button>
-
-              {/* Metric Slots — accordion: click header to expand/collapse */}
-              {[
-                { prefix: 'volume', title: 'Metric 1', canDisable: false },
-                { prefix: 'revenue', title: 'Metric 2', canDisable: false },
-                { prefix: 'derived', title: 'Metric 3', canDisable: true },
-              ].map(({ prefix, title, canDisable }) => {
-                const aggKey = prefix + 'AggType';
-                const colKey = prefix + 'Column';
-                const labelKey = prefix + 'Label';
-                const formatKey = prefix + 'Format';
-                const prefixKey = prefix + 'Prefix';
-                const suffixKey = prefix + 'Suffix';
-                const modeKey = prefix + 'Mode';
-                const percentileKey = prefix + 'Percentile';
-                const formulaOpKey = prefix + 'FormulaOperator';
-                const fNumAggKey = prefix + 'FormulaNumAggType';
-                const fNumColKey = prefix + 'FormulaNumColumn';
-                const fNumPctKey = prefix + 'FormulaNumPercentile';
-                const fDenAggKey = prefix + 'FormulaDenAggType';
-                const fDenColKey = prefix + 'FormulaDenColumn';
-                const fDenPctKey = prefix + 'FormulaDenPercentile';
-                const chartTypeKey = prefix + 'ChartType';
-                const mode = draft[modeKey] || 'aggregation';
-                const isExpanded = expandedMetricSlot === prefix;
-
-                // Build compact summary for collapsed state
-                const summaryParts = [];
-                if (mode === 'formula') {
-                  const numAgg = (draft[fNumAggKey] || 'count').toUpperCase();
-                  const numCol = draft[fNumColKey] ? `(${draft[fNumColKey]})` : '(*)';
-                  const op = { '/': '÷', '*': '×', '+': '+', '-': '−' }[draft[formulaOpKey] || '/'] || '÷';
-                  const denAgg = (draft[fDenAggKey] || 'count').toUpperCase();
-                  const denCol = draft[fDenColKey] ? `(${draft[fDenColKey]})` : '(*)';
-                  summaryParts.push(`${numAgg}${numCol} ${op} ${denAgg}${denCol}`);
-                } else {
-                  const agg = draft[aggKey];
-                  if (canDisable && !agg) {
-                    summaryParts.push('Disabled');
-                  } else {
-                    const aggLabel = (agg || 'count').toUpperCase();
-                    const col = draft[colKey] ? `(${draft[colKey]})` : '(*)';
-                    summaryParts.push(`${aggLabel}${col}`);
-                  }
-                }
-                const label = draft[labelKey];
-                const summary = label ? `${summaryParts[0]}  ·  ${label}` : summaryParts[0];
-                const isDisabled = canDisable && mode === 'aggregation' && !draft[aggKey];
-
-                const renderAggRow = (aggTypeKey, columnKey, pctKey, allowDisable) => {
-                  const aggVal = draft[aggTypeKey] || (allowDisable ? '' : (draft[columnKey] ? 'sum' : 'count'));
-                  return (
-                    <div style={rowStyle}>
-                      <div>
-                        <label style={labelStyle}>Aggregation</label>
-                        <select style={selectStyle} value={aggVal} onChange={e => {
-                          const agg = e.target.value;
-                          updateDraft(aggTypeKey, agg || null);
-                          if (agg === 'count' || !agg) updateDraft(columnKey, null);
-                          if (agg !== 'percentile') updateDraft(pctKey, null);
-                        }}>
-                          {allowDisable && <option value="">— none (disable) —</option>}
-                          <option value="count">COUNT(*)</option>
-                          <option value="count_distinct">COUNT(DISTINCT)</option>
-                          <option value="sum">SUM</option>
-                          <option value="avg">AVG</option>
-                          <option value="min">MIN</option>
-                          <option value="max">MAX</option>
-                          <option value="percentile">PERCENTILE</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label style={labelStyle}>Column</label>
-                        <select style={selectStyle} value={draft[columnKey] || ''} disabled={!aggVal || aggVal === 'count'}
-                          onChange={e => updateDraft(columnKey, e.target.value || null)}>
-                          <option value="">— select —</option>
-                          {(aggVal === 'count_distinct' ? allCols : numericCols).map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
-                        </select>
-                      </div>
-                      {aggVal === 'percentile' && (
-                        <div>
-                          <label style={labelStyle}>Pct (0-1)</label>
-                          <input type="number" step="0.05" min="0" max="1" style={{ ...inputStyle, width: '70px' }}
-                            value={draft[pctKey] != null ? draft[pctKey] : 0.5}
-                            onChange={e => updateDraft(pctKey, parseFloat(e.target.value) || 0.5)} />
-                        </div>
-                      )}
-                    </div>
-                  );
-                };
-
-                return (
-                  <div key={prefix} style={{
-                    ...sectionStyle,
-                    marginBottom: '8px',
-                    transition: 'all 0.15s ease',
-                  }}>
-                    {/* Accordion header — always visible */}
-                    <div
-                      onClick={() => setExpandedMetricSlot(isExpanded ? null : prefix)}
-                      style={{
-                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                        cursor: 'pointer', userSelect: 'none',
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
-                        <span style={{
-                          fontSize: '10px', color: isDarkMode ? '#6b7280' : '#9ca3af',
-                          transition: 'transform 0.15s ease',
-                          transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
-                          display: 'inline-block',
-                        }}>&#9654;</span>
-                        <span style={{ fontSize: '13px', fontWeight: 700, color: isDarkMode ? '#f3f4f6' : '#111827', flexShrink: 0 }}>
-                          {title}
-                        </span>
-                        {!isExpanded && (
-                          <span style={{
-                            fontSize: '11px', color: isDisabled ? (isDarkMode ? '#6b7280' : '#9ca3af') : (isDarkMode ? '#9ca3af' : '#6b7280'),
-                            fontStyle: isDisabled ? 'italic' : 'normal',
-                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                          }}>
-                            {summary}
-                          </span>
-                        )}
-                      </div>
-                      {isExpanded && (
-                        <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
-                          {['aggregation', 'formula'].map(m => (
-                            <button key={m}
-                              onClick={e => {
-                                e.stopPropagation();
-                                updateDraft(modeKey, m);
-                                if (m === 'formula') {
-                                  updateDraft(aggKey, null);
-                                  updateDraft(colKey, null);
-                                }
-                              }}
-                              style={{
-                                padding: '2px 8px', fontSize: '11px', borderRadius: '4px', cursor: 'pointer', fontWeight: 500,
-                                border: `1px solid ${mode === m ? (isDarkMode ? '#6366f1' : '#818cf8') : (isDarkMode ? '#4b5563' : '#d1d5db')}`,
-                                backgroundColor: mode === m ? (isDarkMode ? 'rgba(99,102,241,0.2)' : 'rgba(99,102,241,0.1)') : 'transparent',
-                                color: mode === m ? (isDarkMode ? '#a5b4fc' : '#4f46e5') : (isDarkMode ? '#9ca3af' : '#6b7280'),
-                              }}
-                            >
-                              {m === 'aggregation' ? 'Agg' : 'Formula'}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Expanded body */}
-                    {isExpanded && (
-                      <div style={{ marginTop: '10px' }}>
-                        {mode === 'aggregation' ? (
-                          renderAggRow(aggKey, colKey, percentileKey, canDisable)
-                        ) : (
-                          <div style={{ padding: '8px', borderRadius: '6px', backgroundColor: isDarkMode ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.04)', border: `1px solid ${isDarkMode ? '#4b5563' : '#e5e7eb'}` }}>
-                            <div style={{ fontSize: '11px', fontWeight: 600, marginBottom: '4px', color: isDarkMode ? '#9ca3af' : '#6b7280' }}>Numerator</div>
-                            {renderAggRow(fNumAggKey, fNumColKey, fNumPctKey, false)}
-                            <div style={{ display: 'flex', justifyContent: 'center', margin: '6px 0' }}>
-                              <select style={{ ...selectStyle, width: '50px', textAlign: 'center', padding: '4px', fontSize: '14px', fontWeight: 700 }}
-                                value={draft[formulaOpKey] || '/'}
-                                onChange={e => updateDraft(formulaOpKey, e.target.value)}>
-                                <option value="/">÷</option>
-                                <option value="*">×</option>
-                                <option value="+">+</option>
-                                <option value="-">−</option>
-                              </select>
-                            </div>
-                            <div style={{ fontSize: '11px', fontWeight: 600, marginBottom: '4px', color: isDarkMode ? '#9ca3af' : '#6b7280' }}>Denominator</div>
-                            {renderAggRow(fDenAggKey, fDenColKey, fDenPctKey, false)}
-                          </div>
-                        )}
-
-                        {/* Formatting: Label, Format, Prefix, Suffix in one row */}
-                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: '6px', marginTop: '8px' }}>
-                          <div>
-                            <label style={labelStyle}>Label</label>
-                            <input style={inputStyle} value={draft[labelKey] || ''} onChange={e => updateDraft(labelKey, e.target.value)} placeholder="e.g. Total" />
-                          </div>
-                          <div>
-                            <label style={labelStyle}>Format</label>
-                            <input style={inputStyle} value={draft[formatKey] || ''} onChange={e => updateDraft(formatKey, e.target.value)} placeholder="0,0" />
-                          </div>
-                          <div>
-                            <label style={labelStyle}>Prefix</label>
-                            <input style={inputStyle} value={draft[prefixKey] || ''} onChange={e => updateDraft(prefixKey, e.target.value)} placeholder="$" />
-                          </div>
-                          <div>
-                            <label style={labelStyle}>Suffix</label>
-                            <input style={inputStyle} value={draft[suffixKey] || ''} onChange={e => updateDraft(suffixKey, e.target.value)} placeholder="ms" />
-                          </div>
-                        </div>
-                        {/* Chart Type pills */}
-                        <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <label style={{ ...labelStyle, marginBottom: 0, whiteSpace: 'nowrap' }}>Chart</label>
-                          {[
-                            { value: 'auto', label: 'Auto' },
-                            { value: 'stacked', label: 'Stacked' },
-                            { value: 'grouped', label: 'Grouped' },
-                            { value: 'line', label: 'Line' },
-                          ].map(opt => {
-                            const current = draft[chartTypeKey] || 'auto';
-                            const isActive = current === opt.value;
-                            return (
-                              <button key={opt.value}
-                                onClick={() => updateDraft(chartTypeKey, opt.value)}
-                                style={{
-                                  padding: '2px 10px', fontSize: '11px', borderRadius: '4px', cursor: 'pointer', fontWeight: 500,
-                                  border: `1px solid ${isActive ? (isDarkMode ? '#6366f1' : '#818cf8') : (isDarkMode ? '#4b5563' : '#d1d5db')}`,
-                                  backgroundColor: isActive ? (isDarkMode ? 'rgba(99,102,241,0.2)' : 'rgba(99,102,241,0.1)') : 'transparent',
-                                  color: isActive ? (isDarkMode ? '#a5b4fc' : '#4f46e5') : (isDarkMode ? '#9ca3af' : '#6b7280'),
-                                }}
-                              >
-                                {opt.label}
-                              </button>
-                            );
-                          })}
-                          {(draft[chartTypeKey] || 'auto') === 'auto' && (
-                            <span style={{ fontSize: '10px', color: isDarkMode ? '#6b7280' : '#9ca3af' }}>
-                              ({mode === 'formula' ? 'line' : 'stacked'})
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-
-              {/* Dataset + Date Column + Default Grain + Top-N Rank By */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px', marginBottom: '16px' }}>
-                <div>
-                  <label style={labelStyle}>Dataset (table name)</label>
-                  <input style={inputStyle} value={draft.dataset || activeTab?.dataset || ''} onChange={e => updateDraft('dataset', e.target.value)} placeholder="schema.table_name" />
-                </div>
-                <div>
-                  <label style={labelStyle}>Date Column</label>
-                  <select style={selectStyle} value={draft.dateColumn || ''} onChange={e => updateDraft('dateColumn', e.target.value || null)}>
-                    <option value="">— none —</option>
-                    {dateCols.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label style={labelStyle}>Default Grain</label>
-                  <select style={selectStyle} value={draft.defaultGrain || 'month'} onChange={e => updateDraft('defaultGrain', e.target.value)}>
-                    <option value="day">Daily</option>
-                    <option value="week">Weekly</option>
-                    <option value="month">Monthly</option>
-                    <option value="quarter">Quarterly</option>
-                    <option value="year">Yearly</option>
-                  </select>
-                </div>
-                <div>
-                  <label style={labelStyle}>Sort top-N by</label>
-                  <select style={selectStyle} value={draft.topNRankBy || 'volume'} onChange={e => updateDraft('topNRankBy', e.target.value)}>
-                    <option value="volume">Metric 1</option>
-                    <option value="revenue">Metric 2</option>
-                    <option value="derived">Metric 3</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Visible Dimensions */}
-              <div style={sectionStyle}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <div style={{ fontSize: '13px', fontWeight: 700, color: isDarkMode ? '#f3f4f6' : '#111827' }}>
-                    Dimensions & Filters
-                  </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button onClick={() => updateDraft('visibleDimensions', liveSchemaClassified.dimensions.map(c => c.name))} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '4px', border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`, background: 'transparent', color: isDarkMode ? '#9ca3af' : '#6b7280', cursor: 'pointer' }}>All</button>
-                    <button onClick={() => updateDraft('visibleDimensions', [])} style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '4px', border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`, background: 'transparent', color: isDarkMode ? '#9ca3af' : '#6b7280', cursor: 'pointer' }}>None</button>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                  {liveSchemaClassified.dimensions.map(c => {
-                    const visible = draft.visibleDimensions ? draft.visibleDimensions.includes(c.name) : true;
-                    const label = c.name.replace(/^is_/, '').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-                    return (
-                      <button key={c.name}
-                        onClick={() => {
-                          const current = draft.visibleDimensions || liveSchemaClassified.dimensions.map(d => d.name);
-                          const updated = visible ? current.filter(n => n !== c.name) : [...current, c.name];
-                          updateDraft('visibleDimensions', updated);
-                        }}
-                        style={{
-                          padding: '4px 10px', borderRadius: '14px', fontSize: '12px', cursor: 'pointer',
-                          border: `1px solid ${visible ? (isDarkMode ? '#6366f1' : '#818cf8') : (isDarkMode ? '#374151' : '#e5e7eb')}`,
-                          backgroundColor: visible ? (isDarkMode ? 'rgba(99,102,241,0.2)' : 'rgba(99,102,241,0.1)') : 'transparent',
-                          color: visible ? (isDarkMode ? '#a5b4fc' : '#4f46e5') : (isDarkMode ? '#6b7280' : '#9ca3af'),
-                          fontWeight: visible ? 600 : 400,
-                        }}
-                      >
-                        {label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                <button onClick={() => setShowMetricsEditor(false)} style={{ padding: '8px 16px', borderRadius: '8px', border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`, background: 'transparent', color: isDarkMode ? '#d1d5db' : '#374151', cursor: 'pointer', fontSize: '13px', fontWeight: 500 }}>
-                  Cancel
-                </button>
-                <button onClick={handleSave} style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', backgroundColor: '#6366f1', color: '#ffffff', cursor: 'pointer', fontSize: '13px', fontWeight: 600 }}>
-                  Save & Apply
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
+      {showMetricsEditor && metricsEditorDraft && (
+        <MetricsEditorModal
+          draft={metricsEditorDraft}
+          onDraftChange={setMetricsEditorDraft}
+          onClose={() => setShowMetricsEditor(false)}
+          onSave={handleMetricsEditorSave}
+          suggesting={metricsEditorSuggesting}
+          error={metricsEditorError}
+          onSuggest={handleMetricsEditorSuggest}
+          columns={liveColumnMeta}
+          schemaDimensions={liveSchemaClassified.dimensions}
+          expandedSlot={expandedMetricSlot}
+          onExpandSlot={setExpandedMetricSlot}
+          activeDataset={activeTab?.dataset}
+          isDarkMode={isDarkMode}
+        />
+      )}
     </div>
   );
 }

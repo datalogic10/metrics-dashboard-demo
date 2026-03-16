@@ -164,8 +164,8 @@ export const DEMO_COLUMNS = {
   CUSTOMER_TYPE: "customer_type",
   CHANNEL: "channel",
   CHANNEL_TYPE: "channel_type",
-  VOLUME: "volume",
-  REVENUE: "revenue",
+  METRIC1: "volume",
+  METRIC2: "revenue",
 };
 
 // Dimension definitions for the synthetic demo dataset

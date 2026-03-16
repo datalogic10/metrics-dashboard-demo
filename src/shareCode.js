@@ -6,9 +6,9 @@ export const VALUE_ABBREVIATIONS = {
   Quarterly: "Q",
   Yearly: "Yr",
   // Metrics
-  Revenue: "O",
-  Volume: "P",
-  "Margin Rate": "MR",
+  metric1: "m1",
+  metric2: "m2",
+  metric3: "m3",
   // Views ("Overall" is default, no abbreviation needed)
   "Product Group": "PG",
   "Product": "Pr",
@@ -30,9 +30,15 @@ export const VALUE_ABBREVIATIONS = {
   manual: "Man",
 };
 
-export const REVERSE_ABBREVIATIONS = Object.fromEntries(
-  Object.entries(VALUE_ABBREVIATIONS).map(([k, v]) => [v, k])
-);
+export const REVERSE_ABBREVIATIONS = {
+  ...Object.fromEntries(
+    Object.entries(VALUE_ABBREVIATIONS).map(([k, v]) => [v, k])
+  ),
+  // Legacy metric abbreviations (backward compat for old share codes)
+  O: "metric2",
+  P: "metric1",
+  MR: "metric3",
+};
 
 export function base64UrlEncode(str) {
   return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -45,14 +51,14 @@ export function base64UrlDecode(str) {
 }
 
 // Compress a state snapshot for sharing
-export function compressStateHelper(snapshot, dimensionDefs, isNested = false) {
+function compressStateHelper(snapshot, dimensionDefs, isNested = false) {
   if (!snapshot) return null;
   const compact = {};
 
   if (snapshot.dataFrequency !== "Monthly") {
     compact.df = VALUE_ABBREVIATIONS[snapshot.dataFrequency] || snapshot.dataFrequency;
   }
-  if (snapshot.metric !== "Revenue") {
+  if (snapshot.metric !== "metric2") {
     compact.m = VALUE_ABBREVIATIONS[snapshot.metric] || snapshot.metric;
   }
   if (snapshot.view !== "Overall" && snapshot.view !== "") {
@@ -106,7 +112,7 @@ export function compressState(snapshot, dimensionDefs) {
 }
 
 // Expand a compressed state back to full snapshot
-export function expandStateHelper(compact, dimensionDefs) {
+function expandStateHelper(compact, dimensionDefs) {
   if (!compact) return null;
   const expandValue = (abbr, defaultValue) => {
     if (abbr === undefined) return defaultValue;
@@ -115,7 +121,7 @@ export function expandStateHelper(compact, dimensionDefs) {
 
   const snapshot = {
     dataFrequency: expandValue(compact.df, "Monthly"),
-    metric: expandValue(compact.m, "Revenue"),
+    metric: expandValue(compact.m, "metric2"),
     view: expandValue(compact.v, "Overall") || "Overall",
     topX: compact.tx !== undefined ? compact.tx : 3,
     dateRange: expandValue(compact.dr, "YTD"),
