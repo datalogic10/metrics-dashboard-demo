@@ -6217,13 +6217,14 @@ var __app = (() => {
         productGroup: productGroupFilter,
         productSub: productSubFilter
       };
+      const dimDataKey = isLiveMode ? Object.keys(liveInsightsDimAggs).sort().join(",") : "";
       const cacheKey = createInsightsCacheKey(
         metric,
         activeInsightsTab,
         periods,
         activeFilters,
         insightContext && insightContext.parentCategory
-      );
+      ) + (dimDataKey ? `|dims:${dimDataKey}` : "");
       if (insightsCacheRef.current[cacheKey]) {
         setStructuredInsights(insightsCacheRef.current[cacheKey]);
         setLoadingInsights(false);

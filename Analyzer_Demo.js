@@ -6190,13 +6190,15 @@ export function render() {
       productSub: productSubFilter,
     };
 
+    // In live mode, include dimension data fingerprint so cache invalidates when dim data arrives
+    const dimDataKey = isLiveMode ? Object.keys(liveInsightsDimAggs).sort().join(',') : '';
     const cacheKey = createInsightsCacheKey(
       metric,
       activeInsightsTab,
       periods,
       activeFilters,
       insightContext && insightContext.parentCategory
-    );
+    ) + (dimDataKey ? `|dims:${dimDataKey}` : '');
 
     // Check if we have cached insights for this exact configuration
     if (insightsCacheRef.current[cacheKey]) {
