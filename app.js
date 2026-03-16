@@ -2394,6 +2394,7 @@ var __app = (() => {
     const [liveFilterOptions, setLiveFilterOptions] = React.useState({});
     const [livePeriodAggregates, setLivePeriodAggregates] = React.useState(null);
     const [liveDimensionAggregates, setLiveDimensionAggregates] = React.useState(null);
+    const [liveInsightsDimAggs, setLiveInsightsDimAggs] = React.useState({});
     const [liveAggLoading, setLiveAggLoading] = React.useState(false);
     const [liveRowCount, setLiveRowCount] = React.useState(0);
     const [liveDataTruncated, setLiveDataTruncated] = React.useState(false);
@@ -4294,6 +4295,59 @@ var __app = (() => {
         setLiveAggLoading(false);
       });
     }, [isLiveMode, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX]);
+    React.useEffect(() => {
+      if (!isLiveMode || !activeInsightsTab || !liveMetricConfig) return;
+      const grain = frequencyToGrain[dataFrequency] || "month";
+      const dateCol = liveMetricConfig.dateColumn || liveDateColumn;
+      const rpcMetrics = buildRpcMetrics(liveMetricConfig);
+      const pFilters = {};
+      Object.keys(dynamicFilters).forEach((filterKey) => {
+        const vals = dynamicFilters[filterKey];
+        if (!vals || vals.length === 0) return;
+        const colName = filterKey.replace(/^dim_/, "").replace(/_filter$/, "");
+        pFilters[colName] = vals;
+      });
+      const dimCols = DIMENSION_DEFINITIONS.filter((dim) => columnExists(COLUMNS[dim.columnKey])).map((dim) => COLUMNS[dim.columnKey]);
+      if (dimCols.length === 0) return;
+      const hasMetric3 = !!liveMetricConfig.derivedAggType || liveMetricConfig.derivedMode === "formula";
+      const formulaConfigs = {};
+      if (liveMetricConfig.volumeMode === "formula") formulaConfigs.volume = { operator: liveMetricConfig.volumeFormulaOperator || "/" };
+      if (liveMetricConfig.revenueMode === "formula") formulaConfigs.revenue = { operator: liveMetricConfig.revenueFormulaOperator || "/" };
+      if (liveMetricConfig.derivedMode === "formula") formulaConfigs.derived = { operator: liveMetricConfig.derivedFormulaOperator || "/" };
+      const formulaConfigsArg = Object.keys(formulaConfigs).length > 0 ? formulaConfigs : null;
+      Promise.all(dimCols.map(
+        (col) => cachedQuery("data", {
+          p_time_grain: grain,
+          p_date_column: dateCol,
+          p_group_by: [col],
+          p_metrics: rpcMetrics,
+          p_filters: pFilters
+        }).then((data) => {
+          const aggs = transformToDimensionAggregates(data.rows || [], col, hasMetric3, formulaConfigsArg);
+          return { col, aggs };
+        })
+      )).then((results) => {
+        const merged = {};
+        results.forEach(({ col, aggs }) => {
+          Object.keys(aggs).forEach((key) => {
+            if (key === "_categoryTotals") return;
+            merged[key] = aggs[key];
+          });
+        });
+        setLiveInsightsDimAggs(merged);
+      });
+    }, [
+      isLiveMode,
+      activeInsightsTab,
+      liveMetricConfig,
+      dataFrequency,
+      dynamicFilters,
+      DIMENSION_DEFINITIONS,
+      COLUMNS,
+      columnExists,
+      cachedQuery,
+      liveDateColumn
+    ]);
     const periodChangeLabel = React.useMemo(() => {
       switch (dataFrequency) {
         case "Daily":
@@ -5250,7 +5304,7 @@ var __app = (() => {
       });
       if (isLiveMode) {
         activeDimColumns.forEach((col) => {
-          const dimPeriods = dimensionAggregates[col] || {};
+          const dimPeriods = liveInsightsDimAggs[col] || {};
           Object.keys(dimPeriods).forEach((period) => {
             if (!completePeriods.includes(period)) return;
             const cats = dimPeriods[period];
@@ -6207,7 +6261,8 @@ var __app = (() => {
       // 🆕 CRITICAL: Must include insightContext so insights regenerate when drilling down
       isLiveMode,
       periodAggregates,
-      dimensionAggregates
+      dimensionAggregates,
+      liveInsightsDimAggs
     ]);
     const displayedInsights = React.useMemo(() => {
       if (!view) {
