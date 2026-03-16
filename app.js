@@ -4558,13 +4558,14 @@ var __app = (() => {
       return buildFilterDescription("active", ", ", " (Filtered: ", ")");
     }, [buildFilterDescription]);
     const getSimpleChartTitle = React.useCallback(() => {
+      const displayMetric = METRIC_LABELS[metric] || metric;
       const filterText = buildFilterDescription("active", ", ", "", "", "");
       if (filterText) {
-        return `${metric}
+        return `${displayMetric}
 (Filtered by: ${filterText})`;
       }
-      return metric;
-    }, [metric, buildFilterDescription]);
+      return displayMetric;
+    }, [metric, METRIC_LABELS, buildFilterDescription]);
     const getFilterContext = React.useCallback(() => {
       return buildFilterDescription("context", " ", "", "", "All Data");
     }, [buildFilterDescription]);
@@ -6901,7 +6902,7 @@ var __app = (() => {
             chartData2.push({
               type: "scatter",
               mode: "lines+markers",
-              name: `${category} - ${metric}`,
+              name: `${category} - ${METRIC_LABELS[metric] || metric}`,
               x: periods,
               y: traceData,
               visible: true,
@@ -6919,7 +6920,7 @@ var __app = (() => {
           } else {
             chartData2.push({
               type: "bar",
-              name: `${category} - ${metric}`,
+              name: `${category} - ${METRIC_LABELS[metric] || metric}`,
               x: periods,
               y: traceData,
               visible: showAllDollarTraces ? true : "legendonly",
@@ -7205,13 +7206,14 @@ var __app = (() => {
         sortedBaseDataPeriods,
         // Theme
         isDarkMode,
-        theme
+        theme,
+        METRIC_LABELS
       ]
     );
     const getVisibleTraceNames = React.useCallback(() => {
       let chartData2 = [];
       if (view === "Overall") {
-        chartData2 = [{ name: metric, visible: true }];
+        chartData2 = [{ name: METRIC_LABELS[metric] || metric, visible: true }];
         OVERLAY_CONFIG.forEach((overlay) => {
           if (activeOverlays[overlay.id]) {
             const name = overlay.isSMA ? `SMA(${smaWindow})` : overlay.label + " Change %";
@@ -7229,7 +7231,7 @@ var __app = (() => {
         (trace) => trace.visible !== "legendonly" && trace.visible !== false
       ).map((trace) => trace.name);
       return visibleTraceNames;
-    }, [view, metric, dataFrequency, prepareChartDataByAttribute, VIEW_CONFIG, activeOverlays, smaWindow]);
+    }, [view, metric, dataFrequency, prepareChartDataByAttribute, VIEW_CONFIG, activeOverlays, smaWindow, METRIC_LABELS]);
     const setScenario = React.useCallback(
       (index) => {
         const snapshot = captureStateSnapshot();
@@ -7320,7 +7322,7 @@ var __app = (() => {
           mode: "lines+markers",
           x: periods,
           y: barData,
-          name: metric,
+          name: METRIC_LABELS[metric] || metric,
           line: { color: MODERN_COLOR_PALETTE[0], width: 2.5, shape: "spline", smoothing: 0.3 },
           marker: { size: 5, color: MODERN_COLOR_PALETTE[0] },
           text: textAnnotations,
@@ -7332,7 +7334,7 @@ var __app = (() => {
           type: "bar",
           x: periods,
           y: barData,
-          name: metric,
+          name: METRIC_LABELS[metric] || metric,
           marker: {
             color: barColors,
             line: { color: "rgba(255,255,255,0.3)", width: 0.5 },
@@ -7534,7 +7536,8 @@ var __app = (() => {
       smaWindow,
       sortedBaseDataPeriods,
       baseDataAggregatesByPeriod,
-      formatMetricValue
+      formatMetricValue,
+      METRIC_LABELS
     ]);
     const highlightedChartData = React.useMemo(() => {
       if (!hoveredInsight) return chartData;

@@ -3943,12 +3943,13 @@ export function render() {
 
   // Simple chart title helper - just metric name + optional filters
   const getSimpleChartTitle = React.useCallback(() => {
+    const displayMetric = METRIC_LABELS[metric] || metric;
     const filterText = buildFilterDescription("active", ", ", "", "", "");
     if (filterText) {
-      return `${metric}\n(Filtered by: ${filterText})`;
+      return `${displayMetric}\n(Filtered by: ${filterText})`;
     }
-    return metric;
-  }, [metric, buildFilterDescription]);
+    return displayMetric;
+  }, [metric, METRIC_LABELS, buildFilterDescription]);
 
   // Helper function to get contextual filter description for insights
   const getFilterContext = React.useCallback(() => {
@@ -7218,7 +7219,7 @@ export function render() {
           chartData.push({
             type: "scatter",
             mode: "lines+markers",
-            name: `${category} - ${metric}`,
+            name: `${category} - ${METRIC_LABELS[metric] || metric}`,
             x: periods,
             y: traceData,
             visible: true,
@@ -7236,7 +7237,7 @@ export function render() {
         } else {
           chartData.push({
             type: "bar",
-            name: `${category} - ${metric}`,
+            name: `${category} - ${METRIC_LABELS[metric] || metric}`,
             x: periods,
             y: traceData,
             visible: showAllDollarTraces ? true : "legendonly",
@@ -7571,6 +7572,7 @@ export function render() {
       // Theme
       isDarkMode,
       theme,
+      METRIC_LABELS,
     ]
   );
 
@@ -7578,7 +7580,7 @@ export function render() {
   const getVisibleTraceNames = React.useCallback(() => {
     let chartData = [];
     if (view === "Overall") {
-      chartData = [{ name: metric, visible: true }];
+      chartData = [{ name: METRIC_LABELS[metric] || metric, visible: true }];
       OVERLAY_CONFIG.forEach(overlay => {
         if (activeOverlays[overlay.id]) {
           const name = overlay.isSMA ? `SMA(${smaWindow})` : overlay.label + ' Change %';
@@ -7599,7 +7601,7 @@ export function render() {
       .map((trace) => trace.name);
 
     return visibleTraceNames;
-  }, [view, metric, dataFrequency, prepareChartDataByAttribute, VIEW_CONFIG, activeOverlays, smaWindow]);
+  }, [view, metric, dataFrequency, prepareChartDataByAttribute, VIEW_CONFIG, activeOverlays, smaWindow, METRIC_LABELS]);
 
   const setScenario = React.useCallback(
     (index) => {
@@ -7703,7 +7705,7 @@ export function render() {
             mode: "lines+markers",
             x: periods,
             y: barData,
-            name: metric,
+            name: METRIC_LABELS[metric] || metric,
             line: { color: MODERN_COLOR_PALETTE[0], width: 2.5, shape: "spline", smoothing: 0.3 },
             marker: { size: 5, color: MODERN_COLOR_PALETTE[0] },
             text: textAnnotations,
@@ -7716,7 +7718,7 @@ export function render() {
             type: "bar",
             x: periods,
             y: barData,
-            name: metric,
+            name: METRIC_LABELS[metric] || metric,
             marker: {
               color: barColors,
               line: { color: "rgba(255,255,255,0.3)", width: 0.5 },
@@ -7945,6 +7947,7 @@ export function render() {
     sortedBaseDataPeriods,
     baseDataAggregatesByPeriod,
     formatMetricValue,
+    METRIC_LABELS,
   ]);
 
   // Apply highlighting to chartData when an insight is hovered
