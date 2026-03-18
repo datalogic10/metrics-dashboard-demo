@@ -2897,6 +2897,7 @@ var __app = (() => {
       } catch (e) {
       }
     }, [tabs, baseConnection]);
+    const uiSelectionsRestoredRef = React.useRef(/* @__PURE__ */ new Set());
     const activeTab = tabs.find((t) => t.id === activeTabId) || null;
     const connectionParams = React.useMemo(() => {
       if (!baseConnection || !activeTab || !activeTab.dataset) return null;
@@ -3094,6 +3095,28 @@ var __app = (() => {
         setLiveSchemaReady(true);
         setLiveDataLoading(false);
         loadedDatasetsRef.current.add(connectionParams.dataset);
+        if (!uiSelectionsRestoredRef.current.has(connectionParams.dataset)) {
+          uiSelectionsRestoredRef.current.add(connectionParams.dataset);
+          try {
+            const selectionsKey = "uiSelections_" + connectionParams.supabaseUrl + "_" + connectionParams.dataset;
+            const saved = localStorage.getItem(selectionsKey);
+            if (saved) {
+              const s = JSON.parse(saved);
+              if (s.dataFrequency) setDataFrequency(s.dataFrequency);
+              if (s.metric) setMetric(s.metric);
+              if (s.view) setView(s.view);
+              if (s.topX != null) setTopX(s.topX);
+              if (s.categorySelectionMode) setCategorySelectionMode(s.categorySelectionMode);
+              if (s.selectedCategories) setSelectedCategories(s.selectedCategories);
+              if (s.dynamicFilters) setDynamicFilters(s.dynamicFilters);
+              if (s.dateRange) setDateRange(s.dateRange);
+              if (s.activeOverlays) setActiveOverlays(s.activeOverlays);
+              if (s.smaWindow) setSmaWindow(s.smaWindow);
+              if (s.activeInsightsTab !== void 0) setActiveInsightsTab(s.activeInsightsTab);
+            }
+          } catch (e) {
+          }
+        }
       }).catch((err) => {
         setLiveDataError(err.message);
         setLiveDataLoading(false);
@@ -3456,6 +3479,46 @@ var __app = (() => {
       setSmaWindow(snap.smaWindow || 3);
       setActiveInsightsTab(snap.activeInsightsTab || null);
     }, []);
+    const uiSelectionsSaveTimerRef = React.useRef(null);
+    React.useEffect(() => {
+      if (!connectionParams || !liveSchemaReady) return;
+      clearTimeout(uiSelectionsSaveTimerRef.current);
+      uiSelectionsSaveTimerRef.current = setTimeout(() => {
+        const selectionsKey = "uiSelections_" + connectionParams.supabaseUrl + "_" + connectionParams.dataset;
+        const selections = {
+          dataFrequency,
+          metric,
+          view,
+          topX,
+          categorySelectionMode,
+          selectedCategories,
+          dynamicFilters,
+          dateRange,
+          activeOverlays,
+          smaWindow,
+          activeInsightsTab
+        };
+        try {
+          localStorage.setItem(selectionsKey, JSON.stringify(selections));
+        } catch (e) {
+        }
+      }, 500);
+      return () => clearTimeout(uiSelectionsSaveTimerRef.current);
+    }, [
+      connectionParams,
+      liveSchemaReady,
+      dataFrequency,
+      metric,
+      view,
+      topX,
+      categorySelectionMode,
+      selectedCategories,
+      dynamicFilters,
+      dateRange,
+      activeOverlays,
+      smaWindow,
+      activeInsightsTab
+    ]);
     const switchTab = React.useCallback((targetTabId) => {
       if (targetTabId === activeTabId) return;
       if (activeTabId) {

@@ -1205,6 +1205,9 @@ export function render() {
     try { localStorage.setItem(tabsKey, JSON.stringify(tabs)); } catch (e) {}
   }, [tabs, baseConnection]);
 
+  // Track whether we've restored saved UI selections for initial page load
+  const uiSelectionsRestoredRef = React.useRef(new Set());
+
   // Derive connectionParams from baseConnection + active tab
   const activeTab = tabs.find(t => t.id === activeTabId) || null;
   const connectionParams = React.useMemo(() => {
@@ -1435,6 +1438,29 @@ export function render() {
         setLiveSchemaReady(true);
         setLiveDataLoading(false);
         loadedDatasetsRef.current.add(connectionParams.dataset);
+
+        // Restore saved UI selections on initial page load (not tab switches)
+        if (!uiSelectionsRestoredRef.current.has(connectionParams.dataset)) {
+          uiSelectionsRestoredRef.current.add(connectionParams.dataset);
+          try {
+            const selectionsKey = 'uiSelections_' + connectionParams.supabaseUrl + '_' + connectionParams.dataset;
+            const saved = localStorage.getItem(selectionsKey);
+            if (saved) {
+              const s = JSON.parse(saved);
+              if (s.dataFrequency) setDataFrequency(s.dataFrequency);
+              if (s.metric) setMetric(s.metric);
+              if (s.view) setView(s.view);
+              if (s.topX != null) setTopX(s.topX);
+              if (s.categorySelectionMode) setCategorySelectionMode(s.categorySelectionMode);
+              if (s.selectedCategories) setSelectedCategories(s.selectedCategories);
+              if (s.dynamicFilters) setDynamicFilters(s.dynamicFilters);
+              if (s.dateRange) setDateRange(s.dateRange);
+              if (s.activeOverlays) setActiveOverlays(s.activeOverlays);
+              if (s.smaWindow) setSmaWindow(s.smaWindow);
+              if (s.activeInsightsTab !== undefined) setActiveInsightsTab(s.activeInsightsTab);
+            }
+          } catch (e) {}
+        }
       })
       .catch(err => {
         setLiveDataError(err.message);
@@ -1895,6 +1921,26 @@ export function render() {
     setSmaWindow(snap.smaWindow || 3);
     setActiveInsightsTab(snap.activeInsightsTab || null);
   }, []);
+
+  // Persist UI selections to localStorage (debounced) for page refresh restore
+  const uiSelectionsSaveTimerRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!connectionParams || !liveSchemaReady) return;
+    // Debounce to avoid excessive writes
+    clearTimeout(uiSelectionsSaveTimerRef.current);
+    uiSelectionsSaveTimerRef.current = setTimeout(() => {
+      const selectionsKey = 'uiSelections_' + connectionParams.supabaseUrl + '_' + connectionParams.dataset;
+      const selections = {
+        dataFrequency, metric, view, topX, categorySelectionMode,
+        selectedCategories, dynamicFilters, dateRange,
+        activeOverlays, smaWindow, activeInsightsTab,
+      };
+      try { localStorage.setItem(selectionsKey, JSON.stringify(selections)); } catch (e) {}
+    }, 500);
+    return () => clearTimeout(uiSelectionsSaveTimerRef.current);
+  }, [connectionParams, liveSchemaReady, dataFrequency, metric, view, topX,
+      categorySelectionMode, selectedCategories, dynamicFilters, dateRange,
+      activeOverlays, smaWindow, activeInsightsTab]);
 
   const switchTab = React.useCallback((targetTabId) => {
     if (targetTabId === activeTabId) return;
