@@ -47,6 +47,8 @@ export function render() {
   // Data Summary collapse state (declared early — used in STATIC_STYLES below)
   const [showDataSummary, setShowDataSummary] = React.useState(false);
 
+  const DATE_RANGES = ["7D", "30D", "QTD", "YTD", "1Y", "All"];
+
   // Static styles for performance (Optimization #3)
   // Memoized: only recomputes when theme/isDarkMode/showDataSummary changes
   const STATIC_STYLES = React.useMemo(
@@ -3818,23 +3820,24 @@ export function render() {
       d.setMonth(d.getMonth() - months);
       return d.getFullYear() + "-" + (d.getMonth() + 1).toString().padStart(2, "0") + "-" + d.getDate().toString().padStart(2, "0");
     };
+    const computeDaysAgo = (days) => {
+      const d = new Date(now);
+      d.setDate(d.getDate() - days);
+      return d.getFullYear() + "-" + (d.getMonth() + 1).toString().padStart(2, "0") + "-" + d.getDate().toString().padStart(2, "0");
+    };
 
     // Compare by converting each period to a date string first
     switch (dateRange) {
-      case "3M":
-        return allDates.filter((date) => periodToDateStr(date) >= computeAgo(3));
-      case "6M":
-        return allDates.filter((date) => periodToDateStr(date) >= computeAgo(6));
-      case "1Y":
-        return allDates.filter((date) => periodToDateStr(date) >= oneYearAgo);
-      case "3Y": {
-        const threeYearsAgo = (now.getFullYear() - 3) + "-" + (now.getMonth() + 1).toString().padStart(2, "0") + "-" + now.getDate().toString().padStart(2, "0");
-        return allDates.filter((date) => periodToDateStr(date) >= threeYearsAgo);
-      }
-      case "YTD":
-        return allDates.filter((date) => periodToDateStr(date) >= yearStart);
+      case "7D":
+        return allDates.filter((date) => periodToDateStr(date) >= computeDaysAgo(7));
+      case "30D":
+        return allDates.filter((date) => periodToDateStr(date) >= computeDaysAgo(30));
       case "QTD":
         return allDates.filter((date) => periodToDateStr(date) >= computeAgo(3));
+      case "YTD":
+        return allDates.filter((date) => periodToDateStr(date) >= yearStart);
+      case "1Y":
+        return allDates.filter((date) => periodToDateStr(date) >= oneYearAgo);
       default:
         return allDates;
     }
@@ -3876,7 +3879,7 @@ export function render() {
       metrics: metricMap,
       views,
       dataFrequencies: isLiveMode ? ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"] : ["Weekly", "Monthly", "Quarterly", "Yearly"],
-      dateRanges: ["3M", "6M", "1Y", "3Y", "All"],
+      dateRanges: DATE_RANGES,
       filters,
     };
   }, [FILTER_CONFIG_STATIC, getFilterOptions, VIEW_CONFIG, METRIC_LABELS]);
@@ -8309,7 +8312,7 @@ export function render() {
       }
 
       // Validate and apply dateRange
-      const validRanges = ["3M", "6M", "1Y", "3Y", "All"];
+      const validRanges = DATE_RANGES;
       if (response.dateRange && validRanges.includes(response.dateRange)) {
         setDateRange(response.dateRange);
       }
@@ -9034,7 +9037,7 @@ export function render() {
                 data-guide="date-range"
               >
                 {renderButtonGroup(
-                  ["QTD", "YTD", "1Y", "All"],
+                  DATE_RANGES,
                   dateRange,
                   setDateRange,
                   styles.dateRangeGroup,
