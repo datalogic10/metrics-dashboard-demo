@@ -110,8 +110,12 @@ export function classifySchema(columns, dateColumn) {
   const dims = [];
   const mets = [];
   const numericTypes = ['int4', 'int8', 'float4', 'float8', 'numeric'];
+  const dateTypes = ['date', 'timestamp', 'timestamptz'];
+  const idTypes = ['uuid'];
   columns.forEach(c => {
     if (c.name === dateColumn) return;
+    // Skip other date columns, UUIDs — not useful as dimensions
+    if (dateTypes.includes(c.udt) || idTypes.includes(c.udt)) return;
     if (numericTypes.includes(c.udt)) {
       mets.push(c);
     } else {

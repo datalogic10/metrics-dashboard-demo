@@ -1184,11 +1184,9 @@ export function render() {
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
     } catch (e) {}
-    // Initialize with single tab from URL hash dataset (or empty)
-    if (baseConnection.initialDataset) {
-      return [{ id: 'tab_1', name: baseConnection.initialDataset, dataset: baseConnection.initialDataset }];
-    }
-    return [];
+    // Initialize with single tab — use URL dataset or create empty tab (Configure Metrics will prompt)
+    const ds = baseConnection.initialDataset;
+    return [{ id: 'tab_1', name: ds || 'New Tab', dataset: ds || null }];
   });
   const [activeTabId, setActiveTabId] = React.useState(() => tabs.length > 0 ? tabs[0].id : null);
   const tabStateCacheRef = React.useRef({}); // { [tabId]: { snapshot of per-tab state } }
@@ -1204,6 +1202,14 @@ export function render() {
     const tabsKey = 'dashboardTabs_' + baseConnection.supabaseUrl;
     try { localStorage.setItem(tabsKey, JSON.stringify(tabs)); } catch (e) {}
   }, [tabs, baseConnection]);
+
+  // Auto-open Configure Metrics when first tab has no dataset (fresh connection without ?dataset=)
+  React.useEffect(() => {
+    if (baseConnection && activeTab && !activeTab.dataset) {
+      setMetricsEditorDraft({});
+      setShowMetricsEditor(true);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- mount only
 
   // Track whether we've restored saved UI selections for initial page load
   const uiSelectionsRestoredRef = React.useRef(new Set());
@@ -1397,6 +1403,27 @@ export function render() {
             setShowMetricsEditor(true);
           }
         }
+        // Auto-correct stale config values against current schema
+        const columnNames = new Set(columns.map(c => c.name));
+        let configDirty = false;
+        if (config.dateColumn && !columnNames.has(config.dateColumn)) {
+          const detected = columns.find(c => c.udt === 'date' || c.name.includes('_dt'))?.name || null;
+          console.warn(`[Dashboard] dateColumn "${config.dateColumn}" not in schema, auto-correcting to "${detected}"`);
+          config.dateColumn = detected;
+          configDirty = true;
+        }
+        // Remove stale visibleDimensions entries
+        if (Array.isArray(config.visibleDimensions)) {
+          const before = config.visibleDimensions.length;
+          config.visibleDimensions = config.visibleDimensions.filter(d => columnNames.has(d));
+          if (config.visibleDimensions.length !== before) configDirty = true;
+        }
+        if (configDirty) {
+          try {
+            const storageKey = 'metricsConfig_' + connectionParams.supabaseUrl + '_' + dataset;
+            localStorage.setItem(storageKey, JSON.stringify(config));
+          } catch (e) {}
+        }
         // Always set metric config (whether from localStorage or freshly created)
         setLiveMetricConfig(config);
 
@@ -1447,13 +1474,34 @@ export function render() {
             const saved = localStorage.getItem(selectionsKey);
             if (saved) {
               const s = JSON.parse(saved);
+              // Validate saved selections against current schema columns
+              const schemaColNames = new Set(distinctResults.map(r => r.column));
               if (s.dataFrequency) setDataFrequency(s.dataFrequency);
               if (s.metric) setMetric(s.metric);
-              if (s.view) setView(s.view);
+              // Validate saved view — reset to Overall if the dimension no longer exists
+              if (s.view && s.view !== 'Overall') {
+                // View names are derived from column names (e.g. "Job Source" from "job_source")
+                // Check if any schema column could produce this view name
+                const viewValid = distinctResults.some(r => {
+                  const label = r.column.replace(/^is_/, '').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                  return label === s.view;
+                });
+                setView(viewValid ? s.view : 'Overall');
+              } else if (s.view) {
+                setView(s.view);
+              }
               if (s.topX != null) setTopX(s.topX);
               if (s.categorySelectionMode) setCategorySelectionMode(s.categorySelectionMode);
               if (s.selectedCategories) setSelectedCategories(s.selectedCategories);
-              if (s.dynamicFilters) setDynamicFilters(s.dynamicFilters);
+              // Filter out stale dynamicFilters referencing columns no longer in schema
+              if (s.dynamicFilters) {
+                const cleaned = {};
+                Object.keys(s.dynamicFilters).forEach(filterKey => {
+                  const colName = filterKey.replace(/^dim_/, '').replace(/_filter$/, '');
+                  if (schemaColNames.has(colName)) cleaned[filterKey] = s.dynamicFilters[filterKey];
+                });
+                setDynamicFilters(cleaned);
+              }
               if (s.dateRange) setDateRange(s.dateRange);
               if (s.activeOverlays) setActiveOverlays(s.activeOverlays);
               if (s.smaWindow) setSmaWindow(s.smaWindow);
@@ -3516,7 +3564,7 @@ export function render() {
           p_metrics: rpcMetrics,
           p_filters: pFilters,
           ...(topX > 0 ? { p_top_n: topX } : {}),
-          ...(topX > 0 && liveMetricConfig.topNRankBy ? { p_rank_by: liveMetricConfig.topNRankBy } : {}),
+          // p_rank_by omitted — requires updated query_dataset RPC (migration 015)
         })
       : Promise.resolve(null);
 

@@ -495,8 +495,11 @@ var __app = (() => {
     const dims = [];
     const mets = [];
     const numericTypes = ["int4", "int8", "float4", "float8", "numeric"];
+    const dateTypes = ["date", "timestamp", "timestamptz"];
+    const idTypes = ["uuid"];
     columns.forEach((c) => {
       if (c.name === dateColumn) return;
+      if (dateTypes.includes(c.udt) || idTypes.includes(c.udt)) return;
       if (numericTypes.includes(c.udt)) {
         mets.push(c);
       } else {
@@ -2877,10 +2880,8 @@ var __app = (() => {
         }
       } catch (e) {
       }
-      if (baseConnection.initialDataset) {
-        return [{ id: "tab_1", name: baseConnection.initialDataset, dataset: baseConnection.initialDataset }];
-      }
-      return [];
+      const ds = baseConnection.initialDataset;
+      return [{ id: "tab_1", name: ds || "New Tab", dataset: ds || null }];
     });
     const [activeTabId, setActiveTabId] = React.useState(() => tabs.length > 0 ? tabs[0].id : null);
     const tabStateCacheRef = React.useRef({});
@@ -2897,6 +2898,12 @@ var __app = (() => {
       } catch (e) {
       }
     }, [tabs, baseConnection]);
+    React.useEffect(() => {
+      if (baseConnection && activeTab && !activeTab.dataset) {
+        setMetricsEditorDraft({});
+        setShowMetricsEditor(true);
+      }
+    }, []);
     const uiSelectionsRestoredRef = React.useRef(/* @__PURE__ */ new Set());
     const activeTab = tabs.find((t) => t.id === activeTabId) || null;
     const connectionParams = React.useMemo(() => {
@@ -3065,6 +3072,26 @@ var __app = (() => {
             setShowMetricsEditor(true);
           }
         }
+        const columnNames = new Set(columns.map((c) => c.name));
+        let configDirty = false;
+        if (config.dateColumn && !columnNames.has(config.dateColumn)) {
+          const detected = columns.find((c) => c.udt === "date" || c.name.includes("_dt"))?.name || null;
+          console.warn(`[Dashboard] dateColumn "${config.dateColumn}" not in schema, auto-correcting to "${detected}"`);
+          config.dateColumn = detected;
+          configDirty = true;
+        }
+        if (Array.isArray(config.visibleDimensions)) {
+          const before = config.visibleDimensions.length;
+          config.visibleDimensions = config.visibleDimensions.filter((d) => columnNames.has(d));
+          if (config.visibleDimensions.length !== before) configDirty = true;
+        }
+        if (configDirty) {
+          try {
+            const storageKey = "metricsConfig_" + connectionParams.supabaseUrl + "_" + dataset;
+            localStorage.setItem(storageKey, JSON.stringify(config));
+          } catch (e) {
+          }
+        }
         setLiveMetricConfig(config);
         if (config.defaultGrain) {
           const grainToFreq = { day: "Daily", week: "Weekly", month: "Monthly", quarter: "Quarterly", year: "Yearly" };
@@ -3102,13 +3129,29 @@ var __app = (() => {
             const saved = localStorage.getItem(selectionsKey);
             if (saved) {
               const s = JSON.parse(saved);
+              const schemaColNames = new Set(distinctResults.map((r) => r.column));
               if (s.dataFrequency) setDataFrequency(s.dataFrequency);
               if (s.metric) setMetric(s.metric);
-              if (s.view) setView(s.view);
+              if (s.view && s.view !== "Overall") {
+                const viewValid = distinctResults.some((r) => {
+                  const label = r.column.replace(/^is_/, "").replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
+                  return label === s.view;
+                });
+                setView(viewValid ? s.view : "Overall");
+              } else if (s.view) {
+                setView(s.view);
+              }
               if (s.topX != null) setTopX(s.topX);
               if (s.categorySelectionMode) setCategorySelectionMode(s.categorySelectionMode);
               if (s.selectedCategories) setSelectedCategories(s.selectedCategories);
-              if (s.dynamicFilters) setDynamicFilters(s.dynamicFilters);
+              if (s.dynamicFilters) {
+                const cleaned = {};
+                Object.keys(s.dynamicFilters).forEach((filterKey) => {
+                  const colName = filterKey.replace(/^dim_/, "").replace(/_filter$/, "");
+                  if (schemaColNames.has(colName)) cleaned[filterKey] = s.dynamicFilters[filterKey];
+                });
+                setDynamicFilters(cleaned);
+              }
               if (s.dateRange) setDateRange(s.dateRange);
               if (s.activeOverlays) setActiveOverlays(s.activeOverlays);
               if (s.smaWindow) setSmaWindow(s.smaWindow);
@@ -4817,8 +4860,8 @@ var __app = (() => {
         p_group_by: [dimColumn],
         p_metrics: rpcMetrics,
         p_filters: pFilters,
-        ...topX > 0 ? { p_top_n: topX } : {},
-        ...topX > 0 && liveMetricConfig.topNRankBy ? { p_rank_by: liveMetricConfig.topNRankBy } : {}
+        ...topX > 0 ? { p_top_n: topX } : {}
+        // p_rank_by omitted — requires updated query_dataset RPC (migration 015)
       }) : Promise.resolve(null);
       const hasMetric3 = !!liveMetricConfig.derivedAggType || liveMetricConfig.derivedMode === "formula";
       const formulaConfigs = {};
