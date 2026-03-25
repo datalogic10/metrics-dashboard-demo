@@ -1,11 +1,15 @@
 import { THEME_CONFIG, MODERN_COLOR_PALETTE, getCategoryColor } from './src/theme.js';
 import { generateSyntheticData, DEMO_COLUMNS, DEMO_DIMENSION_DEFINITIONS } from './src/syntheticData.js';
 import {
-  DEFAULT_METRIC_CONFIGS, parseBaseConnection, createRpcCaller, createQueryCache,
+  DEFAULT_METRIC_CONFIGS, parseBaseConnection, parseUrlRoute, parseStateParam,
+  createRpcCaller, createQueryCache,
   classifySchema, detectDateColumn, buildLiveColumns, buildLiveDimensions,
   buildRpcMetrics, transformToPeriodAggregates, transformToDimensionAggregates,
   frequencyToGrain, LLM_WORKER_URL,
 } from './src/liveConnection.js';
+import {
+  fetchConfig, createConfig, updateConfig, isCreator, getEditSecret, setEditSecret,
+} from './src/configDb.js';
 import {
   compressState as compressStateUtil,
   generateShareCode as generateShareCodeUtil,
@@ -1172,13 +1176,31 @@ export function render() {
   );
 
   // ===== LIVE DATA CONNECTION + TAB SYSTEM =====
-  const baseConnection = React.useMemo(() => parseBaseConnection(), []);
+  const [urlRoute] = React.useState(() => parseUrlRoute());
+  const [baseConnection, setBaseConnection] = React.useState(() => {
+    // Legacy mode: parse from hash immediately. Config mode: set async after fetch.
+    if (urlRoute.mode === 'legacy') return parseBaseConnection();
+    return null;
+  });
+  const [configId, setConfigId] = React.useState(urlRoute.mode === 'config' ? urlRoute.configId : null);
+  const [isCreatorMode, setIsCreatorMode] = React.useState(false);
+  const [configLoading, setConfigLoading] = React.useState(urlRoute.mode === 'config');
+  const [configError, setConfigError] = React.useState(null);
+  const [legacyBannerDismissed, setLegacyBannerDismissed] = React.useState(false);
+  const [legacySaving, setLegacySaving] = React.useState(false);
+  const [showConnectModal, setShowConnectModal] = React.useState(false);
+  const [connectForm, setConnectForm] = React.useState({ supabaseUrl: '', apiKey: '', dataset: '' });
+  const [connectError, setConnectError] = React.useState('');
+  const [connectSaving, setConnectSaving] = React.useState(false);
+  const pendingStateRef = React.useRef(urlRoute.mode === 'config' ? parseStateParam() : null);
 
   // Tab system: each tab has { id, name, dataset }
   const [tabs, setTabs] = React.useState(() => {
-    if (!baseConnection) return [];
+    if (urlRoute.mode === 'config') return []; // populated after config fetch
+    const bc = parseBaseConnection();
+    if (!bc) return [];
     // Try to restore tabs from localStorage
-    const tabsKey = 'dashboardTabs_' + baseConnection.supabaseUrl;
+    const tabsKey = 'dashboardTabs_' + bc.supabaseUrl;
     try {
       const saved = localStorage.getItem(tabsKey);
       if (saved) {
@@ -1187,7 +1209,7 @@ export function render() {
       }
     } catch (e) {}
     // Initialize with single tab — use URL dataset or create empty tab (Configure Metrics will prompt)
-    const ds = baseConnection.initialDataset;
+    const ds = bc.initialDataset;
     return [{ id: 'tab_1', name: ds || 'New Tab', dataset: ds || null }];
   });
   const [activeTabId, setActiveTabId] = React.useState(() => tabs.length > 0 ? tabs[0].id : null);
@@ -1211,6 +1233,51 @@ export function render() {
       setMetricsEditorDraft({});
       setShowMetricsEditor(true);
     }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- mount only
+
+  // Config mode: fetch dashboard config from Config DB on mount
+  React.useEffect(() => {
+    if (urlRoute.mode !== 'config') return;
+    setConfigLoading(true);
+    fetchConfig(urlRoute.configId)
+      .then(config => {
+        if (!config) {
+          setConfigError('Dashboard not found. It may have been deleted.');
+          setConfigLoading(false);
+          return;
+        }
+        const conn = config.connection_json;
+        setBaseConnection({ supabaseUrl: conn.supabaseUrl, apiKey: conn.apiKey, initialDataset: conn.dataset || null });
+        // Restore tabs from config
+        const tabsData = config.tabs_json;
+        if (Array.isArray(tabsData) && tabsData.length > 0) {
+          setTabs(tabsData);
+          setActiveTabId(tabsData[0].id);
+          tabNextIdRef.current = tabsData.length + 1;
+          // Set metric config for the first tab
+          if (tabsData[0].metricConfig) {
+            setLiveMetricConfig(tabsData[0].metricConfig);
+          }
+          // Pre-populate tab state cache with metric configs from all other tabs
+          tabsData.forEach(t => {
+            if (t.id !== tabsData[0].id && t.metricConfig) {
+              tabStateCacheRef.current[t.id] = { liveMetricConfig: t.metricConfig };
+            }
+          });
+        } else {
+          // Fallback: single tab from connection dataset
+          const ds = conn.dataset || null;
+          setTabs([{ id: 'tab_1', name: ds || 'New Tab', dataset: ds }]);
+          setActiveTabId('tab_1');
+        }
+        setConfigId(urlRoute.configId);
+        setIsCreatorMode(isCreator(urlRoute.configId));
+        setConfigLoading(false);
+      })
+      .catch(err => {
+        setConfigError('Failed to load dashboard: ' + err.message);
+        setConfigLoading(false);
+      });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- mount only
 
   // Track whether we've restored saved UI selections for initial page load
@@ -1255,14 +1322,41 @@ export function render() {
   const [metricsEditorError, setMetricsEditorError] = React.useState('');
   const [expandedMetricSlot, setExpandedMetricSlot] = React.useState(null);
 
-  // Metrics Editor save handler — persists config to localStorage and applies to UI
+  // Build tabs_json for Config DB persistence (includes metricConfig per tab)
+  const buildTabsJson = React.useCallback((currentTabs, currentTabId, currentMetricConfig) => {
+    return currentTabs.map(t => {
+      const mc = t.id === currentTabId
+        ? currentMetricConfig
+        : (tabStateCacheRef.current[t.id]?.liveMetricConfig || null);
+      return { id: t.id, name: t.name, dataset: t.dataset, metricConfig: mc };
+    });
+  }, []);
+
+  // Persist current tabs + metric configs to Config DB (fire-and-forget)
+  const persistToConfigDb = React.useCallback((updatedTabs, currentTabId, currentMetricConfig) => {
+    if (!configId || !isCreatorMode) return;
+    const tabsJson = buildTabsJson(updatedTabs || tabs, currentTabId || activeTabId, currentMetricConfig || liveMetricConfig);
+    updateConfig(configId, getEditSecret(configId), { tabsJson })
+      .catch(err => console.warn('Failed to save config to DB:', err));
+  }, [configId, isCreatorMode, tabs, activeTabId, liveMetricConfig, buildTabsJson]);
+
+  // Persist tab structure changes (add/remove/rename) to Config DB — skip initial load
+  const tabsInitializedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!tabsInitializedRef.current) { tabsInitializedRef.current = true; return; }
+    persistToConfigDb();
+  }, [tabs]); // eslint-disable-line react-hooks/exhaustive-deps -- only fire on tab array changes
+
+  // Metrics Editor save handler — persists config to localStorage, Config DB, and applies to UI
   const handleMetricsEditorSave = React.useCallback(() => {
     const config = { ...metricsEditorDraft };
     const newDataset = config.dataset;
     delete config.dataset;
     const datasetChanged = newDataset && activeTab && newDataset !== activeTab.dataset;
+    let updatedTabs = tabs;
     if (datasetChanged) {
-      setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, dataset: newDataset } : t));
+      updatedTabs = tabs.map(t => t.id === activeTabId ? { ...t, dataset: newDataset } : t);
+      setTabs(updatedTabs);
       loadedDatasetsRef.current.delete(activeTab.dataset);
     }
     setLiveMetricConfig(config);
@@ -1273,7 +1367,9 @@ export function render() {
     } catch (e) {}
     setShowMetricsEditor(false);
     queryCacheRef.current.clear();
-  }, [metricsEditorDraft, activeTab, activeTabId, connectionParams]);
+    // Persist to Config DB
+    persistToConfigDb(updatedTabs, activeTabId, config);
+  }, [metricsEditorDraft, activeTab, activeTabId, connectionParams, tabs, persistToConfigDb]);
 
   // Metrics Editor AI suggestion handler — calls LLM worker to auto-configure metrics
   const handleMetricsEditorSuggest = React.useCallback(async () => {
@@ -1517,6 +1613,9 @@ export function render() {
         setLiveDataLoading(false);
       });
   }, [connectionParams]);
+
+  // Ref to hold restoreStateSnapshot for use in early effects (the callback is defined later)
+  const restoreStateSnapshotRef = React.useRef(null);
 
   // Dynamic filters for live mode (single state object)
   const [dynamicFilters, setDynamicFilters] = React.useState({});
@@ -2595,6 +2694,17 @@ export function render() {
     },
     [FILTER_CONFIG]
   );
+  restoreStateSnapshotRef.current = restoreStateSnapshot;
+
+  // Apply pending shared state (?s= param) after schema is ready
+  React.useEffect(() => {
+    if (!liveSchemaReady || !pendingStateRef.current) return;
+    const state = pendingStateRef.current;
+    pendingStateRef.current = null;
+    if (restoreStateSnapshotRef.current) {
+      try { restoreStateSnapshotRef.current(state); } catch (e) { console.warn('Failed to restore shared state:', e); }
+    }
+  }, [liveSchemaReady]);
 
   const handleUndo = React.useCallback(() => {
     if (history.length > 0) {
@@ -2728,11 +2838,58 @@ export function render() {
     [DIMENSION_DEFINITIONS]
   );
 
-  const handleShareClick = React.useCallback(() => {
-    const code = generateShareCode();
-    setShareCode(code);
-    setShowShareModal(true);
-  }, [generateShareCode]);
+  const handleShareClick = React.useCallback(async () => {
+    const snapshot = captureStateSnapshot();
+    // Add activeTabId so shared view lands on the right tab
+    snapshot.activeTabId = activeTabId;
+
+    // If we have a configId, generate a URL with ?s= state param
+    let cid = configId;
+    if (!cid) {
+      // Legacy mode — auto-create config first
+      if (baseConnection) {
+        try {
+          const connectionJson = { supabaseUrl: baseConnection.supabaseUrl, apiKey: baseConnection.apiKey, dataset: activeTab?.dataset || baseConnection.initialDataset };
+          const tabsJson = tabs.map(t => ({
+            id: t.id, name: t.name, dataset: t.dataset,
+            metricConfig: t.id === activeTabId ? liveMetricConfig : (tabStateCacheRef.current[t.id]?.liveMetricConfig || null),
+          }));
+          const result = await createConfig({ name: activeTab?.name || 'Dashboard', connectionJson, tabsJson });
+          cid = result.id;
+          setEditSecret(cid, result.editSecret);
+          setConfigId(cid);
+          setIsCreatorMode(true);
+          // Update URL without reload
+          window.history.replaceState(null, '', '#/' + cid);
+        } catch (err) {
+          console.warn('Failed to create config for share:', err);
+          // Fallback to old share code
+          const code = generateShareCode();
+          setShareCode(code);
+          setShowShareModal(true);
+          return;
+        }
+      }
+    }
+
+    if (cid) {
+      // Encode state as URL-safe base64 in ?s= param
+      const stateStr = btoa(JSON.stringify(snapshot)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      const url = window.location.origin + window.location.pathname + '#/' + cid + '?s=' + stateStr;
+      try {
+        await navigator.clipboard.writeText(url);
+        setShareCode(url);
+      } catch (e) {
+        setShareCode(url);
+      }
+      setShowShareModal(true);
+    } else {
+      // No connection — fallback to old share code
+      const code = generateShareCode();
+      setShareCode(code);
+      setShowShareModal(true);
+    }
+  }, [captureStateSnapshot, activeTabId, configId, baseConnection, activeTab, tabs, liveMetricConfig, generateShareCode]);
 
   const extractCodeFromUrl = React.useCallback((input) => {
     const trimmed = input.trim();
@@ -8583,7 +8740,7 @@ export function render() {
                 transition: 'all 0.15s ease',
               }}
                 onClick={() => { if (!isRenaming) switchTab(tab.id); }}
-                onDoubleClick={() => { setRenamingTabId(tab.id); setRenameText(tab.name); }}
+                onDoubleClick={() => { if (isCreatorMode || !configId) { setRenamingTabId(tab.id); setRenameText(tab.name); } }}
               >
                 {isActive && (
                   <span style={{ width: "6px", height: "6px", borderRadius: "50%",
@@ -8615,7 +8772,7 @@ export function render() {
                     ({liveRowCount.toLocaleString()}{liveDataTruncated ? '!' : ''})
                   </span>
                 )}
-                {tabs.length > 1 && (
+                {tabs.length > 1 && (isCreatorMode || !configId) && (
                   <button
                     onClick={e => { e.stopPropagation(); removeTab(tab.id); }}
                     style={{
@@ -8632,8 +8789,8 @@ export function render() {
               </div>
             );
           })}
-          {/* Add Tab Button */}
-          <div style={{ position: 'relative' }} data-add-tab>
+          {/* Add Tab Button — hidden for viewers */}
+          {(isCreatorMode || !configId) && <div style={{ position: 'relative' }} data-add-tab>
             <button
               onClick={() => setShowAddTab(!showAddTab)}
               style={{
@@ -8682,24 +8839,26 @@ export function render() {
                 </div>
               </div>
             )}
-          </div>
-          {/* Configure Metrics button — right-aligned */}
-          <button
-            onClick={() => {
-              setMetricsEditorDraft({ ...(liveMetricConfig || {}), dataset: activeTab?.dataset || '' });
-              setMetricsEditorError('');
-              setExpandedMetricSlot(null);
-              setShowMetricsEditor(true);
-            }}
-            style={{
-              marginLeft: 'auto', padding: "4px 12px", borderRadius: "6px",
-              border: `1px solid ${isDarkMode ? 'rgba(16,185,129,0.4)' : 'rgba(16,185,129,0.5)'}`,
-              background: "transparent", color: isDarkMode ? '#6ee7b7' : '#065f46',
-              cursor: "pointer", fontSize: "11px", fontWeight: 500, whiteSpace: "nowrap",
-            }}
-          >
-            Configure Metrics
-          </button>
+          </div>}
+          {/* Configure Metrics button — right-aligned, hidden for viewers */}
+          {(isCreatorMode || !configId) && (
+            <button
+              onClick={() => {
+                setMetricsEditorDraft({ ...(liveMetricConfig || {}), dataset: activeTab?.dataset || '' });
+                setMetricsEditorError('');
+                setExpandedMetricSlot(null);
+                setShowMetricsEditor(true);
+              }}
+              style={{
+                marginLeft: 'auto', padding: "4px 12px", borderRadius: "6px",
+                border: `1px solid ${isDarkMode ? 'rgba(16,185,129,0.4)' : 'rgba(16,185,129,0.5)'}`,
+                background: "transparent", color: isDarkMode ? '#6ee7b7' : '#065f46',
+                cursor: "pointer", fontSize: "11px", fontWeight: 500, whiteSpace: "nowrap",
+              }}
+            >
+              Configure Metrics
+            </button>
+          )}
         </div>
       )}
 
@@ -8713,6 +8872,81 @@ export function render() {
           color: isDarkMode ? "#fbbf24" : "#92400e",
         }}>
           <span>No dataset configured. Click <strong>Configure Metrics</strong> to set the table name.</span>
+        </div>
+      )}
+      {configLoading && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: "8px",
+          padding: "8px 16px", backgroundColor: isDarkMode ? "rgba(99, 102, 241, 0.12)" : "rgba(99, 102, 241, 0.1)",
+          border: `1px solid ${isDarkMode ? "rgba(99, 102, 241, 0.35)" : "rgba(99, 102, 241, 0.4)"}`,
+          borderRadius: "8px", marginBottom: "12px", fontSize: "12px",
+          color: isDarkMode ? "#a5b4fc" : "#4338ca",
+        }}>
+          <div style={{ width: "14px", height: "14px", border: "2px solid currentColor", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+          <span>Loading dashboard configuration...</span>
+        </div>
+      )}
+      {configError && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: "8px",
+          padding: "8px 16px", backgroundColor: isDarkMode ? "rgba(239, 68, 68, 0.12)" : "rgba(239, 68, 68, 0.1)",
+          border: `1px solid ${isDarkMode ? "rgba(239, 68, 68, 0.35)" : "rgba(239, 68, 68, 0.4)"}`,
+          borderRadius: "8px", marginBottom: "12px", fontSize: "12px",
+          color: isDarkMode ? "#fca5a5" : "#dc2626",
+        }}>
+          <span>{configError}</span>
+          <button onClick={() => window.location.reload()} style={{
+            marginLeft: "auto", padding: "2px 10px", borderRadius: "4px", fontSize: "11px", cursor: "pointer",
+            border: `1px solid ${isDarkMode ? "rgba(239, 68, 68, 0.4)" : "rgba(239, 68, 68, 0.5)"}`,
+            background: "transparent", color: "inherit",
+          }}>Retry</button>
+        </div>
+      )}
+      {urlRoute.mode === 'legacy' && baseConnection && !configId && !legacyBannerDismissed && isLiveMode && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: "8px",
+          padding: "8px 16px", backgroundColor: isDarkMode ? "rgba(16, 185, 129, 0.12)" : "rgba(16, 185, 129, 0.1)",
+          border: `1px solid ${isDarkMode ? "rgba(16, 185, 129, 0.35)" : "rgba(16, 185, 129, 0.4)"}`,
+          borderRadius: "8px", marginBottom: "12px", fontSize: "12px",
+          color: isDarkMode ? "#6ee7b7" : "#065f46",
+        }}>
+          <span>Save this dashboard for easy access and sharing?</span>
+          <button
+            disabled={legacySaving}
+            onClick={async () => {
+              setLegacySaving(true);
+              try {
+                const connectionJson = { supabaseUrl: baseConnection.supabaseUrl, apiKey: baseConnection.apiKey, dataset: activeTab?.dataset || baseConnection.initialDataset };
+                const tabsJson = tabs.map(t => ({
+                  id: t.id, name: t.name, dataset: t.dataset,
+                  metricConfig: t.id === activeTabId ? liveMetricConfig : (tabStateCacheRef.current[t.id]?.liveMetricConfig || null),
+                }));
+                const result = await createConfig({ name: activeTab?.name || 'Dashboard', connectionJson, tabsJson });
+                setEditSecret(result.id, result.editSecret);
+                setConfigId(result.id);
+                setIsCreatorMode(true);
+                window.history.replaceState(null, '', '#/' + result.id);
+                setLegacyBannerDismissed(true);
+              } catch (err) {
+                console.warn('Failed to save config:', err);
+              }
+              setLegacySaving(false);
+            }}
+            style={{
+              marginLeft: "auto", padding: "2px 10px", borderRadius: "4px", fontSize: "11px", cursor: "pointer",
+              border: `1px solid ${isDarkMode ? "rgba(16, 185, 129, 0.4)" : "rgba(16, 185, 129, 0.5)"}`,
+              background: isDarkMode ? "rgba(16, 185, 129, 0.2)" : "rgba(16, 185, 129, 0.15)",
+              color: "inherit", fontWeight: 500,
+            }}
+          >{legacySaving ? 'Saving...' : 'Save'}</button>
+          <button
+            onClick={() => setLegacyBannerDismissed(true)}
+            style={{
+              padding: "2px 10px", borderRadius: "4px", fontSize: "11px", cursor: "pointer",
+              border: `1px solid ${isDarkMode ? "rgba(107, 114, 128, 0.3)" : "rgba(107, 114, 128, 0.3)"}`,
+              background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280",
+            }}
+          >Dismiss</button>
         </div>
       )}
       {liveDataLoading && (
@@ -8759,7 +8993,16 @@ export function render() {
           color: isDarkMode ? "#fcd34d" : "#92400e",
         }}>
           <span style={{ fontSize: "14px" }}>⚠️</span>
-          <span><strong>Demo only:</strong> All data, numbers, dimensions, and categories shown are fully synthetic and do not represent any real business or organization.</span>
+          <span><strong>Demo only:</strong> Viewing synthetic data.</span>
+          <button
+            onClick={() => setShowConnectModal(true)}
+            style={{
+              marginLeft: "auto", padding: "4px 12px", borderRadius: "4px", fontSize: "11px", cursor: "pointer",
+              border: `1px solid ${isDarkMode ? "rgba(99, 102, 241, 0.5)" : "rgba(99, 102, 241, 0.5)"}`,
+              background: isDarkMode ? "rgba(99, 102, 241, 0.2)" : "rgba(99, 102, 241, 0.1)",
+              color: isDarkMode ? "#a5b4fc" : "#4338ca", fontWeight: 600, whiteSpace: "nowrap",
+            }}
+          >Connect to Database</button>
         </div>
       )}
 
@@ -10269,6 +10512,92 @@ export function render() {
         )}
       </div>
 
+      {/* Connect to Database Modal */}
+      {showConnectModal && (
+        <div style={styles.shareModal} onClick={e => { if (e.target === e.currentTarget) setShowConnectModal(false); }}>
+          <div style={{ ...styles.shareModalContent, maxWidth: '440px' }}>
+            <div style={styles.shareModalHeader}>
+              <div style={styles.shareModalTitle}>Connect to Database</div>
+              <button style={styles.shareModalClose} onClick={() => setShowConnectModal(false)}>×</button>
+            </div>
+            <div style={{ padding: '4px 0 16px' }}>
+              <p style={{ margin: '0 0 16px', fontSize: '12px', color: isDarkMode ? '#9ca3af' : '#6b7280' }}>
+                Enter your Supabase connection details. Requires the <code style={{ fontSize: '11px', padding: '1px 4px', borderRadius: '3px', background: isDarkMode ? '#1f2937' : '#f3f4f6' }}>query_dataset</code> RPC function (see setup.sql).
+              </p>
+              {[
+                { key: 'supabaseUrl', label: 'Supabase URL', placeholder: 'https://your-project.supabase.co' },
+                { key: 'apiKey', label: 'API Key (anon)', placeholder: 'eyJhbGciOi...' },
+                { key: 'dataset', label: 'Dataset (table name)', placeholder: 'my_metrics_table' },
+              ].map(f => (
+                <div key={f.key} style={{ marginBottom: '12px' }}>
+                  <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, marginBottom: '4px', color: isDarkMode ? '#d1d5db' : '#374151' }}>{f.label}</label>
+                  <input
+                    type={f.key === 'apiKey' ? 'password' : 'text'}
+                    value={connectForm[f.key]}
+                    onChange={e => setConnectForm(prev => ({ ...prev, [f.key]: e.target.value }))}
+                    placeholder={f.placeholder}
+                    style={{
+                      width: '100%', padding: '8px 10px', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box',
+                      border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`,
+                      backgroundColor: isDarkMode ? '#111827' : '#f9fafb',
+                      color: isDarkMode ? '#f3f4f6' : '#111827', outline: 'none',
+                    }}
+                  />
+                </div>
+              ))}
+              {connectError && (
+                <div style={{ fontSize: '12px', color: '#ef4444', marginBottom: '12px' }}>{connectError}</div>
+              )}
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                <button
+                  onClick={() => setShowConnectModal(false)}
+                  style={{
+                    padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer',
+                    border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`,
+                    background: 'transparent', color: isDarkMode ? '#d1d5db' : '#374151',
+                  }}
+                >Cancel</button>
+                <button
+                  disabled={connectSaving || !connectForm.supabaseUrl || !connectForm.apiKey || !connectForm.dataset}
+                  onClick={async () => {
+                    setConnectError('');
+                    setConnectSaving(true);
+                    try {
+                      // Validate connection by calling schema action
+                      const testRes = await fetch(connectForm.supabaseUrl.replace(/\/+$/, '') + '/rest/v1/rpc/query_dataset', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'apikey': connectForm.apiKey, 'Authorization': 'Bearer ' + connectForm.apiKey },
+                        body: JSON.stringify({ p_table: connectForm.dataset, p_action: 'schema' }),
+                      });
+                      if (!testRes.ok) throw new Error('Connection failed (HTTP ' + testRes.status + '). Check your URL and API key.');
+                      const testData = await testRes.json();
+                      if (testData.error) throw new Error(testData.error);
+                      // Connection works — create config in Config DB
+                      const connectionJson = { supabaseUrl: connectForm.supabaseUrl.replace(/\/+$/, ''), apiKey: connectForm.apiKey, dataset: connectForm.dataset };
+                      const tabsJson = [{ id: 'tab_1', name: connectForm.dataset, dataset: connectForm.dataset, metricConfig: null }];
+                      const result = await createConfig({ name: connectForm.dataset, connectionJson, tabsJson });
+                      setEditSecret(result.id, result.editSecret);
+                      // Navigate to the new config URL
+                      window.location.hash = '#/' + result.id;
+                      window.location.reload();
+                    } catch (err) {
+                      setConnectError(err.message);
+                    }
+                    setConnectSaving(false);
+                  }}
+                  style={{
+                    padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: 600,
+                    border: 'none',
+                    background: (!connectForm.supabaseUrl || !connectForm.apiKey || !connectForm.dataset) ? (isDarkMode ? '#374151' : '#e5e7eb') : '#6366f1',
+                    color: (!connectForm.supabaseUrl || !connectForm.apiKey || !connectForm.dataset) ? (isDarkMode ? '#6b7280' : '#9ca3af') : '#ffffff',
+                  }}
+                >{connectSaving ? 'Connecting...' : 'Connect & Save'}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Share Modal */}
       {showShareModal && (
         <div
@@ -10291,76 +10620,63 @@ export function render() {
                 ×
               </button>
             </div>
-            {/* Share Code Section */}
+            {/* Share Link Section */}
             <div style={styles.shareCodeSection}>
               <label style={styles.shareCodeLabel}>Your Share Link:</label>
               <div style={styles.shareLinkContainer}>
-                <a
-                  id="share-link-anchor"
-                  href={`${window.location.origin}${window.location.pathname}?config=${encodeURIComponent(
-                    shareCode
-                  )}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    ...styles.shareLinkInput,
-                    textDecoration: "none",
-                    color: "#6366f1",
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    padding: "10px 12px",
-                    wordBreak: "break-all",
-                  }}
-                >
-                  {`${window.location.origin}${window.location.pathname}?config=${encodeURIComponent(
-                    shareCode
-                  )}`}
-                </a>
-                <button
-                  id="copy-share-code-btn"
-                  style={styles.shareCopyButton}
-                  onClick={() => {
-                    const fullUrl = `${window.location.origin}${window.location.pathname}?config=${encodeURIComponent(
-                      shareCode
-                    )}`;
-                    if (navigator.clipboard && navigator.clipboard.writeText) {
-                      navigator.clipboard
-                        .writeText(fullUrl)
-                        .then(() => {
-                          // Show temporary success feedback
-                          const copyButton = document.getElementById(
-                            "copy-share-code-btn"
-                          );
-                          if (copyButton) {
-                            const originalText = copyButton.textContent;
-                            copyButton.textContent = "Copied!";
-                            copyButton.style.backgroundColor = "#10b981";
-                            setTimeout(() => {
-                              copyButton.textContent = originalText;
-                              copyButton.style.backgroundColor = "#6366f1";
-                            }, 2000);
+                {(() => {
+                  const isConfigUrl = shareCode.startsWith('http');
+                  const displayUrl = isConfigUrl
+                    ? shareCode
+                    : `${window.location.origin}${window.location.pathname}?config=${encodeURIComponent(shareCode)}`;
+                  return (
+                    <>
+                      <a
+                        id="share-link-anchor"
+                        href={displayUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          ...styles.shareLinkInput,
+                          textDecoration: "none",
+                          color: "#6366f1",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          padding: "10px 12px",
+                          wordBreak: "break-all",
+                        }}
+                      >
+                        {displayUrl}
+                      </a>
+                      <button
+                        id="copy-share-code-btn"
+                        style={styles.shareCopyButton}
+                        onClick={() => {
+                          if (navigator.clipboard && navigator.clipboard.writeText) {
+                            navigator.clipboard.writeText(displayUrl).then(() => {
+                              const btn = document.getElementById("copy-share-code-btn");
+                              if (btn) {
+                                const orig = btn.textContent;
+                                btn.textContent = "Copied!";
+                                btn.style.backgroundColor = "#10b981";
+                                setTimeout(() => { btn.textContent = orig; btn.style.backgroundColor = "#6366f1"; }, 2000);
+                              }
+                            }).catch(e => console.error("Failed to copy:", e));
                           }
-                        })
-                        .catch((error) => {
-                          console.error("Failed to copy URL:", error);
-                        });
-                    }
-                  }}
-                >
-                  Copy Link
-                </button>
+                        }}
+                      >
+                        Copy Link
+                      </button>
+                    </>
+                  );
+                })()}
               </div>
               <div style={styles.shareInstructions}>
-                <p
-                  style={{
-                    margin: "8px 0 0 0",
-                    fontSize: "12px",
-                    color: "#6b7280",
-                  }}
-                >
-                  Share this link with others. They can click it to load the
-                  same chart configuration, or paste the code below.
+                <p style={{ margin: "8px 0 0 0", fontSize: "12px", color: "#6b7280" }}>
+                  {shareCode.startsWith('http')
+                    ? "Share this link. Recipients can view and explore the dashboard from this exact view."
+                    : "Share this link with others. They can click it to load the same chart configuration, or paste the code below."}
                 </p>
               </div>
             </div>

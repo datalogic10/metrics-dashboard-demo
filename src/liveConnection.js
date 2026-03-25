@@ -32,6 +32,36 @@ export const DEFAULT_METRIC_CONFIGS = {
   },
 };
 
+// Detect URL format: config (/#/{id}), legacy (#key=val), or demo (no hash)
+export function parseUrlRoute() {
+  const hash = window.location.hash.replace(/^#\/?/, '');
+  if (!hash) return { mode: 'demo' };
+  // Extract the path part (before any ?s= query string in the hash)
+  const path = hash.split('?')[0];
+  // Legacy mode: path contains key=value pairs (supabaseUrl=..., apiKey=..., etc.)
+  if (path.includes('=')) return { mode: 'legacy' };
+  // Config mode: path is a config ID (nanoid)
+  return { mode: 'config', configId: path };
+}
+
+// Parse the ?s= state param from the URL hash (used for shared chart state)
+// URL format: site/#/{config_id}?s={base64} — the ?s= is inside the hash fragment
+export function parseStateParam() {
+  try {
+    const hash = window.location.hash;
+    const qIdx = hash.indexOf('?');
+    if (qIdx === -1) return null;
+    const params = new URLSearchParams(hash.slice(qIdx));
+    const s = params.get('s');
+    if (!s) return null;
+    // Restore URL-safe base64 to standard base64
+    const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(atob(b64));
+  } catch (e) {
+    return null;
+  }
+}
+
 // Parse connection params from URL hash
 export function parseConnectionParams() {
   const hash = window.location.hash.replace(/^#/, '');

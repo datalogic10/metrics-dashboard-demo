@@ -430,6 +430,27 @@ var __app = (() => {
       dateColumn: "reporting_dt"
     }
   };
+  function parseUrlRoute() {
+    const hash = window.location.hash.replace(/^#\/?/, "");
+    if (!hash) return { mode: "demo" };
+    const path = hash.split("?")[0];
+    if (path.includes("=")) return { mode: "legacy" };
+    return { mode: "config", configId: path };
+  }
+  function parseStateParam() {
+    try {
+      const hash = window.location.hash;
+      const qIdx = hash.indexOf("?");
+      if (qIdx === -1) return null;
+      const params = new URLSearchParams(hash.slice(qIdx));
+      const s = params.get("s");
+      if (!s) return null;
+      const b64 = s.replace(/-/g, "+").replace(/_/g, "/");
+      return JSON.parse(atob(b64));
+    } catch (e) {
+      return null;
+    }
+  }
   function parseBaseConnection() {
     const hash = window.location.hash.replace(/^#/, "");
     if (!hash) return null;
@@ -692,6 +713,71 @@ var __app = (() => {
     "Yearly": "year"
   };
   var LLM_WORKER_URL = "https://metrics-dashboard-llm-proxy.datalogic10.workers.dev";
+
+  // src/configDb.js
+  var CONFIG_DB_URL = "https://ash-infra-vm.eastus.cloudapp.azure.com";
+  var CONFIG_DB_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzM1Njg5NjAwLCJleHAiOjE4OTM0NTYwMDB9.yLBvNnhPQk0WIq82mIdsvoIwnjpOylqo8dxk6VmgYP0";
+  var ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  function nanoid(size = 12) {
+    const bytes = crypto.getRandomValues(new Uint8Array(size));
+    let id = "";
+    for (let i = 0; i < size; i++) id += ALPHABET[bytes[i] & 63];
+    return id;
+  }
+  function callConfigRpc(fnName, params) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5e3);
+    return fetch(CONFIG_DB_URL + "/rest/v1/rpc/" + fnName, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": CONFIG_DB_ANON_KEY,
+        "Authorization": "Bearer " + CONFIG_DB_ANON_KEY
+      },
+      body: JSON.stringify(params),
+      signal: controller.signal
+    }).then((res) => {
+      clearTimeout(timeoutId);
+      if (!res.ok) throw new Error("Config DB RPC " + fnName + " returned " + res.status);
+      return res.text();
+    }).then((text) => text ? JSON.parse(text) : null);
+  }
+  function fetchConfig(id) {
+    return callConfigRpc("get_dashboard_config", { p_id: id });
+  }
+  function createConfig({ name, connectionJson, tabsJson }) {
+    const id = nanoid(12);
+    const editSecret = nanoid(21);
+    return callConfigRpc("create_dashboard_config", {
+      p_id: id,
+      p_edit_secret: editSecret,
+      p_name: name || null,
+      p_connection_json: connectionJson,
+      p_tabs_json: tabsJson
+    }).then(() => ({ id, editSecret }));
+  }
+  function updateConfig(id, editSecret, { tabsJson, name }) {
+    const params = { p_id: id, p_edit_secret: editSecret };
+    if (tabsJson !== void 0) params.p_tabs_json = tabsJson;
+    if (name !== void 0) params.p_name = name;
+    return callConfigRpc("update_dashboard_config", params);
+  }
+  function getEditSecret(configId) {
+    try {
+      return localStorage.getItem("configEditSecret_" + configId);
+    } catch (e) {
+      return null;
+    }
+  }
+  function setEditSecret(configId, secret) {
+    try {
+      localStorage.setItem("configEditSecret_" + configId, secret);
+    } catch (e) {
+    }
+  }
+  function isCreator(configId) {
+    return !!getEditSecret(configId);
+  }
 
   // src/shareCode.js
   var VALUE_ABBREVIATIONS = {
@@ -2869,10 +2955,27 @@ var __app = (() => {
       }),
       [theme, isDarkMode, showDataSummary]
     );
-    const baseConnection = React.useMemo(() => parseBaseConnection(), []);
+    const [urlRoute] = React.useState(() => parseUrlRoute());
+    const [baseConnection, setBaseConnection] = React.useState(() => {
+      if (urlRoute.mode === "legacy") return parseBaseConnection();
+      return null;
+    });
+    const [configId, setConfigId] = React.useState(urlRoute.mode === "config" ? urlRoute.configId : null);
+    const [isCreatorMode, setIsCreatorMode] = React.useState(false);
+    const [configLoading, setConfigLoading] = React.useState(urlRoute.mode === "config");
+    const [configError, setConfigError] = React.useState(null);
+    const [legacyBannerDismissed, setLegacyBannerDismissed] = React.useState(false);
+    const [legacySaving, setLegacySaving] = React.useState(false);
+    const [showConnectModal, setShowConnectModal] = React.useState(false);
+    const [connectForm, setConnectForm] = React.useState({ supabaseUrl: "", apiKey: "", dataset: "" });
+    const [connectError, setConnectError] = React.useState("");
+    const [connectSaving, setConnectSaving] = React.useState(false);
+    const pendingStateRef = React.useRef(urlRoute.mode === "config" ? parseStateParam() : null);
     const [tabs, setTabs] = React.useState(() => {
-      if (!baseConnection) return [];
-      const tabsKey = "dashboardTabs_" + baseConnection.supabaseUrl;
+      if (urlRoute.mode === "config") return [];
+      const bc = parseBaseConnection();
+      if (!bc) return [];
+      const tabsKey = "dashboardTabs_" + bc.supabaseUrl;
       try {
         const saved = localStorage.getItem(tabsKey);
         if (saved) {
@@ -2881,7 +2984,7 @@ var __app = (() => {
         }
       } catch (e) {
       }
-      const ds = baseConnection.initialDataset;
+      const ds = bc.initialDataset;
       return [{ id: "tab_1", name: ds || "New Tab", dataset: ds || null }];
     });
     const [activeTabId, setActiveTabId] = React.useState(() => tabs.length > 0 ? tabs[0].id : null);
@@ -2904,6 +3007,43 @@ var __app = (() => {
         setMetricsEditorDraft({});
         setShowMetricsEditor(true);
       }
+    }, []);
+    React.useEffect(() => {
+      if (urlRoute.mode !== "config") return;
+      setConfigLoading(true);
+      fetchConfig(urlRoute.configId).then((config) => {
+        if (!config) {
+          setConfigError("Dashboard not found. It may have been deleted.");
+          setConfigLoading(false);
+          return;
+        }
+        const conn = config.connection_json;
+        setBaseConnection({ supabaseUrl: conn.supabaseUrl, apiKey: conn.apiKey, initialDataset: conn.dataset || null });
+        const tabsData = config.tabs_json;
+        if (Array.isArray(tabsData) && tabsData.length > 0) {
+          setTabs(tabsData);
+          setActiveTabId(tabsData[0].id);
+          tabNextIdRef.current = tabsData.length + 1;
+          if (tabsData[0].metricConfig) {
+            setLiveMetricConfig(tabsData[0].metricConfig);
+          }
+          tabsData.forEach((t) => {
+            if (t.id !== tabsData[0].id && t.metricConfig) {
+              tabStateCacheRef.current[t.id] = { liveMetricConfig: t.metricConfig };
+            }
+          });
+        } else {
+          const ds = conn.dataset || null;
+          setTabs([{ id: "tab_1", name: ds || "New Tab", dataset: ds }]);
+          setActiveTabId("tab_1");
+        }
+        setConfigId(urlRoute.configId);
+        setIsCreatorMode(isCreator(urlRoute.configId));
+        setConfigLoading(false);
+      }).catch((err) => {
+        setConfigError("Failed to load dashboard: " + err.message);
+        setConfigLoading(false);
+      });
     }, []);
     const uiSelectionsRestoredRef = React.useRef(/* @__PURE__ */ new Set());
     const activeTab = tabs.find((t) => t.id === activeTabId) || null;
@@ -2938,13 +3078,34 @@ var __app = (() => {
     const [metricsEditorSuggesting, setMetricsEditorSuggesting] = React.useState(false);
     const [metricsEditorError, setMetricsEditorError] = React.useState("");
     const [expandedMetricSlot, setExpandedMetricSlot] = React.useState(null);
+    const buildTabsJson = React.useCallback((currentTabs, currentTabId, currentMetricConfig) => {
+      return currentTabs.map((t) => {
+        const mc = t.id === currentTabId ? currentMetricConfig : tabStateCacheRef.current[t.id]?.liveMetricConfig || null;
+        return { id: t.id, name: t.name, dataset: t.dataset, metricConfig: mc };
+      });
+    }, []);
+    const persistToConfigDb = React.useCallback((updatedTabs, currentTabId, currentMetricConfig) => {
+      if (!configId || !isCreatorMode) return;
+      const tabsJson = buildTabsJson(updatedTabs || tabs, currentTabId || activeTabId, currentMetricConfig || liveMetricConfig);
+      updateConfig(configId, getEditSecret(configId), { tabsJson }).catch((err) => console.warn("Failed to save config to DB:", err));
+    }, [configId, isCreatorMode, tabs, activeTabId, liveMetricConfig, buildTabsJson]);
+    const tabsInitializedRef = React.useRef(false);
+    React.useEffect(() => {
+      if (!tabsInitializedRef.current) {
+        tabsInitializedRef.current = true;
+        return;
+      }
+      persistToConfigDb();
+    }, [tabs]);
     const handleMetricsEditorSave = React.useCallback(() => {
       const config = { ...metricsEditorDraft };
       const newDataset = config.dataset;
       delete config.dataset;
       const datasetChanged = newDataset && activeTab && newDataset !== activeTab.dataset;
+      let updatedTabs = tabs;
       if (datasetChanged) {
-        setTabs((prev) => prev.map((t) => t.id === activeTabId ? { ...t, dataset: newDataset } : t));
+        updatedTabs = tabs.map((t) => t.id === activeTabId ? { ...t, dataset: newDataset } : t);
+        setTabs(updatedTabs);
         loadedDatasetsRef.current.delete(activeTab.dataset);
       }
       setLiveMetricConfig(config);
@@ -2956,7 +3117,8 @@ var __app = (() => {
       }
       setShowMetricsEditor(false);
       queryCacheRef.current.clear();
-    }, [metricsEditorDraft, activeTab, activeTabId, connectionParams]);
+      persistToConfigDb(updatedTabs, activeTabId, config);
+    }, [metricsEditorDraft, activeTab, activeTabId, connectionParams, tabs, persistToConfigDb]);
     const handleMetricsEditorSuggest = React.useCallback(async () => {
       setMetricsEditorSuggesting(true);
       setMetricsEditorError("");
@@ -3166,6 +3328,7 @@ var __app = (() => {
         setLiveDataLoading(false);
       });
     }, [connectionParams]);
+    const restoreStateSnapshotRef = React.useRef(null);
     const [dynamicFilters, setDynamicFilters] = React.useState({});
     const COLUMNS = isLiveMode ? buildLiveColumns(visibleLiveDimensions) : DEMO_COLUMNS;
     const DIMENSION_DEFINITIONS = isLiveMode ? buildLiveDimensions(visibleLiveDimensions) : DEMO_DIMENSION_DEFINITIONS;
@@ -4111,6 +4274,19 @@ var __app = (() => {
       },
       [FILTER_CONFIG]
     );
+    restoreStateSnapshotRef.current = restoreStateSnapshot;
+    React.useEffect(() => {
+      if (!liveSchemaReady || !pendingStateRef.current) return;
+      const state = pendingStateRef.current;
+      pendingStateRef.current = null;
+      if (restoreStateSnapshotRef.current) {
+        try {
+          restoreStateSnapshotRef.current(state);
+        } catch (e) {
+          console.warn("Failed to restore shared state:", e);
+        }
+      }
+    }, [liveSchemaReady]);
     const handleUndo = React.useCallback(() => {
       if (history.length > 0) {
         const previousState = history[history.length - 1];
@@ -4227,11 +4403,51 @@ var __app = (() => {
       (code) => decodeShareCode(code, DIMENSION_DEFINITIONS),
       [DIMENSION_DEFINITIONS]
     );
-    const handleShareClick = React.useCallback(() => {
-      const code = generateShareCode2();
-      setShareCode(code);
-      setShowShareModal(true);
-    }, [generateShareCode2]);
+    const handleShareClick = React.useCallback(async () => {
+      const snapshot = captureStateSnapshot();
+      snapshot.activeTabId = activeTabId;
+      let cid = configId;
+      if (!cid) {
+        if (baseConnection) {
+          try {
+            const connectionJson = { supabaseUrl: baseConnection.supabaseUrl, apiKey: baseConnection.apiKey, dataset: activeTab?.dataset || baseConnection.initialDataset };
+            const tabsJson = tabs.map((t) => ({
+              id: t.id,
+              name: t.name,
+              dataset: t.dataset,
+              metricConfig: t.id === activeTabId ? liveMetricConfig : tabStateCacheRef.current[t.id]?.liveMetricConfig || null
+            }));
+            const result = await createConfig({ name: activeTab?.name || "Dashboard", connectionJson, tabsJson });
+            cid = result.id;
+            setEditSecret(cid, result.editSecret);
+            setConfigId(cid);
+            setIsCreatorMode(true);
+            window.history.replaceState(null, "", "#/" + cid);
+          } catch (err) {
+            console.warn("Failed to create config for share:", err);
+            const code = generateShareCode2();
+            setShareCode(code);
+            setShowShareModal(true);
+            return;
+          }
+        }
+      }
+      if (cid) {
+        const stateStr = btoa(JSON.stringify(snapshot)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+        const url = window.location.origin + window.location.pathname + "#/" + cid + "?s=" + stateStr;
+        try {
+          await navigator.clipboard.writeText(url);
+          setShareCode(url);
+        } catch (e) {
+          setShareCode(url);
+        }
+        setShowShareModal(true);
+      } else {
+        const code = generateShareCode2();
+        setShareCode(code);
+        setShowShareModal(true);
+      }
+    }, [captureStateSnapshot, activeTabId, configId, baseConnection, activeTab, tabs, liveMetricConfig, generateShareCode2]);
     const extractCodeFromUrl = React.useCallback((input) => {
       const trimmed = input.trim();
       if (trimmed.includes("target_analyzer_code=")) {
@@ -8619,8 +8835,10 @@ var __app = (() => {
             if (!isRenaming) switchTab(tab.id);
           },
           onDoubleClick: () => {
-            setRenamingTabId(tab.id);
-            setRenameText(tab.name);
+            if (isCreatorMode || !configId) {
+              setRenamingTabId(tab.id);
+              setRenameText(tab.name);
+            }
           }
         },
         isActive && /* @__PURE__ */ React.createElement("span", { style: {
@@ -8663,7 +8881,7 @@ var __app = (() => {
           }
         ) : /* @__PURE__ */ React.createElement("span", null, tab.name),
         isActive && liveRowCount > 0 && !liveDataLoading && /* @__PURE__ */ React.createElement("span", { style: { fontSize: "11px", color: isDarkMode ? "#6b7280" : "#9ca3af", marginLeft: "4px" } }, "(", liveRowCount.toLocaleString(), liveDataTruncated ? "!" : "", ")"),
-        tabs.length > 1 && /* @__PURE__ */ React.createElement(
+        tabs.length > 1 && (isCreatorMode || !configId) && /* @__PURE__ */ React.createElement(
           "button",
           {
             onClick: (e) => {
@@ -8689,7 +8907,7 @@ var __app = (() => {
           "\xD7"
         )
       );
-    }), /* @__PURE__ */ React.createElement("div", { style: { position: "relative" }, "data-add-tab": true }, /* @__PURE__ */ React.createElement(
+    }), (isCreatorMode || !configId) && /* @__PURE__ */ React.createElement("div", { style: { position: "relative" }, "data-add-tab": true }, /* @__PURE__ */ React.createElement(
       "button",
       {
         onClick: () => setShowAddTab(!showAddTab),
@@ -8748,7 +8966,7 @@ var __app = (() => {
           boxSizing: "border-box"
         }
       }
-    ), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", color: isDarkMode ? "#6b7280" : "#9ca3af", marginTop: "6px" } }, "Name your tab, then set dataset in Configure Metrics"))), /* @__PURE__ */ React.createElement(
+    ), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", color: isDarkMode ? "#6b7280" : "#9ca3af", marginTop: "6px" } }, "Name your tab, then set dataset in Configure Metrics"))), (isCreatorMode || !configId) && /* @__PURE__ */ React.createElement(
       "button",
       {
         onClick: () => {
@@ -8782,7 +9000,102 @@ var __app = (() => {
       marginBottom: "12px",
       fontSize: "12px",
       color: isDarkMode ? "#fbbf24" : "#92400e"
-    } }, /* @__PURE__ */ React.createElement("span", null, "No dataset configured. Click ", /* @__PURE__ */ React.createElement("strong", null, "Configure Metrics"), " to set the table name.")), liveDataLoading && /* @__PURE__ */ React.createElement("div", { style: {
+    } }, /* @__PURE__ */ React.createElement("span", null, "No dataset configured. Click ", /* @__PURE__ */ React.createElement("strong", null, "Configure Metrics"), " to set the table name.")), configLoading && /* @__PURE__ */ React.createElement("div", { style: {
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      padding: "8px 16px",
+      backgroundColor: isDarkMode ? "rgba(99, 102, 241, 0.12)" : "rgba(99, 102, 241, 0.1)",
+      border: `1px solid ${isDarkMode ? "rgba(99, 102, 241, 0.35)" : "rgba(99, 102, 241, 0.4)"}`,
+      borderRadius: "8px",
+      marginBottom: "12px",
+      fontSize: "12px",
+      color: isDarkMode ? "#a5b4fc" : "#4338ca"
+    } }, /* @__PURE__ */ React.createElement("div", { style: { width: "14px", height: "14px", border: "2px solid currentColor", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" } }), /* @__PURE__ */ React.createElement("span", null, "Loading dashboard configuration...")), configError && /* @__PURE__ */ React.createElement("div", { style: {
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      padding: "8px 16px",
+      backgroundColor: isDarkMode ? "rgba(239, 68, 68, 0.12)" : "rgba(239, 68, 68, 0.1)",
+      border: `1px solid ${isDarkMode ? "rgba(239, 68, 68, 0.35)" : "rgba(239, 68, 68, 0.4)"}`,
+      borderRadius: "8px",
+      marginBottom: "12px",
+      fontSize: "12px",
+      color: isDarkMode ? "#fca5a5" : "#dc2626"
+    } }, /* @__PURE__ */ React.createElement("span", null, configError), /* @__PURE__ */ React.createElement("button", { onClick: () => window.location.reload(), style: {
+      marginLeft: "auto",
+      padding: "2px 10px",
+      borderRadius: "4px",
+      fontSize: "11px",
+      cursor: "pointer",
+      border: `1px solid ${isDarkMode ? "rgba(239, 68, 68, 0.4)" : "rgba(239, 68, 68, 0.5)"}`,
+      background: "transparent",
+      color: "inherit"
+    } }, "Retry")), urlRoute.mode === "legacy" && baseConnection && !configId && !legacyBannerDismissed && isLiveMode && /* @__PURE__ */ React.createElement("div", { style: {
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      padding: "8px 16px",
+      backgroundColor: isDarkMode ? "rgba(16, 185, 129, 0.12)" : "rgba(16, 185, 129, 0.1)",
+      border: `1px solid ${isDarkMode ? "rgba(16, 185, 129, 0.35)" : "rgba(16, 185, 129, 0.4)"}`,
+      borderRadius: "8px",
+      marginBottom: "12px",
+      fontSize: "12px",
+      color: isDarkMode ? "#6ee7b7" : "#065f46"
+    } }, /* @__PURE__ */ React.createElement("span", null, "Save this dashboard for easy access and sharing?"), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        disabled: legacySaving,
+        onClick: async () => {
+          setLegacySaving(true);
+          try {
+            const connectionJson = { supabaseUrl: baseConnection.supabaseUrl, apiKey: baseConnection.apiKey, dataset: activeTab?.dataset || baseConnection.initialDataset };
+            const tabsJson = tabs.map((t) => ({
+              id: t.id,
+              name: t.name,
+              dataset: t.dataset,
+              metricConfig: t.id === activeTabId ? liveMetricConfig : tabStateCacheRef.current[t.id]?.liveMetricConfig || null
+            }));
+            const result = await createConfig({ name: activeTab?.name || "Dashboard", connectionJson, tabsJson });
+            setEditSecret(result.id, result.editSecret);
+            setConfigId(result.id);
+            setIsCreatorMode(true);
+            window.history.replaceState(null, "", "#/" + result.id);
+            setLegacyBannerDismissed(true);
+          } catch (err) {
+            console.warn("Failed to save config:", err);
+          }
+          setLegacySaving(false);
+        },
+        style: {
+          marginLeft: "auto",
+          padding: "2px 10px",
+          borderRadius: "4px",
+          fontSize: "11px",
+          cursor: "pointer",
+          border: `1px solid ${isDarkMode ? "rgba(16, 185, 129, 0.4)" : "rgba(16, 185, 129, 0.5)"}`,
+          background: isDarkMode ? "rgba(16, 185, 129, 0.2)" : "rgba(16, 185, 129, 0.15)",
+          color: "inherit",
+          fontWeight: 500
+        }
+      },
+      legacySaving ? "Saving..." : "Save"
+    ), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: () => setLegacyBannerDismissed(true),
+        style: {
+          padding: "2px 10px",
+          borderRadius: "4px",
+          fontSize: "11px",
+          cursor: "pointer",
+          border: `1px solid ${isDarkMode ? "rgba(107, 114, 128, 0.3)" : "rgba(107, 114, 128, 0.3)"}`,
+          background: "transparent",
+          color: isDarkMode ? "#9ca3af" : "#6b7280"
+        }
+      },
+      "Dismiss"
+    )), liveDataLoading && /* @__PURE__ */ React.createElement("div", { style: {
       display: "flex",
       alignItems: "center",
       gap: "8px",
@@ -8826,7 +9139,25 @@ var __app = (() => {
       marginBottom: "12px",
       fontSize: "12px",
       color: isDarkMode ? "#fcd34d" : "#92400e"
-    } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: "14px" } }, "\u26A0\uFE0F"), /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("strong", null, "Demo only:"), " All data, numbers, dimensions, and categories shown are fully synthetic and do not represent any real business or organization.")), /* @__PURE__ */ React.createElement("div", { style: styles.topSection }, /* @__PURE__ */ React.createElement("div", { style: styles.queryContainer, "data-guide": "quick-query" }, /* @__PURE__ */ React.createElement("div", { style: styles.queryInputGroup }, /* @__PURE__ */ React.createElement("div", { style: styles.queryLabelContainer }, /* @__PURE__ */ React.createElement("label", { style: styles.queryLabel }, "Quick Query"), /* @__PURE__ */ React.createElement(
+    } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: "14px" } }, "\u26A0\uFE0F"), /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("strong", null, "Demo only:"), " Viewing synthetic data."), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: () => setShowConnectModal(true),
+        style: {
+          marginLeft: "auto",
+          padding: "4px 12px",
+          borderRadius: "4px",
+          fontSize: "11px",
+          cursor: "pointer",
+          border: `1px solid ${isDarkMode ? "rgba(99, 102, 241, 0.5)" : "rgba(99, 102, 241, 0.5)"}`,
+          background: isDarkMode ? "rgba(99, 102, 241, 0.2)" : "rgba(99, 102, 241, 0.1)",
+          color: isDarkMode ? "#a5b4fc" : "#4338ca",
+          fontWeight: 600,
+          whiteSpace: "nowrap"
+        }
+      },
+      "Connect to Database"
+    )), /* @__PURE__ */ React.createElement("div", { style: styles.topSection }, /* @__PURE__ */ React.createElement("div", { style: styles.queryContainer, "data-guide": "quick-query" }, /* @__PURE__ */ React.createElement("div", { style: styles.queryInputGroup }, /* @__PURE__ */ React.createElement("div", { style: styles.queryLabelContainer }, /* @__PURE__ */ React.createElement("label", { style: styles.queryLabel }, "Quick Query"), /* @__PURE__ */ React.createElement(
       "div",
       {
         style: styles.queryTooltipIcon,
@@ -10016,7 +10347,86 @@ var __app = (() => {
       return state.map(
         (val) => formatValue ? formatValue(val) : formatFilterName2(val)
       );
-    }).join(", ") || "None"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Filter Context:"), " ", getShortFilterContext()), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Market Size:"), " ", formatMetric(calculateMetric(filteredData))), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Solo Insights Found:"), " ", Object.values(displayedInsights.basicInsights).flat().length), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Data Filter Time:"), " ", filterTimeRef.current.toFixed(2), "ms"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Render Time:"), " ", (performance.now() - renderStartTime).toFixed(2), "ms"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Render Count:"), " ", renderCountRef.current), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Raw Data Rows:"), " ", cleanedQueryData.rows ? cleanedQueryData.rows.length.toLocaleString() : 0), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Filtered Rows:"), " ", filteredData.length.toLocaleString()), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Cross Insights Found:"), " ", Object.values(displayedInsights.advancedInsights).flat().length))), showShareModal && /* @__PURE__ */ React.createElement(
+    }).join(", ") || "None"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Filter Context:"), " ", getShortFilterContext()), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Market Size:"), " ", formatMetric(calculateMetric(filteredData))), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Solo Insights Found:"), " ", Object.values(displayedInsights.basicInsights).flat().length), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Data Filter Time:"), " ", filterTimeRef.current.toFixed(2), "ms"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Render Time:"), " ", (performance.now() - renderStartTime).toFixed(2), "ms"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Render Count:"), " ", renderCountRef.current), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Raw Data Rows:"), " ", cleanedQueryData.rows ? cleanedQueryData.rows.length.toLocaleString() : 0), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Filtered Rows:"), " ", filteredData.length.toLocaleString()), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Cross Insights Found:"), " ", Object.values(displayedInsights.advancedInsights).flat().length))), showConnectModal && /* @__PURE__ */ React.createElement("div", { style: styles.shareModal, onClick: (e) => {
+      if (e.target === e.currentTarget) setShowConnectModal(false);
+    } }, /* @__PURE__ */ React.createElement("div", { style: { ...styles.shareModalContent, maxWidth: "440px" } }, /* @__PURE__ */ React.createElement("div", { style: styles.shareModalHeader }, /* @__PURE__ */ React.createElement("div", { style: styles.shareModalTitle }, "Connect to Database"), /* @__PURE__ */ React.createElement("button", { style: styles.shareModalClose, onClick: () => setShowConnectModal(false) }, "\xD7")), /* @__PURE__ */ React.createElement("div", { style: { padding: "4px 0 16px" } }, /* @__PURE__ */ React.createElement("p", { style: { margin: "0 0 16px", fontSize: "12px", color: isDarkMode ? "#9ca3af" : "#6b7280" } }, "Enter your Supabase connection details. Requires the ", /* @__PURE__ */ React.createElement("code", { style: { fontSize: "11px", padding: "1px 4px", borderRadius: "3px", background: isDarkMode ? "#1f2937" : "#f3f4f6" } }, "query_dataset"), " RPC function (see setup.sql)."), [
+      { key: "supabaseUrl", label: "Supabase URL", placeholder: "https://your-project.supabase.co" },
+      { key: "apiKey", label: "API Key (anon)", placeholder: "eyJhbGciOi..." },
+      { key: "dataset", label: "Dataset (table name)", placeholder: "my_metrics_table" }
+    ].map((f) => /* @__PURE__ */ React.createElement("div", { key: f.key, style: { marginBottom: "12px" } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: "11px", fontWeight: 600, marginBottom: "4px", color: isDarkMode ? "#d1d5db" : "#374151" } }, f.label), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: f.key === "apiKey" ? "password" : "text",
+        value: connectForm[f.key],
+        onChange: (e) => setConnectForm((prev) => ({ ...prev, [f.key]: e.target.value })),
+        placeholder: f.placeholder,
+        style: {
+          width: "100%",
+          padding: "8px 10px",
+          borderRadius: "6px",
+          fontSize: "13px",
+          boxSizing: "border-box",
+          border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`,
+          backgroundColor: isDarkMode ? "#111827" : "#f9fafb",
+          color: isDarkMode ? "#f3f4f6" : "#111827",
+          outline: "none"
+        }
+      }
+    ))), connectError && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "12px", color: "#ef4444", marginBottom: "12px" } }, connectError), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: "8px", justifyContent: "flex-end" } }, /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: () => setShowConnectModal(false),
+        style: {
+          padding: "6px 14px",
+          borderRadius: "6px",
+          fontSize: "12px",
+          cursor: "pointer",
+          border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`,
+          background: "transparent",
+          color: isDarkMode ? "#d1d5db" : "#374151"
+        }
+      },
+      "Cancel"
+    ), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        disabled: connectSaving || !connectForm.supabaseUrl || !connectForm.apiKey || !connectForm.dataset,
+        onClick: async () => {
+          setConnectError("");
+          setConnectSaving(true);
+          try {
+            const testRes = await fetch(connectForm.supabaseUrl.replace(/\/+$/, "") + "/rest/v1/rpc/query_dataset", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "apikey": connectForm.apiKey, "Authorization": "Bearer " + connectForm.apiKey },
+              body: JSON.stringify({ p_table: connectForm.dataset, p_action: "schema" })
+            });
+            if (!testRes.ok) throw new Error("Connection failed (HTTP " + testRes.status + "). Check your URL and API key.");
+            const testData = await testRes.json();
+            if (testData.error) throw new Error(testData.error);
+            const connectionJson = { supabaseUrl: connectForm.supabaseUrl.replace(/\/+$/, ""), apiKey: connectForm.apiKey, dataset: connectForm.dataset };
+            const tabsJson = [{ id: "tab_1", name: connectForm.dataset, dataset: connectForm.dataset, metricConfig: null }];
+            const result = await createConfig({ name: connectForm.dataset, connectionJson, tabsJson });
+            setEditSecret(result.id, result.editSecret);
+            window.location.hash = "#/" + result.id;
+            window.location.reload();
+          } catch (err) {
+            setConnectError(err.message);
+          }
+          setConnectSaving(false);
+        },
+        style: {
+          padding: "6px 14px",
+          borderRadius: "6px",
+          fontSize: "12px",
+          cursor: "pointer",
+          fontWeight: 600,
+          border: "none",
+          background: !connectForm.supabaseUrl || !connectForm.apiKey || !connectForm.dataset ? isDarkMode ? "#374151" : "#e5e7eb" : "#6366f1",
+          color: !connectForm.supabaseUrl || !connectForm.apiKey || !connectForm.dataset ? isDarkMode ? "#6b7280" : "#9ca3af" : "#ffffff"
+        }
+      },
+      connectSaving ? "Connecting..." : "Connect & Save"
+    ))))), showShareModal && /* @__PURE__ */ React.createElement(
       "div",
       {
         style: styles.shareModal,
@@ -10033,70 +10443,53 @@ var __app = (() => {
           onClick: () => setShowShareModal(false)
         },
         "\xD7"
-      )), /* @__PURE__ */ React.createElement("div", { style: styles.shareCodeSection }, /* @__PURE__ */ React.createElement("label", { style: styles.shareCodeLabel }, "Your Share Link:"), /* @__PURE__ */ React.createElement("div", { style: styles.shareLinkContainer }, /* @__PURE__ */ React.createElement(
-        "a",
-        {
-          id: "share-link-anchor",
-          href: `${window.location.origin}${window.location.pathname}?config=${encodeURIComponent(
-            shareCode
-          )}`,
-          target: "_blank",
-          rel: "noopener noreferrer",
-          style: {
-            ...styles.shareLinkInput,
-            textDecoration: "none",
-            color: "#6366f1",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            padding: "10px 12px",
-            wordBreak: "break-all"
-          }
-        },
-        `${window.location.origin}${window.location.pathname}?config=${encodeURIComponent(
-          shareCode
-        )}`
-      ), /* @__PURE__ */ React.createElement(
-        "button",
-        {
-          id: "copy-share-code-btn",
-          style: styles.shareCopyButton,
-          onClick: () => {
-            const fullUrl = `${window.location.origin}${window.location.pathname}?config=${encodeURIComponent(
-              shareCode
-            )}`;
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-              navigator.clipboard.writeText(fullUrl).then(() => {
-                const copyButton = document.getElementById(
-                  "copy-share-code-btn"
-                );
-                if (copyButton) {
-                  const originalText = copyButton.textContent;
-                  copyButton.textContent = "Copied!";
-                  copyButton.style.backgroundColor = "#10b981";
-                  setTimeout(() => {
-                    copyButton.textContent = originalText;
-                    copyButton.style.backgroundColor = "#6366f1";
-                  }, 2e3);
-                }
-              }).catch((error) => {
-                console.error("Failed to copy URL:", error);
-              });
+      )), /* @__PURE__ */ React.createElement("div", { style: styles.shareCodeSection }, /* @__PURE__ */ React.createElement("label", { style: styles.shareCodeLabel }, "Your Share Link:"), /* @__PURE__ */ React.createElement("div", { style: styles.shareLinkContainer }, (() => {
+        const isConfigUrl = shareCode.startsWith("http");
+        const displayUrl = isConfigUrl ? shareCode : `${window.location.origin}${window.location.pathname}?config=${encodeURIComponent(shareCode)}`;
+        return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
+          "a",
+          {
+            id: "share-link-anchor",
+            href: displayUrl,
+            target: "_blank",
+            rel: "noopener noreferrer",
+            style: {
+              ...styles.shareLinkInput,
+              textDecoration: "none",
+              color: "#6366f1",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              padding: "10px 12px",
+              wordBreak: "break-all"
             }
-          }
-        },
-        "Copy Link"
-      )), /* @__PURE__ */ React.createElement("div", { style: styles.shareInstructions }, /* @__PURE__ */ React.createElement(
-        "p",
-        {
-          style: {
-            margin: "8px 0 0 0",
-            fontSize: "12px",
-            color: "#6b7280"
-          }
-        },
-        "Share this link with others. They can click it to load the same chart configuration, or paste the code below."
-      ))), /* @__PURE__ */ React.createElement("div", { style: styles.pasteCodeSection }, /* @__PURE__ */ React.createElement("label", { style: styles.shareCodeLabel }, "Paste Code or URL to Load Configuration:"), /* @__PURE__ */ React.createElement(
+          },
+          displayUrl
+        ), /* @__PURE__ */ React.createElement(
+          "button",
+          {
+            id: "copy-share-code-btn",
+            style: styles.shareCopyButton,
+            onClick: () => {
+              if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(displayUrl).then(() => {
+                  const btn = document.getElementById("copy-share-code-btn");
+                  if (btn) {
+                    const orig = btn.textContent;
+                    btn.textContent = "Copied!";
+                    btn.style.backgroundColor = "#10b981";
+                    setTimeout(() => {
+                      btn.textContent = orig;
+                      btn.style.backgroundColor = "#6366f1";
+                    }, 2e3);
+                  }
+                }).catch((e) => console.error("Failed to copy:", e));
+              }
+            }
+          },
+          "Copy Link"
+        ));
+      })()), /* @__PURE__ */ React.createElement("div", { style: styles.shareInstructions }, /* @__PURE__ */ React.createElement("p", { style: { margin: "8px 0 0 0", fontSize: "12px", color: "#6b7280" } }, shareCode.startsWith("http") ? "Share this link. Recipients can view and explore the dashboard from this exact view." : "Share this link with others. They can click it to load the same chart configuration, or paste the code below."))), /* @__PURE__ */ React.createElement("div", { style: styles.pasteCodeSection }, /* @__PURE__ */ React.createElement("label", { style: styles.shareCodeLabel }, "Paste Code or URL to Load Configuration:"), /* @__PURE__ */ React.createElement(
         "input",
         {
           type: "text",
