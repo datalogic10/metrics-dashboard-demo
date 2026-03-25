@@ -437,13 +437,15 @@ var __app = (() => {
     if (path.includes("=")) return { mode: "legacy" };
     return { mode: "config", configId: path };
   }
+  function parseHashParams() {
+    const hash = window.location.hash;
+    const qIdx = hash.indexOf("?");
+    if (qIdx === -1) return new URLSearchParams();
+    return new URLSearchParams(hash.slice(qIdx));
+  }
   function parseStateParam() {
     try {
-      const hash = window.location.hash;
-      const qIdx = hash.indexOf("?");
-      if (qIdx === -1) return null;
-      const params = new URLSearchParams(hash.slice(qIdx));
-      const s = params.get("s");
+      const s = parseHashParams().get("s");
       if (!s) return null;
       const b64 = s.replace(/-/g, "+").replace(/_/g, "/");
       return JSON.parse(atob(b64));
@@ -2966,6 +2968,9 @@ var __app = (() => {
     const [configError, setConfigError] = React.useState(null);
     const [legacyBannerDismissed, setLegacyBannerDismissed] = React.useState(false);
     const [legacySaving, setLegacySaving] = React.useState(false);
+    const [showUnlockPrompt, setShowUnlockPrompt] = React.useState(false);
+    const [unlockSecret, setUnlockSecret] = React.useState("");
+    const [unlockError, setUnlockError] = React.useState("");
     const [showConnectModal, setShowConnectModal] = React.useState(false);
     const [connectForm, setConnectForm] = React.useState({ supabaseUrl: "", apiKey: "", dataset: "" });
     const [connectError, setConnectError] = React.useState("");
@@ -3003,6 +3008,7 @@ var __app = (() => {
       }
     }, [tabs, baseConnection]);
     React.useEffect(() => {
+      if (urlRoute.mode === "config") return;
       if (baseConnection && activeTab && !activeTab.dataset) {
         setMetricsEditorDraft({});
         setShowMetricsEditor(true);
@@ -3230,7 +3236,7 @@ var __app = (() => {
             localStorage.setItem(storageKey, JSON.stringify(config));
           } catch (e) {
           }
-          if (!DEFAULT_METRIC_CONFIGS[dataset]) {
+          if (!DEFAULT_METRIC_CONFIGS[dataset] && (isCreatorMode || !configId)) {
             setMetricsEditorDraft({ ...config, dataset });
             setShowMetricsEditor(true);
           }
@@ -8989,7 +8995,73 @@ var __app = (() => {
         }
       },
       "Configure Metrics"
-    )), baseConnection && activeTab && !activeTab.dataset && !liveDataLoading && /* @__PURE__ */ React.createElement("div", { style: {
+    ), configId && !isCreatorMode && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: isCreatorMode ? "0" : "auto", position: "relative" } }, /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: () => {
+          setShowUnlockPrompt(!showUnlockPrompt);
+          setUnlockError("");
+          setUnlockSecret("");
+        },
+        title: "Enter edit key to manage this dashboard",
+        style: {
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          padding: "4px 8px",
+          color: isDarkMode ? "#6b7280" : "#9ca3af",
+          fontSize: "16px",
+          display: "flex",
+          alignItems: "center"
+        }
+      },
+      "\u2699"
+    ), showUnlockPrompt && /* @__PURE__ */ React.createElement("div", { style: {
+      position: "absolute",
+      top: "100%",
+      right: 0,
+      zIndex: 100,
+      backgroundColor: isDarkMode ? "#1f2937" : "#ffffff",
+      border: `1px solid ${isDarkMode ? "#374151" : "#e5e7eb"}`,
+      borderRadius: "8px",
+      padding: "12px",
+      boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+      minWidth: "240px"
+    } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "12px", fontWeight: 600, marginBottom: "8px", color: isDarkMode ? "#d1d5db" : "#374151" } }, "Enter Edit Key"), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        autoFocus: true,
+        type: "password",
+        placeholder: "Paste edit key...",
+        value: unlockSecret,
+        onChange: (e) => setUnlockSecret(e.target.value),
+        onKeyDown: (e) => {
+          if (e.key === "Escape") setShowUnlockPrompt(false);
+          if (e.key === "Enter" && unlockSecret.trim()) {
+            updateConfig(configId, unlockSecret.trim(), {}).then((ok) => {
+              if (ok) {
+                setEditSecret(configId, unlockSecret.trim());
+                setIsCreatorMode(true);
+                setShowUnlockPrompt(false);
+              } else {
+                setUnlockError("Invalid key");
+              }
+            }).catch(() => setUnlockError("Failed to verify"));
+          }
+        },
+        style: {
+          width: "100%",
+          padding: "6px 10px",
+          borderRadius: "6px",
+          fontSize: "13px",
+          boxSizing: "border-box",
+          border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`,
+          backgroundColor: isDarkMode ? "#111827" : "#f9fafb",
+          color: isDarkMode ? "#f3f4f6" : "#111827",
+          outline: "none"
+        }
+      }
+    ), unlockError && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", color: "#ef4444", marginTop: "4px" } }, unlockError), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", color: isDarkMode ? "#6b7280" : "#9ca3af", marginTop: "6px" } }, "Press Enter to unlock editing")))), baseConnection && activeTab && !activeTab.dataset && !liveDataLoading && /* @__PURE__ */ React.createElement("div", { style: {
       display: "flex",
       alignItems: "center",
       gap: "8px",
@@ -10489,7 +10561,54 @@ var __app = (() => {
           },
           "Copy Link"
         ));
-      })()), /* @__PURE__ */ React.createElement("div", { style: styles.shareInstructions }, /* @__PURE__ */ React.createElement("p", { style: { margin: "8px 0 0 0", fontSize: "12px", color: "#6b7280" } }, shareCode.startsWith("http") ? "Share this link. Recipients can view and explore the dashboard from this exact view." : "Share this link with others. They can click it to load the same chart configuration, or paste the code below."))), /* @__PURE__ */ React.createElement("div", { style: styles.pasteCodeSection }, /* @__PURE__ */ React.createElement("label", { style: styles.shareCodeLabel }, "Paste Code or URL to Load Configuration:"), /* @__PURE__ */ React.createElement(
+      })()), /* @__PURE__ */ React.createElement("div", { style: styles.shareInstructions }, /* @__PURE__ */ React.createElement("p", { style: { margin: "8px 0 0 0", fontSize: "12px", color: "#6b7280" } }, shareCode.startsWith("http") ? "Share this link. Recipients can view and explore the dashboard from this exact view." : "Share this link with others. They can click it to load the same chart configuration, or paste the code below.")), isCreatorMode && configId && (() => {
+        const secret = getEditSecret(configId);
+        if (!secret) return null;
+        return /* @__PURE__ */ React.createElement("div", { style: {
+          marginTop: "12px",
+          padding: "10px 12px",
+          borderRadius: "6px",
+          background: isDarkMode ? "rgba(99,102,241,0.08)" : "rgba(99,102,241,0.05)",
+          border: `1px solid ${isDarkMode ? "rgba(99,102,241,0.2)" : "rgba(99,102,241,0.15)"}`
+        } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", fontWeight: 600, color: isDarkMode ? "#a5b4fc" : "#4338ca", marginBottom: "4px" } }, "Edit Key (for managing from other devices)"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px" } }, /* @__PURE__ */ React.createElement("code", { style: {
+          flex: 1,
+          fontSize: "11px",
+          padding: "4px 8px",
+          borderRadius: "4px",
+          background: isDarkMode ? "#111827" : "#f3f4f6",
+          color: isDarkMode ? "#d1d5db" : "#374151",
+          wordBreak: "break-all",
+          userSelect: "all"
+        } }, secret), /* @__PURE__ */ React.createElement(
+          "button",
+          {
+            id: "copy-edit-key-btn",
+            onClick: () => {
+              navigator.clipboard.writeText(secret).then(() => {
+                const btn = document.getElementById("copy-edit-key-btn");
+                if (btn) {
+                  const orig = btn.textContent;
+                  btn.textContent = "Copied!";
+                  setTimeout(() => {
+                    btn.textContent = orig;
+                  }, 1500);
+                }
+              });
+            },
+            style: {
+              padding: "3px 8px",
+              borderRadius: "4px",
+              fontSize: "10px",
+              cursor: "pointer",
+              border: `1px solid ${isDarkMode ? "rgba(99,102,241,0.3)" : "rgba(99,102,241,0.3)"}`,
+              background: "transparent",
+              color: isDarkMode ? "#a5b4fc" : "#4338ca",
+              whiteSpace: "nowrap"
+            }
+          },
+          "Copy"
+        )), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "10px", color: isDarkMode ? "#6b7280" : "#9ca3af", marginTop: "4px" } }, "Paste this into the \u2699 gear icon on another device to unlock editing."));
+      })()), /* @__PURE__ */ React.createElement("div", { style: styles.pasteCodeSection }, /* @__PURE__ */ React.createElement("label", { style: styles.shareCodeLabel }, "Paste Code or URL to Load Configuration:"), /* @__PURE__ */ React.createElement(
         "input",
         {
           type: "text",

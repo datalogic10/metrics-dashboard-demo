@@ -44,15 +44,19 @@ export function parseUrlRoute() {
   return { mode: 'config', configId: path };
 }
 
+// Parse hash query params (?s=, ?edit=) from the URL hash fragment
+function parseHashParams() {
+  const hash = window.location.hash;
+  const qIdx = hash.indexOf('?');
+  if (qIdx === -1) return new URLSearchParams();
+  return new URLSearchParams(hash.slice(qIdx));
+}
+
 // Parse the ?s= state param from the URL hash (used for shared chart state)
 // URL format: site/#/{config_id}?s={base64} — the ?s= is inside the hash fragment
 export function parseStateParam() {
   try {
-    const hash = window.location.hash;
-    const qIdx = hash.indexOf('?');
-    if (qIdx === -1) return null;
-    const params = new URLSearchParams(hash.slice(qIdx));
-    const s = params.get('s');
+    const s = parseHashParams().get('s');
     if (!s) return null;
     // Restore URL-safe base64 to standard base64
     const b64 = s.replace(/-/g, '+').replace(/_/g, '/');

@@ -1188,6 +1188,9 @@ export function render() {
   const [configError, setConfigError] = React.useState(null);
   const [legacyBannerDismissed, setLegacyBannerDismissed] = React.useState(false);
   const [legacySaving, setLegacySaving] = React.useState(false);
+  const [showUnlockPrompt, setShowUnlockPrompt] = React.useState(false);
+  const [unlockSecret, setUnlockSecret] = React.useState('');
+  const [unlockError, setUnlockError] = React.useState('');
   const [showConnectModal, setShowConnectModal] = React.useState(false);
   const [connectForm, setConnectForm] = React.useState({ supabaseUrl: '', apiKey: '', dataset: '' });
   const [connectError, setConnectError] = React.useState('');
@@ -1228,7 +1231,9 @@ export function render() {
   }, [tabs, baseConnection]);
 
   // Auto-open Configure Metrics when first tab has no dataset (fresh connection without ?dataset=)
+  // Skip for viewers in config mode — they can't edit metrics
   React.useEffect(() => {
+    if (urlRoute.mode === 'config') return; // config mode handles this after fetch
     if (baseConnection && activeTab && !activeTab.dataset) {
       setMetricsEditorDraft({});
       setShowMetricsEditor(true);
@@ -1495,8 +1500,8 @@ export function render() {
             const storageKey = 'metricsConfig_' + connectionParams.supabaseUrl + '_' + dataset;
             localStorage.setItem(storageKey, JSON.stringify(config));
           } catch (e) {}
-          // Auto-open metrics editor for unknown datasets so user can configure
-          if (!DEFAULT_METRIC_CONFIGS[dataset]) {
+          // Auto-open metrics editor for unknown datasets so user can configure (not for viewers)
+          if (!DEFAULT_METRIC_CONFIGS[dataset] && (isCreatorMode || !configId)) {
             setMetricsEditorDraft({ ...config, dataset });
             setShowMetricsEditor(true);
           }
@@ -8859,6 +8864,66 @@ export function render() {
               Configure Metrics
             </button>
           )}
+          {/* Unlock button for viewers — allows entering edit secret to gain creator access */}
+          {configId && !isCreatorMode && (
+            <div style={{ marginLeft: isCreatorMode ? '0' : 'auto', position: 'relative' }}>
+              <button
+                onClick={() => { setShowUnlockPrompt(!showUnlockPrompt); setUnlockError(''); setUnlockSecret(''); }}
+                title="Enter edit key to manage this dashboard"
+                style={{
+                  background: 'none', border: 'none', cursor: 'pointer', padding: '4px 8px',
+                  color: isDarkMode ? '#6b7280' : '#9ca3af', fontSize: '16px', display: 'flex', alignItems: 'center',
+                }}
+              >&#9881;</button>
+              {showUnlockPrompt && (
+                <div style={{
+                  position: 'absolute', top: '100%', right: 0, zIndex: 100,
+                  backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
+                  border: `1px solid ${isDarkMode ? '#374151' : '#e5e7eb'}`,
+                  borderRadius: '8px', padding: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                  minWidth: '240px',
+                }}>
+                  <div style={{ fontSize: '12px', fontWeight: 600, marginBottom: '8px', color: isDarkMode ? '#d1d5db' : '#374151' }}>
+                    Enter Edit Key
+                  </div>
+                  <input
+                    autoFocus
+                    type="password"
+                    placeholder="Paste edit key..."
+                    value={unlockSecret}
+                    onChange={e => setUnlockSecret(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Escape') setShowUnlockPrompt(false);
+                      if (e.key === 'Enter' && unlockSecret.trim()) {
+                        // Verify by attempting a no-op update
+                        updateConfig(configId, unlockSecret.trim(), {})
+                          .then(ok => {
+                            if (ok) {
+                              setEditSecret(configId, unlockSecret.trim());
+                              setIsCreatorMode(true);
+                              setShowUnlockPrompt(false);
+                            } else {
+                              setUnlockError('Invalid key');
+                            }
+                          })
+                          .catch(() => setUnlockError('Failed to verify'));
+                      }
+                    }}
+                    style={{
+                      width: '100%', padding: '6px 10px', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box',
+                      border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`,
+                      backgroundColor: isDarkMode ? '#111827' : '#f9fafb',
+                      color: isDarkMode ? '#f3f4f6' : '#111827', outline: 'none',
+                    }}
+                  />
+                  {unlockError && <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '4px' }}>{unlockError}</div>}
+                  <div style={{ fontSize: '11px', color: isDarkMode ? '#6b7280' : '#9ca3af', marginTop: '6px' }}>
+                    Press Enter to unlock editing
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -10679,6 +10744,45 @@ export function render() {
                     : "Share this link with others. They can click it to load the same chart configuration, or paste the code below."}
                 </p>
               </div>
+              {/* Edit Key section — only for creators with a config */}
+              {isCreatorMode && configId && (() => {
+                const secret = getEditSecret(configId);
+                if (!secret) return null;
+                return (
+                  <div style={{ marginTop: '12px', padding: '10px 12px', borderRadius: '6px',
+                    background: isDarkMode ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.05)',
+                    border: `1px solid ${isDarkMode ? 'rgba(99,102,241,0.2)' : 'rgba(99,102,241,0.15)'}`,
+                  }}>
+                    <div style={{ fontSize: '11px', fontWeight: 600, color: isDarkMode ? '#a5b4fc' : '#4338ca', marginBottom: '4px' }}>
+                      Edit Key (for managing from other devices)
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <code style={{
+                        flex: 1, fontSize: '11px', padding: '4px 8px', borderRadius: '4px',
+                        background: isDarkMode ? '#111827' : '#f3f4f6', color: isDarkMode ? '#d1d5db' : '#374151',
+                        wordBreak: 'break-all', userSelect: 'all',
+                      }}>{secret}</code>
+                      <button
+                        id="copy-edit-key-btn"
+                        onClick={() => {
+                          navigator.clipboard.writeText(secret).then(() => {
+                            const btn = document.getElementById('copy-edit-key-btn');
+                            if (btn) { const orig = btn.textContent; btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = orig; }, 1500); }
+                          });
+                        }}
+                        style={{
+                          padding: '3px 8px', borderRadius: '4px', fontSize: '10px', cursor: 'pointer',
+                          border: `1px solid ${isDarkMode ? 'rgba(99,102,241,0.3)' : 'rgba(99,102,241,0.3)'}`,
+                          background: 'transparent', color: isDarkMode ? '#a5b4fc' : '#4338ca', whiteSpace: 'nowrap',
+                        }}
+                      >Copy</button>
+                    </div>
+                    <div style={{ fontSize: '10px', color: isDarkMode ? '#6b7280' : '#9ca3af', marginTop: '4px' }}>
+                      Paste this into the &#9881; gear icon on another device to unlock editing.
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Paste Code Section */}
