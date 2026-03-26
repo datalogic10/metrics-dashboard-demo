@@ -2950,6 +2950,21 @@ var __app = (() => {
     const [isCreatorMode, setIsCreatorMode] = React.useState(false);
     const [configLoading, setConfigLoading] = React.useState(urlRoute.mode === "config");
     const [configError, setConfigError] = React.useState(null);
+    const creatorTimerRef = React.useRef(null);
+    const resetCreatorTimer = React.useCallback(() => {
+      if (creatorTimerRef.current) clearTimeout(creatorTimerRef.current);
+      creatorTimerRef.current = setTimeout(() => {
+        setIsCreatorMode(false);
+      }, 2 * 60 * 1e3);
+    }, []);
+    React.useEffect(() => {
+      if (isCreatorMode && configId) {
+        resetCreatorTimer();
+        return () => {
+          if (creatorTimerRef.current) clearTimeout(creatorTimerRef.current);
+        };
+      }
+    }, [isCreatorMode, configId, resetCreatorTimer]);
     const [showUnlockPrompt, setShowUnlockPrompt] = React.useState(false);
     const [unlockSecret, setUnlockSecret] = React.useState("");
     const [unlockError, setUnlockError] = React.useState("");
@@ -3037,9 +3052,10 @@ var __app = (() => {
     }, []);
     const persistToConfigDb = React.useCallback((updatedTabs, currentTabId, currentMetricConfig) => {
       if (!configId || !isCreatorMode) return;
+      resetCreatorTimer();
       const tabsJson = buildTabsJson(updatedTabs || tabs, currentTabId || activeTabId, currentMetricConfig || liveMetricConfig);
       updateConfig(configId, getEditSecret(configId), { tabsJson }).catch((err) => console.warn("Failed to save config to DB:", err));
-    }, [configId, isCreatorMode, tabs, activeTabId, liveMetricConfig, buildTabsJson]);
+    }, [configId, isCreatorMode, tabs, activeTabId, liveMetricConfig, buildTabsJson, resetCreatorTimer]);
     const tabsInitializedRef = React.useRef(false);
     React.useEffect(() => {
       if (!tabsInitializedRef.current) {
@@ -3697,6 +3713,8 @@ var __app = (() => {
       }
     }, [activeTabId, captureTabSnapshot, restoreTabSnapshot]);
     const removeTab = React.useCallback((tabId) => {
+      const tab = tabs.find((t) => t.id === tabId);
+      if (!window.confirm('Delete tab "' + (tab?.name || "Untitled") + '"? This cannot be undone.')) return;
       setTabs((prev) => {
         const remaining = prev.filter((t) => t.id !== tabId);
         if (remaining.length === 0) return prev;
@@ -3716,7 +3734,7 @@ var __app = (() => {
         }
         return remaining;
       });
-    }, [activeTabId, restoreTabSnapshot]);
+    }, [activeTabId, tabs, restoreTabSnapshot]);
     const renameTab = React.useCallback((tabId, newName) => {
       setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, name: newName } : t));
     }, []);
@@ -8841,28 +8859,35 @@ var __app = (() => {
         }
       },
       "Configure Metrics"
-    ), configId && !isCreatorMode && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: isCreatorMode ? "0" : "auto", position: "relative" } }, /* @__PURE__ */ React.createElement(
+    ), configId && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: isCreatorMode ? "0" : "auto", position: "relative" } }, /* @__PURE__ */ React.createElement(
       "button",
       {
         onClick: () => {
-          setShowUnlockPrompt(!showUnlockPrompt);
-          setUnlockError("");
-          setUnlockSecret("");
+          if (isCreatorMode) {
+            setIsCreatorMode(false);
+            if (creatorTimerRef.current) clearTimeout(creatorTimerRef.current);
+          } else if (getEditSecret(configId)) {
+            setIsCreatorMode(true);
+          } else {
+            setShowUnlockPrompt(!showUnlockPrompt);
+            setUnlockError("");
+            setUnlockSecret("");
+          }
         },
-        title: "Enter edit key to manage this dashboard",
+        title: isCreatorMode ? "Lock editing (auto-locks after 2 min)" : "Unlock editing",
         style: {
           background: "none",
           border: "none",
           cursor: "pointer",
           padding: "4px 8px",
-          color: isDarkMode ? "#6b7280" : "#9ca3af",
-          fontSize: "16px",
+          color: isCreatorMode ? isDarkMode ? "#6ee7b7" : "#065f46" : isDarkMode ? "#6b7280" : "#9ca3af",
+          fontSize: "14px",
           display: "flex",
           alignItems: "center"
         }
       },
-      "\u2699"
-    ), showUnlockPrompt && /* @__PURE__ */ React.createElement("div", { style: {
+      isCreatorMode ? "\u{1F513}" : "\u{1F512}"
+    ), showUnlockPrompt && !isCreatorMode && /* @__PURE__ */ React.createElement("div", { style: {
       position: "absolute",
       top: "100%",
       right: 0,

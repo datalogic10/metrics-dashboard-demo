@@ -1182,6 +1182,22 @@ export function render() {
   const [isCreatorMode, setIsCreatorMode] = React.useState(false);
   const [configLoading, setConfigLoading] = React.useState(urlRoute.mode === 'config');
   const [configError, setConfigError] = React.useState(null);
+  // Auto-lock creator mode after 2 min of inactivity
+  const creatorTimerRef = React.useRef(null);
+  const resetCreatorTimer = React.useCallback(() => {
+    if (creatorTimerRef.current) clearTimeout(creatorTimerRef.current);
+    creatorTimerRef.current = setTimeout(() => {
+      setIsCreatorMode(false);
+    }, 2 * 60 * 1000);
+  }, []);
+  // Start/reset timer whenever creator mode activates
+  React.useEffect(() => {
+    if (isCreatorMode && configId) {
+      resetCreatorTimer();
+      return () => { if (creatorTimerRef.current) clearTimeout(creatorTimerRef.current); };
+    }
+  }, [isCreatorMode, configId, resetCreatorTimer]);
+
   const [showUnlockPrompt, setShowUnlockPrompt] = React.useState(false);
   const [unlockSecret, setUnlockSecret] = React.useState('');
   const [unlockError, setUnlockError] = React.useState('');
@@ -1297,10 +1313,11 @@ export function render() {
   // Persist current tabs + metric configs to Config DB (fire-and-forget)
   const persistToConfigDb = React.useCallback((updatedTabs, currentTabId, currentMetricConfig) => {
     if (!configId || !isCreatorMode) return;
+    resetCreatorTimer(); // reset auto-lock on every edit
     const tabsJson = buildTabsJson(updatedTabs || tabs, currentTabId || activeTabId, currentMetricConfig || liveMetricConfig);
     updateConfig(configId, getEditSecret(configId), { tabsJson })
       .catch(err => console.warn('Failed to save config to DB:', err));
-  }, [configId, isCreatorMode, tabs, activeTabId, liveMetricConfig, buildTabsJson]);
+  }, [configId, isCreatorMode, tabs, activeTabId, liveMetricConfig, buildTabsJson, resetCreatorTimer]);
 
   // Persist tab structure changes (add/remove/rename) to Config DB — skip initial load
   const tabsInitializedRef = React.useRef(false);
@@ -2088,6 +2105,8 @@ export function render() {
   }, [activeTabId, captureTabSnapshot, restoreTabSnapshot]);
 
   const removeTab = React.useCallback((tabId) => {
+    const tab = tabs.find(t => t.id === tabId);
+    if (!window.confirm('Delete tab "' + (tab?.name || 'Untitled') + '"? This cannot be undone.')) return;
     setTabs(prev => {
       const remaining = prev.filter(t => t.id !== tabId);
       if (remaining.length === 0) return prev; // Don't remove last tab
@@ -2108,7 +2127,7 @@ export function render() {
       }
       return remaining;
     });
-  }, [activeTabId, restoreTabSnapshot]);
+  }, [activeTabId, tabs, restoreTabSnapshot]);
 
   const renameTab = React.useCallback((tabId, newName) => {
     setTabs(prev => prev.map(t => t.id === tabId ? { ...t, name: newName } : t));
@@ -8711,18 +8730,33 @@ export function render() {
               Configure Metrics
             </button>
           )}
-          {/* Unlock button for viewers — allows entering edit secret to gain creator access */}
-          {configId && !isCreatorMode && (
+          {/* Lock/unlock toggle — creators can lock, viewers can unlock with edit key */}
+          {configId && (
             <div style={{ marginLeft: isCreatorMode ? '0' : 'auto', position: 'relative' }}>
               <button
-                onClick={() => { setShowUnlockPrompt(!showUnlockPrompt); setUnlockError(''); setUnlockSecret(''); }}
-                title="Enter edit key to manage this dashboard"
+                onClick={() => {
+                  if (isCreatorMode) {
+                    // Lock: exit creator mode
+                    setIsCreatorMode(false);
+                    if (creatorTimerRef.current) clearTimeout(creatorTimerRef.current);
+                  } else if (getEditSecret(configId)) {
+                    // Has secret in localStorage — re-unlock directly
+                    setIsCreatorMode(true);
+                  } else {
+                    // No secret — show prompt
+                    setShowUnlockPrompt(!showUnlockPrompt);
+                    setUnlockError('');
+                    setUnlockSecret('');
+                  }
+                }}
+                title={isCreatorMode ? "Lock editing (auto-locks after 2 min)" : "Unlock editing"}
                 style={{
                   background: 'none', border: 'none', cursor: 'pointer', padding: '4px 8px',
-                  color: isDarkMode ? '#6b7280' : '#9ca3af', fontSize: '16px', display: 'flex', alignItems: 'center',
+                  color: isCreatorMode ? (isDarkMode ? '#6ee7b7' : '#065f46') : (isDarkMode ? '#6b7280' : '#9ca3af'),
+                  fontSize: '14px', display: 'flex', alignItems: 'center',
                 }}
-              >&#9881;</button>
-              {showUnlockPrompt && (
+              >{isCreatorMode ? '\u{1F513}' : '\u{1F512}'}</button>
+              {showUnlockPrompt && !isCreatorMode && (
                 <div style={{
                   position: 'absolute', top: '100%', right: 0, zIndex: 100,
                   backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
@@ -8742,7 +8776,6 @@ export function render() {
                     onKeyDown={e => {
                       if (e.key === 'Escape') setShowUnlockPrompt(false);
                       if (e.key === 'Enter' && unlockSecret.trim()) {
-                        // Verify by attempting a no-op update
                         updateConfig(configId, unlockSecret.trim(), {})
                           .then(ok => {
                             if (ok) {
