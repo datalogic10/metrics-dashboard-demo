@@ -433,9 +433,8 @@ var __app = (() => {
   function parseUrlRoute() {
     const hash = window.location.hash.replace(/^#\/?/, "");
     if (!hash) return { mode: "demo" };
-    const path = hash.split("?")[0];
-    if (path.includes("=")) return { mode: "legacy" };
-    return { mode: "config", configId: path };
+    const configId = hash.split("?")[0];
+    return { mode: "config", configId };
   }
   function parseHashParams() {
     const hash = window.location.hash;
@@ -452,18 +451,6 @@ var __app = (() => {
     } catch (e) {
       return null;
     }
-  }
-  function parseBaseConnection() {
-    const hash = window.location.hash.replace(/^#/, "");
-    if (!hash) return null;
-    const params = new URLSearchParams(hash);
-    const supabaseUrl = params.get("supabaseUrl");
-    const apiKey = params.get("apiKey");
-    const dataset = params.get("dataset") || null;
-    if (supabaseUrl && apiKey) {
-      return { supabaseUrl, apiKey, initialDataset: dataset };
-    }
-    return null;
   }
   function createRpcCaller(connectionParams) {
     return function callQueryDataset(action, params) {
@@ -2958,16 +2945,11 @@ var __app = (() => {
       [theme, isDarkMode, showDataSummary]
     );
     const [urlRoute] = React.useState(() => parseUrlRoute());
-    const [baseConnection, setBaseConnection] = React.useState(() => {
-      if (urlRoute.mode === "legacy") return parseBaseConnection();
-      return null;
-    });
+    const [baseConnection, setBaseConnection] = React.useState(null);
     const [configId, setConfigId] = React.useState(urlRoute.mode === "config" ? urlRoute.configId : null);
     const [isCreatorMode, setIsCreatorMode] = React.useState(false);
     const [configLoading, setConfigLoading] = React.useState(urlRoute.mode === "config");
     const [configError, setConfigError] = React.useState(null);
-    const [legacyBannerDismissed, setLegacyBannerDismissed] = React.useState(false);
-    const [legacySaving, setLegacySaving] = React.useState(false);
     const [showUnlockPrompt, setShowUnlockPrompt] = React.useState(false);
     const [unlockSecret, setUnlockSecret] = React.useState("");
     const [unlockError, setUnlockError] = React.useState("");
@@ -2977,20 +2959,7 @@ var __app = (() => {
     const [connectSaving, setConnectSaving] = React.useState(false);
     const pendingStateRef = React.useRef(urlRoute.mode === "config" ? parseStateParam() : null);
     const [tabs, setTabs] = React.useState(() => {
-      if (urlRoute.mode === "config") return [];
-      const bc = parseBaseConnection();
-      if (!bc) return [];
-      const tabsKey = "dashboardTabs_" + bc.supabaseUrl;
-      try {
-        const saved = localStorage.getItem(tabsKey);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-        }
-      } catch (e) {
-      }
-      const ds = bc.initialDataset;
-      return [{ id: "tab_1", name: ds || "New Tab", dataset: ds || null }];
+      return [];
     });
     const [activeTabId, setActiveTabId] = React.useState(() => tabs.length > 0 ? tabs[0].id : null);
     const tabStateCacheRef = React.useRef({});
@@ -2999,21 +2968,6 @@ var __app = (() => {
     const [showAddTab, setShowAddTab] = React.useState(false);
     const [newTabDataset, setNewTabDataset] = React.useState("");
     const tabNextIdRef = React.useRef(tabs.length + 1);
-    React.useEffect(() => {
-      if (!baseConnection || tabs.length === 0) return;
-      const tabsKey = "dashboardTabs_" + baseConnection.supabaseUrl;
-      try {
-        localStorage.setItem(tabsKey, JSON.stringify(tabs));
-      } catch (e) {
-      }
-    }, [tabs, baseConnection]);
-    React.useEffect(() => {
-      if (urlRoute.mode === "config") return;
-      if (baseConnection && activeTab && !activeTab.dataset) {
-        setMetricsEditorDraft({});
-        setShowMetricsEditor(true);
-      }
-    }, []);
     React.useEffect(() => {
       if (urlRoute.mode !== "config") return;
       setConfigLoading(true);
@@ -3068,16 +3022,7 @@ var __app = (() => {
     const [liveAggLoading, setLiveAggLoading] = React.useState(false);
     const [liveRowCount, setLiveRowCount] = React.useState(0);
     const [liveDataTruncated, setLiveDataTruncated] = React.useState(false);
-    const [liveMetricConfig, setLiveMetricConfig] = React.useState(() => {
-      if (!connectionParams) return null;
-      const storageKey = "metricsConfig_" + connectionParams.supabaseUrl + "_" + connectionParams.dataset;
-      try {
-        const saved = localStorage.getItem(storageKey);
-        if (saved) return JSON.parse(saved);
-      } catch (e) {
-      }
-      return null;
-    });
+    const [liveMetricConfig, setLiveMetricConfig] = React.useState(null);
     const isLiveMode = connectionParams !== null && liveSchemaReady;
     const [showMetricsEditor, setShowMetricsEditor] = React.useState(false);
     const [metricsEditorDraft, setMetricsEditorDraft] = React.useState(null);
@@ -3115,12 +3060,6 @@ var __app = (() => {
         loadedDatasetsRef.current.delete(activeTab.dataset);
       }
       setLiveMetricConfig(config);
-      const effectiveDataset = newDataset || (activeTab ? activeTab.dataset : connectionParams?.dataset);
-      try {
-        const storageKey = "metricsConfig_" + connectionParams.supabaseUrl + "_" + effectiveDataset;
-        localStorage.setItem(storageKey, JSON.stringify(config));
-      } catch (e) {
-      }
       setShowMetricsEditor(false);
       queryCacheRef.current.clear();
       persistToConfigDb(updatedTabs, activeTabId, config);
@@ -3211,12 +3150,8 @@ var __app = (() => {
         const columns = schemaData.columns || [];
         setLiveColumnMeta(columns);
         let config = null;
-        try {
-          const storageKey = "metricsConfig_" + connectionParams.supabaseUrl + "_" + dataset;
-          const saved = localStorage.getItem(storageKey);
-          if (saved) config = JSON.parse(saved);
-        } catch (e) {
-        }
+        const currentTab = tabs.find((t) => t.dataset === dataset);
+        if (currentTab && currentTab.metricConfig) config = currentTab.metricConfig;
         const isNewConnection = !config;
         if (!config) {
           config = DEFAULT_METRIC_CONFIGS[dataset] || {
@@ -3231,12 +3166,7 @@ var __app = (() => {
             derivedDivisor: 1e4,
             dateColumn: columns.find((c) => c.udt === "date" || c.name.includes("_dt"))?.name || null
           };
-          try {
-            const storageKey = "metricsConfig_" + connectionParams.supabaseUrl + "_" + dataset;
-            localStorage.setItem(storageKey, JSON.stringify(config));
-          } catch (e) {
-          }
-          if (!DEFAULT_METRIC_CONFIGS[dataset] && (isCreatorMode || !configId)) {
+          if (!DEFAULT_METRIC_CONFIGS[dataset] && isCreatorMode) {
             setMetricsEditorDraft({ ...config, dataset });
             setShowMetricsEditor(true);
           }
@@ -3254,12 +3184,8 @@ var __app = (() => {
           config.visibleDimensions = config.visibleDimensions.filter((d) => columnNames.has(d));
           if (config.visibleDimensions.length !== before) configDirty = true;
         }
-        if (configDirty) {
-          try {
-            const storageKey = "metricsConfig_" + connectionParams.supabaseUrl + "_" + dataset;
-            localStorage.setItem(storageKey, JSON.stringify(config));
-          } catch (e) {
-          }
+        if (configDirty && configId && isCreatorMode) {
+          persistToConfigDb(void 0, void 0, config);
         }
         setLiveMetricConfig(config);
         if (config.defaultGrain) {
@@ -4081,8 +4007,6 @@ var __app = (() => {
     const filterDropdownPositionRef = React.useRef(null);
     const [showShareModal, setShowShareModal] = React.useState(false);
     const [shareCode, setShareCode] = React.useState("");
-    const [pasteCode, setPasteCode] = React.useState("");
-    const [pasteError, setPasteError] = React.useState("");
     const [showSaveViewModal, setShowSaveViewModal] = React.useState(false);
     const [saveViewName, setSaveViewName] = React.useState("");
     const [saveViewOwnerType, setSaveViewOwnerType] = React.useState("username");
@@ -4410,82 +4334,18 @@ var __app = (() => {
       [DIMENSION_DEFINITIONS]
     );
     const handleShareClick = React.useCallback(async () => {
+      if (!configId) return;
       const snapshot = captureStateSnapshot();
       snapshot.activeTabId = activeTabId;
-      let cid = configId;
-      if (!cid) {
-        if (baseConnection) {
-          try {
-            const connectionJson = { supabaseUrl: baseConnection.supabaseUrl, apiKey: baseConnection.apiKey, dataset: activeTab?.dataset || baseConnection.initialDataset };
-            const tabsJson = tabs.map((t) => ({
-              id: t.id,
-              name: t.name,
-              dataset: t.dataset,
-              metricConfig: t.id === activeTabId ? liveMetricConfig : tabStateCacheRef.current[t.id]?.liveMetricConfig || null
-            }));
-            const result = await createConfig({ name: activeTab?.name || "Dashboard", connectionJson, tabsJson });
-            cid = result.id;
-            setEditSecret(cid, result.editSecret);
-            setConfigId(cid);
-            setIsCreatorMode(true);
-            window.history.replaceState(null, "", "#/" + cid);
-          } catch (err) {
-            console.warn("Failed to create config for share:", err);
-            const code = generateShareCode2();
-            setShareCode(code);
-            setShowShareModal(true);
-            return;
-          }
-        }
+      const stateStr = btoa(JSON.stringify(snapshot)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      const url = window.location.origin + window.location.pathname + "#/" + configId + "?s=" + stateStr;
+      try {
+        await navigator.clipboard.writeText(url);
+      } catch (e) {
       }
-      if (cid) {
-        const stateStr = btoa(JSON.stringify(snapshot)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-        const url = window.location.origin + window.location.pathname + "#/" + cid + "?s=" + stateStr;
-        try {
-          await navigator.clipboard.writeText(url);
-          setShareCode(url);
-        } catch (e) {
-          setShareCode(url);
-        }
-        setShowShareModal(true);
-      } else {
-        const code = generateShareCode2();
-        setShareCode(code);
-        setShowShareModal(true);
-      }
-    }, [captureStateSnapshot, activeTabId, configId, baseConnection, activeTab, tabs, liveMetricConfig, generateShareCode2]);
-    const extractCodeFromUrl = React.useCallback((input) => {
-      const trimmed = input.trim();
-      if (trimmed.includes("target_analyzer_code=")) {
-        const match = trimmed.match(/target_analyzer_code=([^&]+)/);
-        if (match && match[1]) {
-          return decodeURIComponent(match[1]);
-        }
-      }
-      if (trimmed.includes("config=")) {
-        const match = trimmed.match(/config=([^&]+)/);
-        if (match && match[1]) {
-          return decodeURIComponent(match[1]);
-        }
-      }
-      return trimmed;
-    }, []);
-    const handleLoadPasteCode = React.useCallback(() => {
-      if (!pasteCode.trim()) {
-        setPasteError("Please enter a code");
-        return;
-      }
-      setPasteError("");
-      const codeToDecode = extractCodeFromUrl(pasteCode);
-      const decodedState = decodeShareCode2(codeToDecode);
-      if (decodedState) {
-        restoreStateSnapshot(decodedState);
-        setShowShareModal(false);
-        setPasteCode("");
-      } else {
-        setPasteError("Invalid code. Please check and try again.");
-      }
-    }, [pasteCode, extractCodeFromUrl, decodeShareCode2, restoreStateSnapshot]);
+      setShareCode(url);
+      setShowShareModal(true);
+    }, [captureStateSnapshot, activeTabId, configId]);
     const saveToGoogleSheets = React.useCallback((viewData) => {
       const WEB_APP_URL = "https://your-apps-script-deployment-url.example.com/exec";
       const query = new URLSearchParams({
@@ -4606,20 +4466,6 @@ var __app = (() => {
         }
       }
     }, [metadataVariables, decodeShareCode2, restoreStateSnapshot]);
-    React.useEffect(() => {
-      const params = new URLSearchParams(window.location.search);
-      const configCode = params.get("config");
-      if (configCode) {
-        const decodedState = decodeShareCode2(configCode);
-        if (decodedState) {
-          isRestoringRef.current = true;
-          restoreStateSnapshot(decodedState);
-          setTimeout(() => {
-            isRestoringRef.current = false;
-          }, 100);
-        }
-      }
-    }, []);
     React.useEffect(() => {
       if (metadataVariables.username && !username) {
         setUsername(metadataVariables.username.toString());
@@ -9103,71 +8949,7 @@ var __app = (() => {
       border: `1px solid ${isDarkMode ? "rgba(239, 68, 68, 0.4)" : "rgba(239, 68, 68, 0.5)"}`,
       background: "transparent",
       color: "inherit"
-    } }, "Retry")), urlRoute.mode === "legacy" && baseConnection && !configId && !legacyBannerDismissed && isLiveMode && /* @__PURE__ */ React.createElement("div", { style: {
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-      padding: "8px 16px",
-      backgroundColor: isDarkMode ? "rgba(16, 185, 129, 0.12)" : "rgba(16, 185, 129, 0.1)",
-      border: `1px solid ${isDarkMode ? "rgba(16, 185, 129, 0.35)" : "rgba(16, 185, 129, 0.4)"}`,
-      borderRadius: "8px",
-      marginBottom: "12px",
-      fontSize: "12px",
-      color: isDarkMode ? "#6ee7b7" : "#065f46"
-    } }, /* @__PURE__ */ React.createElement("span", null, "Save this dashboard for easy access and sharing?"), /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        disabled: legacySaving,
-        onClick: async () => {
-          setLegacySaving(true);
-          try {
-            const connectionJson = { supabaseUrl: baseConnection.supabaseUrl, apiKey: baseConnection.apiKey, dataset: activeTab?.dataset || baseConnection.initialDataset };
-            const tabsJson = tabs.map((t) => ({
-              id: t.id,
-              name: t.name,
-              dataset: t.dataset,
-              metricConfig: t.id === activeTabId ? liveMetricConfig : tabStateCacheRef.current[t.id]?.liveMetricConfig || null
-            }));
-            const result = await createConfig({ name: activeTab?.name || "Dashboard", connectionJson, tabsJson });
-            setEditSecret(result.id, result.editSecret);
-            setConfigId(result.id);
-            setIsCreatorMode(true);
-            window.history.replaceState(null, "", "#/" + result.id);
-            setLegacyBannerDismissed(true);
-          } catch (err) {
-            console.warn("Failed to save config:", err);
-          }
-          setLegacySaving(false);
-        },
-        style: {
-          marginLeft: "auto",
-          padding: "2px 10px",
-          borderRadius: "4px",
-          fontSize: "11px",
-          cursor: "pointer",
-          border: `1px solid ${isDarkMode ? "rgba(16, 185, 129, 0.4)" : "rgba(16, 185, 129, 0.5)"}`,
-          background: isDarkMode ? "rgba(16, 185, 129, 0.2)" : "rgba(16, 185, 129, 0.15)",
-          color: "inherit",
-          fontWeight: 500
-        }
-      },
-      legacySaving ? "Saving..." : "Save"
-    ), /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        onClick: () => setLegacyBannerDismissed(true),
-        style: {
-          padding: "2px 10px",
-          borderRadius: "4px",
-          fontSize: "11px",
-          cursor: "pointer",
-          border: `1px solid ${isDarkMode ? "rgba(107, 114, 128, 0.3)" : "rgba(107, 114, 128, 0.3)"}`,
-          background: "transparent",
-          color: isDarkMode ? "#9ca3af" : "#6b7280"
-        }
-      },
-      "Dismiss"
-    )), liveDataLoading && /* @__PURE__ */ React.createElement("div", { style: {
+    } }, "Retry")), liveDataLoading && /* @__PURE__ */ React.createElement("div", { style: {
       display: "flex",
       alignItems: "center",
       gap: "8px",
@@ -10515,53 +10297,49 @@ var __app = (() => {
           onClick: () => setShowShareModal(false)
         },
         "\xD7"
-      )), /* @__PURE__ */ React.createElement("div", { style: styles.shareCodeSection }, /* @__PURE__ */ React.createElement("label", { style: styles.shareCodeLabel }, "Your Share Link:"), /* @__PURE__ */ React.createElement("div", { style: styles.shareLinkContainer }, (() => {
-        const isConfigUrl = shareCode.startsWith("http");
-        const displayUrl = isConfigUrl ? shareCode : `${window.location.origin}${window.location.pathname}?config=${encodeURIComponent(shareCode)}`;
-        return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
-          "a",
-          {
-            id: "share-link-anchor",
-            href: displayUrl,
-            target: "_blank",
-            rel: "noopener noreferrer",
-            style: {
-              ...styles.shareLinkInput,
-              textDecoration: "none",
-              color: "#6366f1",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              padding: "10px 12px",
-              wordBreak: "break-all"
+      )), /* @__PURE__ */ React.createElement("div", { style: styles.shareCodeSection }, /* @__PURE__ */ React.createElement("label", { style: styles.shareCodeLabel }, "Your Share Link:"), /* @__PURE__ */ React.createElement("div", { style: styles.shareLinkContainer }, /* @__PURE__ */ React.createElement(
+        "a",
+        {
+          id: "share-link-anchor",
+          href: shareCode,
+          target: "_blank",
+          rel: "noopener noreferrer",
+          style: {
+            ...styles.shareLinkInput,
+            textDecoration: "none",
+            color: "#6366f1",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            padding: "10px 12px",
+            wordBreak: "break-all"
+          }
+        },
+        shareCode
+      ), /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          id: "copy-share-code-btn",
+          style: styles.shareCopyButton,
+          onClick: () => {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(shareCode).then(() => {
+                const btn = document.getElementById("copy-share-code-btn");
+                if (btn) {
+                  const orig = btn.textContent;
+                  btn.textContent = "Copied!";
+                  btn.style.backgroundColor = "#10b981";
+                  setTimeout(() => {
+                    btn.textContent = orig;
+                    btn.style.backgroundColor = "#6366f1";
+                  }, 2e3);
+                }
+              }).catch((e) => console.error("Failed to copy:", e));
             }
-          },
-          displayUrl
-        ), /* @__PURE__ */ React.createElement(
-          "button",
-          {
-            id: "copy-share-code-btn",
-            style: styles.shareCopyButton,
-            onClick: () => {
-              if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(displayUrl).then(() => {
-                  const btn = document.getElementById("copy-share-code-btn");
-                  if (btn) {
-                    const orig = btn.textContent;
-                    btn.textContent = "Copied!";
-                    btn.style.backgroundColor = "#10b981";
-                    setTimeout(() => {
-                      btn.textContent = orig;
-                      btn.style.backgroundColor = "#6366f1";
-                    }, 2e3);
-                  }
-                }).catch((e) => console.error("Failed to copy:", e));
-              }
-            }
-          },
-          "Copy Link"
-        ));
-      })()), /* @__PURE__ */ React.createElement("div", { style: styles.shareInstructions }, /* @__PURE__ */ React.createElement("p", { style: { margin: "8px 0 0 0", fontSize: "12px", color: "#6b7280" } }, shareCode.startsWith("http") ? "Share this link. Recipients can view and explore the dashboard from this exact view." : "Share this link with others. They can click it to load the same chart configuration, or paste the code below.")), isCreatorMode && configId && (() => {
+          }
+        },
+        "Copy Link"
+      )), /* @__PURE__ */ React.createElement("div", { style: styles.shareInstructions }, /* @__PURE__ */ React.createElement("p", { style: { margin: "8px 0 0 0", fontSize: "12px", color: "#6b7280" } }, "Share this link. Recipients can view and explore the dashboard from this exact view.")), isCreatorMode && configId && (() => {
         const secret = getEditSecret(configId);
         if (!secret) return null;
         return /* @__PURE__ */ React.createElement("div", { style: {
@@ -10608,31 +10386,7 @@ var __app = (() => {
           },
           "Copy"
         )), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "10px", color: isDarkMode ? "#6b7280" : "#9ca3af", marginTop: "4px" } }, "Paste this into the \u2699 gear icon on another device to unlock editing."));
-      })()), /* @__PURE__ */ React.createElement("div", { style: styles.pasteCodeSection }, /* @__PURE__ */ React.createElement("label", { style: styles.shareCodeLabel }, "Paste Code or URL to Load Configuration:"), /* @__PURE__ */ React.createElement(
-        "input",
-        {
-          type: "text",
-          value: pasteCode,
-          onChange: (e) => {
-            setPasteCode(e.target.value);
-            setPasteError("");
-          },
-          onKeyPress: (e) => {
-            if (e.key === "Enter") {
-              handleLoadPasteCode();
-            }
-          },
-          placeholder: "Paste code or full URL here...",
-          style: styles.pasteCodeInput
-        }
-      ), pasteError && /* @__PURE__ */ React.createElement("div", { style: styles.pasteCodeError }, pasteError), /* @__PURE__ */ React.createElement(
-        "button",
-        {
-          style: styles.shareLoadButton,
-          onClick: handleLoadPasteCode
-        },
-        "Load Configuration"
-      )))
+      })()))
     ), showSaveViewModal && /* @__PURE__ */ React.createElement(
       "div",
       {

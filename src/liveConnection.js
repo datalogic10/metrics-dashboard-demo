@@ -32,16 +32,13 @@ export const DEFAULT_METRIC_CONFIGS = {
   },
 };
 
-// Detect URL format: config (/#/{id}), legacy (#key=val), or demo (no hash)
+// Detect URL format: config (/#/{id}) or demo (no hash)
 export function parseUrlRoute() {
   const hash = window.location.hash.replace(/^#\/?/, '');
   if (!hash) return { mode: 'demo' };
-  // Extract the path part (before any ?s= query string in the hash)
-  const path = hash.split('?')[0];
-  // Legacy mode: path contains key=value pairs (supabaseUrl=..., apiKey=..., etc.)
-  if (path.includes('=')) return { mode: 'legacy' };
-  // Config mode: path is a config ID (nanoid)
-  return { mode: 'config', configId: path };
+  // Config mode: hash is a config ID (nanoid), possibly with ?s= state param
+  const configId = hash.split('?')[0];
+  return { mode: 'config', configId };
 }
 
 // Parse hash query params (?s=, ?edit=) from the URL hash fragment
