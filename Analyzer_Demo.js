@@ -1243,15 +1243,22 @@ export function render() {
         const tabsData = config.tabs_json;
         if (Array.isArray(tabsData) && tabsData.length > 0) {
           setTabs(tabsData);
-          setActiveTabId(tabsData[0].id);
-          tabNextIdRef.current = tabsData.length + 1;
-          // Set metric config for the first tab
-          if (tabsData[0].metricConfig) {
-            setLiveMetricConfig(tabsData[0].metricConfig);
+          // Restore last active tab from localStorage, fall back to first tab
+          const savedActiveTab = (() => { try { return localStorage.getItem('activeTabId_' + urlRoute.configId); } catch (e) { return null; } })();
+          const initialTabId = savedActiveTab && tabsData.some(t => t.id === savedActiveTab) ? savedActiveTab : tabsData[0].id;
+          setActiveTabId(initialTabId);
+          tabNextIdRef.current = Math.max(...tabsData.map(t => {
+            const m = t.id.match(/^tab_(\d+)$/);
+            return m ? parseInt(m[1], 10) : 0;
+          }));
+          // Set metric config for the initial tab
+          const initialTab = tabsData.find(t => t.id === initialTabId) || tabsData[0];
+          if (initialTab.metricConfig) {
+            setLiveMetricConfig(initialTab.metricConfig);
           }
           // Pre-populate tab state cache with metric configs from all other tabs
           tabsData.forEach(t => {
-            if (t.id !== tabsData[0].id && t.metricConfig) {
+            if (t.id !== initialTabId && t.metricConfig) {
               tabStateCacheRef.current[t.id] = { liveMetricConfig: t.metricConfig };
             }
           });
@@ -1457,7 +1464,7 @@ export function render() {
 
         // Determine metric config from Config DB tab, fall back to defaults for new tabs
         let config = null;
-        const currentTab = tabs.find(t => t.dataset === dataset);
+        const currentTab = tabs.find(t => t.id === activeTabId) || tabs.find(t => t.dataset === dataset);
         if (currentTab && currentTab.metricConfig) config = currentTab.metricConfig;
         const isNewConnection = !config;
         if (!config) {
@@ -1535,10 +1542,10 @@ export function render() {
         loadedDatasetsRef.current.add(connectionParams.dataset);
 
         // Restore saved UI selections on initial page load (not tab switches)
-        if (!uiSelectionsRestoredRef.current.has(connectionParams.dataset)) {
-          uiSelectionsRestoredRef.current.add(connectionParams.dataset);
+        if (!uiSelectionsRestoredRef.current.has(activeTabId)) {
+          uiSelectionsRestoredRef.current.add(activeTabId);
           try {
-            const selectionsKey = 'uiSelections_' + connectionParams.supabaseUrl + '_' + connectionParams.dataset;
+            const selectionsKey = 'uiSelections_' + connectionParams.supabaseUrl + '_' + activeTabId;
             const saved = localStorage.getItem(selectionsKey);
             if (saved) {
               const s = JSON.parse(saved);
@@ -2030,8 +2037,10 @@ export function render() {
     setLiveMetricConfig(snap.liveMetricConfig || null);
     setLiveDataError(snap.liveDataError || null);
     // UI state
-    setDataFrequency(snap.dataFrequency || 'Monthly');
-    setMetric(snap.metric || 'Revenue');
+    const grainToFreq = { day: 'Daily', week: 'Weekly', month: 'Monthly', quarter: 'Quarterly', year: 'Yearly' };
+    const defaultFromGrain = snap.liveMetricConfig?.defaultGrain ? grainToFreq[snap.liveMetricConfig.defaultGrain] : null;
+    setDataFrequency(snap.dataFrequency || defaultFromGrain || 'Monthly');
+    setMetric(snap.metric || 'metric1');
     setView(snap.view || 'Overall');
     setTopX(snap.topX != null ? snap.topX : 3);
     setCategorySelectionMode(snap.categorySelectionMode || 'topX');
@@ -2051,7 +2060,7 @@ export function render() {
     // Debounce to avoid excessive writes
     clearTimeout(uiSelectionsSaveTimerRef.current);
     uiSelectionsSaveTimerRef.current = setTimeout(() => {
-      const selectionsKey = 'uiSelections_' + connectionParams.supabaseUrl + '_' + connectionParams.dataset;
+      const selectionsKey = 'uiSelections_' + connectionParams.supabaseUrl + '_' + activeTabId;
       const selections = {
         dataFrequency, metric, view, topX, categorySelectionMode,
         selectedCategories, dynamicFilters, dateRange,
@@ -2060,7 +2069,7 @@ export function render() {
       try { localStorage.setItem(selectionsKey, JSON.stringify(selections)); } catch (e) {}
     }, 500);
     return () => clearTimeout(uiSelectionsSaveTimerRef.current);
-  }, [connectionParams, liveSchemaReady, dataFrequency, metric, view, topX,
+  }, [connectionParams, liveSchemaReady, activeTabId, dataFrequency, metric, view, topX,
       categorySelectionMode, selectedCategories, dynamicFilters, dateRange,
       activeOverlays, smaWindow, forecastHorizon, activeInsightsTab]);
 
@@ -2082,7 +2091,9 @@ export function render() {
     // Clear query cache when switching datasets
     queryCacheRef.current.clear();
     setActiveTabId(targetTabId);
-  }, [activeTabId, captureTabSnapshot, restoreTabSnapshot]);
+    // Persist active tab for page refresh
+    if (configId) { try { localStorage.setItem('activeTabId_' + configId, targetTabId); } catch (e) {} }
+  }, [activeTabId, configId, captureTabSnapshot, restoreTabSnapshot]);
 
   const addTab = React.useCallback((name, dataset) => {
     const id = 'tab_' + (++tabNextIdRef.current);
