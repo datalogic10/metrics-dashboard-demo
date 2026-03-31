@@ -1884,7 +1884,7 @@ export function render() {
     if (prevGrainRef.current === dataFrequency) return;
     prevGrainRef.current = dataFrequency;
     const toDisable = OVERLAY_CONFIG.filter(o =>
-      o.minGrain && GRAIN_RANK[dataFrequency] < GRAIN_RANK[o.minGrain]
+      o.minGrain && GRAIN_RANK[o.minGrain] < GRAIN_RANK[dataFrequency]
     ).map(o => o.id);
     if (toDisable.length > 0) {
       setActiveOverlays(prev => {
@@ -7819,7 +7819,7 @@ export function render() {
           });
         } else {
           // Skip overlays that don't apply to current grain or have insufficient data
-          if (overlay.minGrain && GRAIN_RANK[dataFrequency] < GRAIN_RANK[overlay.minGrain]) return;
+          if (overlay.minGrain && GRAIN_RANK[overlay.minGrain] < GRAIN_RANK[dataFrequency]) return;
           const lookback = overlay.lookback[dataFrequency];
           if (!lookback || periods.length <= lookback) return;
 
@@ -7921,7 +7921,7 @@ export function render() {
 
       // Create text annotations — show change only when exactly 1 period-change overlay active
       const activeChangeOverlays = OVERLAY_CONFIG.filter(o => !o.isSMA && !o.isForecast && activeOverlays[o.id]
-        && !(o.minGrain && GRAIN_RANK[dataFrequency] < GRAIN_RANK[o.minGrain])
+        && !(o.minGrain && GRAIN_RANK[o.minGrain] < GRAIN_RANK[dataFrequency])
         && !(o.lookback && o.lookback[dataFrequency] && periods.length <= o.lookback[dataFrequency]));
       const textAnnotations = barData.map((value, index) => {
         let annotation = formatMetric(value);
@@ -10437,7 +10437,7 @@ export function render() {
                     {OVERLAY_CONFIG.map(overlay => {
                       const isActive = !!activeOverlays[overlay.id];
                       // Determine if overlay is disabled (grain too coarse or insufficient data)
-                      const grainTooCoarse = overlay.minGrain && GRAIN_RANK[dataFrequency] < GRAIN_RANK[overlay.minGrain];
+                      const grainTooCoarse = overlay.minGrain && GRAIN_RANK[overlay.minGrain] < GRAIN_RANK[dataFrequency];
                       const lookbackNeeded = overlay.lookback && overlay.lookback[dataFrequency];
                       const insufficientData = lookbackNeeded && periods.length <= lookbackNeeded;
                       const isDisabled = grainTooCoarse || insufficientData;
