@@ -1056,12 +1056,13 @@ var __app = (() => {
     }
     return yoyValue;
   }
+  var GRAIN_RANK = { Daily: 0, Weekly: 1, Monthly: 2, Quarterly: 3, Yearly: 4 };
   var OVERLAY_CONFIG = [
-    { id: "dod", label: "DoD", color: "#f97316", lookback: { Daily: 1, Weekly: 1, Monthly: 1, Quarterly: 1, Yearly: 1 } },
-    { id: "wow", label: "WoW", color: "#8b5cf6", lookback: { Daily: 7, Weekly: 1, Monthly: 4, Quarterly: 4, Yearly: 1 } },
-    { id: "mom", label: "MoM", color: "#06b6d4", lookback: { Daily: 30, Weekly: 4, Monthly: 1, Quarterly: 1, Yearly: 1 } },
-    { id: "qoq", label: "QoQ", color: "#ec4899", lookback: { Daily: 90, Weekly: 13, Monthly: 3, Quarterly: 1, Yearly: 1 } },
-    { id: "yoy", label: "YoY", color: "#a4133c", lookback: { Daily: 365, Weekly: 52, Monthly: 12, Quarterly: 4, Yearly: 1 } },
+    { id: "dod", label: "DoD", color: "#f97316", minGrain: "Daily", lookback: { Daily: 1, Weekly: 1, Monthly: 1, Quarterly: 1, Yearly: 1 } },
+    { id: "wow", label: "WoW", color: "#8b5cf6", minGrain: "Weekly", lookback: { Daily: 7, Weekly: 1, Monthly: 4, Quarterly: 4, Yearly: 1 } },
+    { id: "mom", label: "MoM", color: "#06b6d4", minGrain: "Monthly", lookback: { Daily: 30, Weekly: 4, Monthly: 1, Quarterly: 1, Yearly: 1 } },
+    { id: "qoq", label: "QoQ", color: "#ec4899", minGrain: "Quarterly", lookback: { Daily: 90, Weekly: 13, Monthly: 3, Quarterly: 1, Yearly: 1 } },
+    { id: "yoy", label: "YoY", color: "#a4133c", minGrain: "Yearly", lookback: { Daily: 365, Weekly: 52, Monthly: 12, Quarterly: 4, Yearly: 1 } },
     { id: "sma", label: "SMA", color: "#10b981", isSMA: true, defaultWindow: 3 },
     { id: "forecast_linear", label: "Linear", color: "#2563eb", isForecast: true, defaultHorizon: 3 },
     { id: "forecast_hw", label: "Seasonal", color: "#d946ef", isForecast: true, defaultHorizon: 3 }
@@ -3656,6 +3657,23 @@ var __app = (() => {
     const [smaWindow, setSmaWindow] = React.useState(3);
     const [forecastHorizon, setForecastHorizon] = React.useState(3);
     const [showOverlayMenu, setShowOverlayMenu] = React.useState(false);
+    const prevGrainRef = React.useRef(dataFrequency);
+    React.useEffect(() => {
+      if (prevGrainRef.current === dataFrequency) return;
+      prevGrainRef.current = dataFrequency;
+      const toDisable = OVERLAY_CONFIG.filter(
+        (o) => o.minGrain && GRAIN_RANK[dataFrequency] < GRAIN_RANK[o.minGrain]
+      ).map((o) => o.id);
+      if (toDisable.length > 0) {
+        setActiveOverlays((prev) => {
+          const next = { ...prev };
+          toDisable.forEach((id) => {
+            next[id] = false;
+          });
+          return next;
+        });
+      }
+    }, [dataFrequency]);
     const [view, setView] = React.useState("Overall");
     const [topX, setTopX] = React.useState(3);
     const [categorySelectionMode, setCategorySelectionMode] = React.useState("topX");
@@ -5721,6 +5739,7 @@ var __app = (() => {
         case "metric2":
           return m2;
         case "metric3":
+          if (rows.length === 1 && rows[0].__metric3 !== void 0) return rows[0].__metric3;
           return m1 > 0 ? 1e4 * m2 / m1 : 0;
         default:
           return m1;
@@ -6123,7 +6142,7 @@ var __app = (() => {
         completePeriods.forEach((period) => {
           const agg = periodAggregates[period];
           if (!agg) return;
-          const syntheticRow = { [dateField]: period, [COLUMNS.METRIC1]: agg.metric1, [COLUMNS.METRIC2]: agg.metric2 };
+          const syntheticRow = { [dateField]: period, [COLUMNS.METRIC1]: agg.metric1, [COLUMNS.METRIC2]: agg.metric2, __metric3: agg.metric3 };
           completeFilteredData.push(syntheticRow);
           completeDataByPeriod[period] = [syntheticRow];
         });
@@ -6162,7 +6181,7 @@ var __app = (() => {
               const rev = catAgg.metric2 || 0;
               cat.metric1 += vol;
               cat.metric2 += rev;
-              cat.byPeriod[period] = { metric1: vol, metric2: rev };
+              cat.byPeriod[period] = { metric1: vol, metric2: rev, metric3: catAgg.metric3 };
             });
           });
         });
@@ -6193,13 +6212,14 @@ var __app = (() => {
           }
         }
       }
-      const metricFromAgg = (m1, m2) => {
+      const metricFromAgg = (m1, m2, m3) => {
         switch (metric) {
           case "metric1":
             return m1;
           case "metric2":
             return m2;
           case "metric3":
+            if (m3 !== void 0) return m3;
             return m1 > 0 ? 1e4 * m2 / m1 : 0;
           default:
             return m1;
@@ -6342,7 +6362,7 @@ var __app = (() => {
           });
           alerts.push(
             createInsight(
-              `${metric} declining for ${consecutiveDeclines} consecutive periods (${totalDecline.toFixed(
+              `${METRIC_LABELS[metric] || metric} declining for ${consecutiveDeclines} consecutive periods (${totalDecline.toFixed(
                 1
               )}% total decline) - requires attention`,
               priority,
@@ -6377,7 +6397,7 @@ var __app = (() => {
               const comparisonPeriod = completePeriods[i - 1];
               alerts.push(
                 createInsight(
-                  `Significant ${metric} drop of ${dropPercent.toFixed(
+                  `Significant ${METRIC_LABELS[metric] || metric} drop of ${dropPercent.toFixed(
                     1
                   )}% in ${formattedPeriod} (${formatMetric(
                     prevValue
@@ -6438,8 +6458,8 @@ var __app = (() => {
           if (catAgg.metric2 < minRevThreshold) return;
           const firstAgg = catAgg.byPeriod[firstPeriod];
           const lastAgg = catAgg.byPeriod[lastPeriod];
-          const firstCatMetric = firstAgg ? metricFromAgg(firstAgg.metric1, firstAgg.metric2) : 0;
-          const lastCatMetric = lastAgg ? metricFromAgg(lastAgg.metric1, lastAgg.metric2) : 0;
+          const firstCatMetric = firstAgg ? metricFromAgg(firstAgg.metric1, firstAgg.metric2, firstAgg.metric3) : 0;
+          const lastCatMetric = lastAgg ? metricFromAgg(lastAgg.metric1, lastAgg.metric2, lastAgg.metric3) : 0;
           firstPeriodShare[option] = firstTotal > 0 ? firstCatMetric / firstTotal * 100 : 0;
           lastPeriodShare[option] = lastTotal > 0 ? lastCatMetric / lastTotal * 100 : 0;
         });
@@ -6895,8 +6915,8 @@ var __app = (() => {
               if (categoryRev < minRevThreshold) return;
               const firstPeriodAgg = catAgg.byPeriod[recentPeriods[0]];
               const lastPeriodAgg = catAgg.byPeriod[recentPeriods[recentPeriods.length - 1]];
-              const categoryFirstValue = firstPeriodAgg ? metricFromAgg(firstPeriodAgg.metric1, firstPeriodAgg.metric2) : 0;
-              const categoryLastValue = lastPeriodAgg ? metricFromAgg(lastPeriodAgg.metric1, lastPeriodAgg.metric2) : 0;
+              const categoryFirstValue = firstPeriodAgg ? metricFromAgg(firstPeriodAgg.metric1, firstPeriodAgg.metric2, firstPeriodAgg.metric3) : 0;
+              const categoryLastValue = lastPeriodAgg ? metricFromAgg(lastPeriodAgg.metric1, lastPeriodAgg.metric2, lastPeriodAgg.metric3) : 0;
               if (categoryFirstValue === 0 || categoryFirstValue === null) return;
               const {
                 growthRate: categoryGrowthRate,
@@ -8234,8 +8254,9 @@ var __app = (() => {
               connectgaps: false
             });
           } else {
+            if (overlay.minGrain && GRAIN_RANK[dataFrequency] < GRAIN_RANK[overlay.minGrain]) return;
             const lookback = overlay.lookback[dataFrequency];
-            if (!lookback) return;
+            if (!lookback || periods.length <= lookback) return;
             const changeData = periods.map((period, i) => {
               const currentIndex = sortedBaseDataPeriods.indexOf(period);
               if (currentIndex === -1) return null;
@@ -8320,7 +8341,7 @@ var __app = (() => {
             });
           });
         }
-        const activeChangeOverlays = OVERLAY_CONFIG.filter((o) => !o.isSMA && !o.isForecast && activeOverlays[o.id]);
+        const activeChangeOverlays = OVERLAY_CONFIG.filter((o) => !o.isSMA && !o.isForecast && activeOverlays[o.id] && !(o.minGrain && GRAIN_RANK[dataFrequency] < GRAIN_RANK[o.minGrain]) && !(o.lookback && o.lookback[dataFrequency] && periods.length <= o.lookback[dataFrequency]));
         const textAnnotations = barData.map((value, index) => {
           let annotation = formatMetric(value);
           if (activeChangeOverlays.length === 1 && primaryOverlayData) {
@@ -10459,7 +10480,12 @@ var __app = (() => {
       boxShadow: "0 4px 12px rgba(0,0,0,0.15)"
     } }, OVERLAY_CONFIG.map((overlay) => {
       const isActive = !!activeOverlays[overlay.id];
-      return /* @__PURE__ */ React.createElement("div", { key: overlay.id, style: { padding: "0 4px" } }, /* @__PURE__ */ React.createElement(
+      const grainTooCoarse = overlay.minGrain && GRAIN_RANK[dataFrequency] < GRAIN_RANK[overlay.minGrain];
+      const lookbackNeeded = overlay.lookback && overlay.lookback[dataFrequency];
+      const insufficientData = lookbackNeeded && periods.length <= lookbackNeeded;
+      const isDisabled = grainTooCoarse || insufficientData;
+      const disabledReason = grainTooCoarse ? `Not available in ${dataFrequency} grain` : insufficientData ? `Needs ${lookbackNeeded + 1}+ ${dataFrequency.toLowerCase()} periods` : "";
+      return /* @__PURE__ */ React.createElement("div", { key: overlay.id, style: { padding: "0 4px" }, title: isDisabled ? disabledReason : "" }, /* @__PURE__ */ React.createElement(
         "label",
         {
           style: {
@@ -10467,16 +10493,17 @@ var __app = (() => {
             alignItems: "center",
             gap: "8px",
             padding: "6px 8px",
-            cursor: "pointer",
+            cursor: isDisabled ? "default" : "pointer",
             borderRadius: "4px",
             fontSize: "12px",
             fontWeight: 500,
-            color: isDarkMode ? "#e5e7eb" : "#374151",
+            color: isDisabled ? isDarkMode ? "#6b7280" : "#9ca3af" : isDarkMode ? "#e5e7eb" : "#374151",
             backgroundColor: "transparent",
+            opacity: isDisabled ? 0.5 : 1,
             transition: "background-color 0.1s"
           },
           onMouseEnter: (e) => {
-            e.currentTarget.style.backgroundColor = isDarkMode ? "#374151" : "#f3f4f6";
+            if (!isDisabled) e.currentTarget.style.backgroundColor = isDarkMode ? "#374151" : "#f3f4f6";
           },
           onMouseLeave: (e) => {
             e.currentTarget.style.backgroundColor = "transparent";
@@ -10486,16 +10513,17 @@ var __app = (() => {
           "input",
           {
             type: "checkbox",
-            checked: isActive,
+            checked: isActive && !isDisabled,
+            disabled: isDisabled,
             onChange: () => setActiveOverlays((prev) => ({ ...prev, [overlay.id]: !prev[overlay.id] })),
-            style: { accentColor: overlay.color, cursor: "pointer" }
+            style: { accentColor: overlay.color, cursor: isDisabled ? "default" : "pointer" }
           }
         ),
         /* @__PURE__ */ React.createElement("span", { style: {
           width: "10px",
           height: "10px",
           borderRadius: "50%",
-          backgroundColor: overlay.color,
+          backgroundColor: isDisabled ? isDarkMode ? "#4b5563" : "#d1d5db" : overlay.color,
           flexShrink: 0
         } }),
         /* @__PURE__ */ React.createElement("span", null, overlay.label),

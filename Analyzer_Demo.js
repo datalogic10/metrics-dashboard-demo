@@ -24,7 +24,7 @@ import {
   getDimAggMetric,
   getCategoriesFromAggregates,
   calculateYoYDataArray as calculateYoYDataArrayUtil,
-  OVERLAY_CONFIG,
+  OVERLAY_CONFIG, GRAIN_RANK,
   calculatePeriodChange,
   calculateSMA,
   forecastLinear,
@@ -1877,6 +1877,24 @@ export function render() {
   const [smaWindow, setSmaWindow] = React.useState(3);
   const [forecastHorizon, setForecastHorizon] = React.useState(3);
   const [showOverlayMenu, setShowOverlayMenu] = React.useState(false);
+
+  // Auto-deactivate overlays that become invalid when grain changes
+  const prevGrainRef = React.useRef(dataFrequency);
+  React.useEffect(() => {
+    if (prevGrainRef.current === dataFrequency) return;
+    prevGrainRef.current = dataFrequency;
+    const toDisable = OVERLAY_CONFIG.filter(o =>
+      o.minGrain && GRAIN_RANK[dataFrequency] < GRAIN_RANK[o.minGrain]
+    ).map(o => o.id);
+    if (toDisable.length > 0) {
+      setActiveOverlays(prev => {
+        const next = { ...prev };
+        toDisable.forEach(id => { next[id] = false; });
+        return next;
+      });
+    }
+  }, [dataFrequency]);
+
   const [view, setView] = React.useState("Overall");
   const [topX, setTopX] = React.useState(3);
   const [categorySelectionMode, setCategorySelectionMode] =
@@ -4375,6 +4393,8 @@ export function render() {
       case "metric2":
         return m2;
       case "metric3":
+        // Live mode: use pre-computed metric3 from server (synthetic rows have __metric3)
+        if (rows.length === 1 && rows[0].__metric3 !== undefined) return rows[0].__metric3;
         return m1 > 0 ? (10000 * m2) / m1 : 0;
       default:
         return m1;
@@ -4896,7 +4916,8 @@ export function render() {
         const agg = periodAggregates[period];
         if (!agg) return;
         // Synthetic row with volume/revenue columns so calculateMetric() works unchanged
-        const syntheticRow = { [dateField]: period, [COLUMNS.METRIC1]: agg.metric1, [COLUMNS.METRIC2]: agg.metric2 };
+        // Include pre-computed metric3 so insights don't re-derive it with the wrong formula
+        const syntheticRow = { [dateField]: period, [COLUMNS.METRIC1]: agg.metric1, [COLUMNS.METRIC2]: agg.metric2, __metric3: agg.metric3 };
         completeFilteredData.push(syntheticRow);
         completeDataByPeriod[period] = [syntheticRow];
       });
@@ -4943,7 +4964,7 @@ export function render() {
             const rev = catAgg.metric2 || 0;
             cat.metric1 += vol;
             cat.metric2 += rev;
-            cat.byPeriod[period] = { metric1: vol, metric2: rev };
+            cat.byPeriod[period] = { metric1: vol, metric2: rev, metric3: catAgg.metric3 };
           });
         });
       });
@@ -4976,13 +4997,15 @@ export function render() {
       }
     }
     // Compute metric from pre-aggregated volume/revenue (matches calculateMetricValue logic)
-    const metricFromAgg = (m1, m2) => {
+    const metricFromAgg = (m1, m2, m3) => {
       switch (metric) {
         case "metric1":
           return m1;
         case "metric2":
           return m2;
         case "metric3":
+          // Live mode: use pre-computed metric3 from server when available
+          if (m3 !== undefined) return m3;
           return m1 > 0 ? (10000 * m2) / m1 : 0;
         default:
           return m1;
@@ -5192,7 +5215,7 @@ export function render() {
         });
         alerts.push(
           createInsight(
-            `${metric} declining for ${consecutiveDeclines} consecutive periods (${totalDecline.toFixed(
+            `${METRIC_LABELS[metric] || metric} declining for ${consecutiveDeclines} consecutive periods (${totalDecline.toFixed(
               1
             )}% total decline) - requires attention`,
             priority,
@@ -5235,7 +5258,7 @@ export function render() {
 
             alerts.push(
               createInsight(
-                `Significant ${metric} drop of ${dropPercent.toFixed(
+                `Significant ${METRIC_LABELS[metric] || metric} drop of ${dropPercent.toFixed(
                   1
                 )}% in ${formattedPeriod} (${formatMetric(
                   prevValue
@@ -5315,10 +5338,10 @@ export function render() {
         const firstAgg = catAgg.byPeriod[firstPeriod];
         const lastAgg = catAgg.byPeriod[lastPeriod];
         const firstCatMetric = firstAgg
-          ? metricFromAgg(firstAgg.metric1, firstAgg.metric2)
+          ? metricFromAgg(firstAgg.metric1, firstAgg.metric2, firstAgg.metric3)
           : 0;
         const lastCatMetric = lastAgg
-          ? metricFromAgg(lastAgg.metric1, lastAgg.metric2)
+          ? metricFromAgg(lastAgg.metric1, lastAgg.metric2, lastAgg.metric3)
           : 0;
 
         firstPeriodShare[option] =
@@ -5975,10 +5998,10 @@ export function render() {
               catAgg.byPeriod[recentPeriods[recentPeriods.length - 1]];
 
             const categoryFirstValue = firstPeriodAgg
-              ? metricFromAgg(firstPeriodAgg.metric1, firstPeriodAgg.metric2)
+              ? metricFromAgg(firstPeriodAgg.metric1, firstPeriodAgg.metric2, firstPeriodAgg.metric3)
               : 0;
             const categoryLastValue = lastPeriodAgg
-              ? metricFromAgg(lastPeriodAgg.metric1, lastPeriodAgg.metric2)
+              ? metricFromAgg(lastPeriodAgg.metric1, lastPeriodAgg.metric2, lastPeriodAgg.metric3)
               : 0;
 
             if (categoryFirstValue === 0 || categoryFirstValue === null) return;
@@ -7795,8 +7818,10 @@ export function render() {
             connectgaps: false,
           });
         } else {
+          // Skip overlays that don't apply to current grain or have insufficient data
+          if (overlay.minGrain && GRAIN_RANK[dataFrequency] < GRAIN_RANK[overlay.minGrain]) return;
           const lookback = overlay.lookback[dataFrequency];
-          if (!lookback) return;
+          if (!lookback || periods.length <= lookback) return;
 
           const changeData = periods.map((period, i) => {
             const currentIndex = sortedBaseDataPeriods.indexOf(period);
@@ -7895,7 +7920,9 @@ export function render() {
       }
 
       // Create text annotations — show change only when exactly 1 period-change overlay active
-      const activeChangeOverlays = OVERLAY_CONFIG.filter(o => !o.isSMA && !o.isForecast && activeOverlays[o.id]);
+      const activeChangeOverlays = OVERLAY_CONFIG.filter(o => !o.isSMA && !o.isForecast && activeOverlays[o.id]
+        && !(o.minGrain && GRAIN_RANK[dataFrequency] < GRAIN_RANK[o.minGrain])
+        && !(o.lookback && o.lookback[dataFrequency] && periods.length <= o.lookback[dataFrequency]));
       const textAnnotations = barData.map((value, index) => {
         let annotation = formatMetric(value);
         if (activeChangeOverlays.length === 1 && primaryOverlayData) {
@@ -10409,28 +10436,38 @@ export function render() {
                   }}>
                     {OVERLAY_CONFIG.map(overlay => {
                       const isActive = !!activeOverlays[overlay.id];
+                      // Determine if overlay is disabled (grain too coarse or insufficient data)
+                      const grainTooCoarse = overlay.minGrain && GRAIN_RANK[dataFrequency] < GRAIN_RANK[overlay.minGrain];
+                      const lookbackNeeded = overlay.lookback && overlay.lookback[dataFrequency];
+                      const insufficientData = lookbackNeeded && periods.length <= lookbackNeeded;
+                      const isDisabled = grainTooCoarse || insufficientData;
+                      const disabledReason = grainTooCoarse
+                        ? `Not available in ${dataFrequency} grain`
+                        : insufficientData ? `Needs ${lookbackNeeded + 1}+ ${dataFrequency.toLowerCase()} periods` : '';
                       return (
-                        <div key={overlay.id} style={{ padding: '0 4px' }}>
+                        <div key={overlay.id} style={{ padding: '0 4px' }} title={isDisabled ? disabledReason : ''}>
                           <label
                             style={{
                               display: 'flex', alignItems: 'center', gap: '8px',
-                              padding: '6px 8px', cursor: 'pointer', borderRadius: '4px',
+                              padding: '6px 8px', cursor: isDisabled ? 'default' : 'pointer', borderRadius: '4px',
                               fontSize: '12px', fontWeight: 500,
-                              color: isDarkMode ? '#e5e7eb' : '#374151',
+                              color: isDisabled ? (isDarkMode ? '#6b7280' : '#9ca3af') : (isDarkMode ? '#e5e7eb' : '#374151'),
                               backgroundColor: 'transparent',
+                              opacity: isDisabled ? 0.5 : 1,
                               transition: 'background-color 0.1s',
                             }}
-                            onMouseEnter={e => { e.currentTarget.style.backgroundColor = isDarkMode ? '#374151' : '#f3f4f6'; }}
+                            onMouseEnter={e => { if (!isDisabled) e.currentTarget.style.backgroundColor = isDarkMode ? '#374151' : '#f3f4f6'; }}
                             onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
                           >
                             <input
-                              type="checkbox" checked={isActive}
+                              type="checkbox" checked={isActive && !isDisabled}
+                              disabled={isDisabled}
                               onChange={() => setActiveOverlays(prev => ({ ...prev, [overlay.id]: !prev[overlay.id] }))}
-                              style={{ accentColor: overlay.color, cursor: 'pointer' }}
+                              style={{ accentColor: overlay.color, cursor: isDisabled ? 'default' : 'pointer' }}
                             />
                             <span style={{
                               width: '10px', height: '10px', borderRadius: '50%',
-                              backgroundColor: overlay.color, flexShrink: 0,
+                              backgroundColor: isDisabled ? (isDarkMode ? '#4b5563' : '#d1d5db') : overlay.color, flexShrink: 0,
                             }} />
                             <span>{overlay.label}</span>
                             {overlay.isSMA && isActive && (

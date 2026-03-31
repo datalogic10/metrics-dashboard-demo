@@ -168,12 +168,15 @@ export function capYoYForDisplay(yoyValue) {
  * Overlay configuration for comparison traces on the Overall chart.
  * lookback: number of entries to look back in sortedBaseDataPeriods for each grain.
  */
+// Grain hierarchy index: lower = finer granularity
+export const GRAIN_RANK = { Daily: 0, Weekly: 1, Monthly: 2, Quarterly: 3, Yearly: 4 };
+
 export const OVERLAY_CONFIG = [
-  { id: 'dod', label: 'DoD', color: '#f97316', lookback: { Daily: 1, Weekly: 1, Monthly: 1, Quarterly: 1, Yearly: 1 } },
-  { id: 'wow', label: 'WoW', color: '#8b5cf6', lookback: { Daily: 7, Weekly: 1, Monthly: 4, Quarterly: 4, Yearly: 1 } },
-  { id: 'mom', label: 'MoM', color: '#06b6d4', lookback: { Daily: 30, Weekly: 4, Monthly: 1, Quarterly: 1, Yearly: 1 } },
-  { id: 'qoq', label: 'QoQ', color: '#ec4899', lookback: { Daily: 90, Weekly: 13, Monthly: 3, Quarterly: 1, Yearly: 1 } },
-  { id: 'yoy', label: 'YoY', color: '#a4133c', lookback: { Daily: 365, Weekly: 52, Monthly: 12, Quarterly: 4, Yearly: 1 } },
+  { id: 'dod', label: 'DoD', color: '#f97316', minGrain: 'Daily', lookback: { Daily: 1, Weekly: 1, Monthly: 1, Quarterly: 1, Yearly: 1 } },
+  { id: 'wow', label: 'WoW', color: '#8b5cf6', minGrain: 'Weekly', lookback: { Daily: 7, Weekly: 1, Monthly: 4, Quarterly: 4, Yearly: 1 } },
+  { id: 'mom', label: 'MoM', color: '#06b6d4', minGrain: 'Monthly', lookback: { Daily: 30, Weekly: 4, Monthly: 1, Quarterly: 1, Yearly: 1 } },
+  { id: 'qoq', label: 'QoQ', color: '#ec4899', minGrain: 'Quarterly', lookback: { Daily: 90, Weekly: 13, Monthly: 3, Quarterly: 1, Yearly: 1 } },
+  { id: 'yoy', label: 'YoY', color: '#a4133c', minGrain: 'Yearly', lookback: { Daily: 365, Weekly: 52, Monthly: 12, Quarterly: 4, Yearly: 1 } },
   { id: 'sma', label: 'SMA', color: '#10b981', isSMA: true, defaultWindow: 3 },
   { id: 'forecast_linear', label: 'Linear', color: '#2563eb', isForecast: true, defaultHorizon: 3 },
   { id: 'forecast_hw', label: 'Seasonal', color: '#d946ef', isForecast: true, defaultHorizon: 3 },
