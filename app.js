@@ -23,6 +23,47 @@ var __app = (() => {
     render: () => render
   });
 
+  // src/logger.js
+  var DEBUG = typeof window !== "undefined" && (window.location.search.includes("debug") || window.location.hash.includes("debug"));
+  var noop = () => {
+  };
+  var logger = {
+    log: DEBUG ? console.log.bind(console) : noop,
+    warn: DEBUG ? console.warn.bind(console) : noop,
+    error: console.error.bind(console)
+    // errors always visible
+  };
+  var logger_default = logger;
+
+  // src/storage.js
+  function storageGet(key) {
+    try {
+      return localStorage.getItem(key);
+    } catch (e) {
+      return null;
+    }
+  }
+  function storageSet(key, value) {
+    try {
+      localStorage.setItem(key, value);
+    } catch (e) {
+    }
+  }
+  function storageGetJSON(key) {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function storageSetJSON(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch (e) {
+    }
+  }
+
   // src/theme.js
   var THEME_CONFIG = {
     light: {
@@ -752,17 +793,10 @@ var __app = (() => {
     return callConfigRpc("update_dashboard_config", params);
   }
   function getEditSecret(configId) {
-    try {
-      return localStorage.getItem("configEditSecret_" + configId);
-    } catch (e) {
-      return null;
-    }
+    return storageGet("configEditSecret_" + configId);
   }
   function setEditSecret(configId, secret) {
-    try {
-      localStorage.setItem("configEditSecret_" + configId, secret);
-    } catch (e) {
-    }
+    storageSet("configEditSecret_" + configId, secret);
   }
   function isCreator(configId) {
     return !!getEditSecret(configId);
@@ -929,7 +963,7 @@ var __app = (() => {
       const compact = JSON.parse(jsonString);
       return expandState(compact, dimensionDefs);
     } catch (error) {
-      console.error("Failed to decode share code:", error);
+      logger_default.error("Failed to decode share code:", error);
       return null;
     }
   }
@@ -3170,13 +3204,7 @@ var __app = (() => {
         const tabsData = config.tabs_json;
         if (Array.isArray(tabsData) && tabsData.length > 0) {
           setTabs(tabsData);
-          const savedActiveTab = (() => {
-            try {
-              return localStorage.getItem("activeTabId_" + urlRoute.configId);
-            } catch (e) {
-              return null;
-            }
-          })();
+          const savedActiveTab = storageGet("activeTabId_" + urlRoute.configId);
           const initialTabId = savedActiveTab && tabsData.some((t) => t.id === savedActiveTab) ? savedActiveTab : tabsData[0].id;
           setActiveTabId(initialTabId);
           tabNextIdRef.current = Math.max(...tabsData.map((t) => {
@@ -3240,7 +3268,7 @@ var __app = (() => {
       if (!configId || !isCreatorMode) return;
       resetCreatorTimer();
       const tabsJson = buildTabsJson(updatedTabs || tabs, currentTabId || activeTabId, currentMetricConfig || liveMetricConfig);
-      updateConfig(configId, getEditSecret(configId), { tabsJson }).catch((err) => console.warn("Failed to save config to DB:", err));
+      updateConfig(configId, getEditSecret(configId), { tabsJson }).catch((err) => logger_default.warn("Failed to save config to DB:", err));
     }, [configId, isCreatorMode, tabs, activeTabId, liveMetricConfig, buildTabsJson, resetCreatorTimer]);
     const tabsInitializedRef = React.useRef(false);
     React.useEffect(() => {
@@ -3377,7 +3405,7 @@ var __app = (() => {
         let configDirty = false;
         if (config.dateColumn && !columnNames.has(config.dateColumn)) {
           const detected = columns.find((c) => c.udt === "date" || c.name.includes("_dt"))?.name || null;
-          console.warn(`[Dashboard] dateColumn "${config.dateColumn}" not in schema, auto-correcting to "${detected}"`);
+          logger_default.warn(`[Dashboard] dateColumn "${config.dateColumn}" not in schema, auto-correcting to "${detected}"`);
           config.dateColumn = detected;
           configDirty = true;
         }
@@ -3423,7 +3451,7 @@ var __app = (() => {
           uiSelectionsRestoredRef.current.add(activeTabId);
           try {
             const selectionsKey = "uiSelections_" + connectionParams.supabaseUrl + "_" + activeTabId;
-            const saved = localStorage.getItem(selectionsKey);
+            const saved = storageGet(selectionsKey);
             if (saved) {
               const s = JSON.parse(saved);
               const schemaColNames = new Set(distinctResults.map((r) => r.column));
@@ -3874,10 +3902,7 @@ var __app = (() => {
           forecastHorizon,
           activeInsightsTab
         };
-        try {
-          localStorage.setItem(selectionsKey, JSON.stringify(selections));
-        } catch (e) {
-        }
+        storageSetJSON(selectionsKey, selections);
       }, 500);
       return () => clearTimeout(uiSelectionsSaveTimerRef.current);
     }, [
@@ -3912,10 +3937,7 @@ var __app = (() => {
       queryCacheRef.current.clear();
       setActiveTabId(targetTabId);
       if (configId) {
-        try {
-          localStorage.setItem("activeTabId_" + configId, targetTabId);
-        } catch (e) {
-        }
+        storageSet("activeTabId_" + configId, targetTabId);
       }
     }, [activeTabId, configId, captureTabSnapshot, restoreTabSnapshot]);
     const addTab = React.useCallback((name, dataset) => {
@@ -4219,16 +4241,12 @@ var __app = (() => {
     React.useEffect(() => {
       if (!connectionParams || !liveSchemaReady || !activeTabId) return;
       const selectionsKey = "uiSelections_" + connectionParams.supabaseUrl + "_" + activeTabId;
-      try {
-        const saved = localStorage.getItem(selectionsKey);
-        if (saved) {
-          const existing = JSON.parse(saved);
-          existing.showAllDollarTraces = showAllDollarTraces;
-          existing.showAllShareTraces = showAllShareTraces;
-          existing.showAllGrowthTraces = showAllGrowthTraces;
-          localStorage.setItem(selectionsKey, JSON.stringify(existing));
-        }
-      } catch (e) {
+      const existing = storageGetJSON(selectionsKey);
+      if (existing) {
+        existing.showAllDollarTraces = showAllDollarTraces;
+        existing.showAllShareTraces = showAllShareTraces;
+        existing.showAllGrowthTraces = showAllGrowthTraces;
+        storageSetJSON(selectionsKey, existing);
       }
     }, [connectionParams, liveSchemaReady, activeTabId, showAllDollarTraces, showAllShareTraces, showAllGrowthTraces]);
     const [queryText, setQueryText] = React.useState("");
@@ -4484,7 +4502,7 @@ var __app = (() => {
         try {
           restoreStateSnapshotRef.current(state);
         } catch (e) {
-          console.warn("Failed to restore shared state:", e);
+          logger_default.warn("Failed to restore shared state:", e);
         }
       }
     }, [liveSchemaReady]);
@@ -5226,7 +5244,7 @@ var __app = (() => {
         setLiveAggLoading(false);
       }).catch((err) => {
         if (requestId !== liveAggRequestRef.current) return;
-        console.error("[Dashboard] Aggregation fetch error:", err);
+        logger_default.error("[Dashboard] Aggregation fetch error:", err);
         setLiveAggLoading(false);
       });
     }, [isLiveMode, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX, liveBooleanColumns]);
@@ -6983,7 +7001,7 @@ var __app = (() => {
                           }
                         ] : []
                       };
-                      console.log("\u2705 Setting insightContext:", newContext);
+                      logger_default.log("Setting insightContext:", newContext);
                       return newContext;
                     });
                     setFilter([categoryValue]);
@@ -10736,7 +10754,7 @@ var __app = (() => {
                     btn.style.backgroundColor = "#6366f1";
                   }, 2e3);
                 }
-              }).catch((e) => console.error("Failed to copy:", e));
+              }).catch((e) => logger_default.error("Failed to copy:", e));
             }
           }
         },

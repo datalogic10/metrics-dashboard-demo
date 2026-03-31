@@ -1,3 +1,5 @@
+import logger from './src/logger.js';
+import { storageGet, storageSet, storageGetJSON, storageSetJSON } from './src/storage.js';
 import { THEME_CONFIG, MODERN_COLOR_PALETTE, getCategoryColor } from './src/theme.js';
 import { generateSyntheticData, DEMO_COLUMNS, DEMO_DIMENSION_DEFINITIONS } from './src/syntheticData.js';
 import {
@@ -1244,7 +1246,7 @@ export function render() {
         if (Array.isArray(tabsData) && tabsData.length > 0) {
           setTabs(tabsData);
           // Restore last active tab from localStorage, fall back to first tab
-          const savedActiveTab = (() => { try { return localStorage.getItem('activeTabId_' + urlRoute.configId); } catch (e) { return null; } })();
+          const savedActiveTab = storageGet('activeTabId_' + urlRoute.configId);
           const initialTabId = savedActiveTab && tabsData.some(t => t.id === savedActiveTab) ? savedActiveTab : tabsData[0].id;
           setActiveTabId(initialTabId);
           tabNextIdRef.current = Math.max(...tabsData.map(t => {
@@ -1330,7 +1332,7 @@ export function render() {
     resetCreatorTimer(); // reset auto-lock on every edit
     const tabsJson = buildTabsJson(updatedTabs || tabs, currentTabId || activeTabId, currentMetricConfig || liveMetricConfig);
     updateConfig(configId, getEditSecret(configId), { tabsJson })
-      .catch(err => console.warn('Failed to save config to DB:', err));
+      .catch(err => logger.warn('Failed to save config to DB:', err));
   }, [configId, isCreatorMode, tabs, activeTabId, liveMetricConfig, buildTabsJson, resetCreatorTimer]);
 
   // Persist tab structure changes (add/remove/rename) to Config DB — skip initial load
@@ -1487,7 +1489,7 @@ export function render() {
         let configDirty = false;
         if (config.dateColumn && !columnNames.has(config.dateColumn)) {
           const detected = columns.find(c => c.udt === 'date' || c.name.includes('_dt'))?.name || null;
-          console.warn(`[Dashboard] dateColumn "${config.dateColumn}" not in schema, auto-correcting to "${detected}"`);
+          logger.warn(`[Dashboard] dateColumn "${config.dateColumn}" not in schema, auto-correcting to "${detected}"`);
           config.dateColumn = detected;
           configDirty = true;
         }
@@ -1548,7 +1550,7 @@ export function render() {
           uiSelectionsRestoredRef.current.add(activeTabId);
           try {
             const selectionsKey = 'uiSelections_' + connectionParams.supabaseUrl + '_' + activeTabId;
-            const saved = localStorage.getItem(selectionsKey);
+            const saved = storageGet(selectionsKey);
             if (saved) {
               const s = JSON.parse(saved);
               // Validate saved selections against current schema columns
@@ -1593,7 +1595,7 @@ export function render() {
                 };
               }
             }
-          } catch (e) {}
+          } catch (e) { /* config parse failure — non-critical, use defaults */ }
         }
       })
       .catch(err => {
@@ -2097,7 +2099,7 @@ export function render() {
         selectedCategories, dynamicFilters, dateRange,
         activeOverlays, smaWindow, forecastHorizon, activeInsightsTab,
       };
-      try { localStorage.setItem(selectionsKey, JSON.stringify(selections)); } catch (e) {}
+      storageSetJSON(selectionsKey, selections);
     }, 500);
     return () => clearTimeout(uiSelectionsSaveTimerRef.current);
   }, [connectionParams, liveSchemaReady, activeTabId, dataFrequency, metric, view, topX,
@@ -2123,7 +2125,7 @@ export function render() {
     queryCacheRef.current.clear();
     setActiveTabId(targetTabId);
     // Persist active tab for page refresh
-    if (configId) { try { localStorage.setItem('activeTabId_' + configId, targetTabId); } catch (e) {} }
+    if (configId) { storageSet('activeTabId_' + configId, targetTabId); }
   }, [activeTabId, configId, captureTabSnapshot, restoreTabSnapshot]);
 
   const addTab = React.useCallback((name, dataset) => {
@@ -2456,16 +2458,13 @@ export function render() {
   React.useEffect(() => {
     if (!connectionParams || !liveSchemaReady || !activeTabId) return;
     const selectionsKey = 'uiSelections_' + connectionParams.supabaseUrl + '_' + activeTabId;
-    try {
-      const saved = localStorage.getItem(selectionsKey);
-      if (saved) {
-        const existing = JSON.parse(saved);
-        existing.showAllDollarTraces = showAllDollarTraces;
-        existing.showAllShareTraces = showAllShareTraces;
-        existing.showAllGrowthTraces = showAllGrowthTraces;
-        localStorage.setItem(selectionsKey, JSON.stringify(existing));
-      }
-    } catch (e) {}
+    const existing = storageGetJSON(selectionsKey);
+    if (existing) {
+      existing.showAllDollarTraces = showAllDollarTraces;
+      existing.showAllShareTraces = showAllShareTraces;
+      existing.showAllGrowthTraces = showAllGrowthTraces;
+      storageSetJSON(selectionsKey, existing);
+    }
   }, [connectionParams, liveSchemaReady, activeTabId, showAllDollarTraces, showAllShareTraces, showAllGrowthTraces]);
 
   const [queryText, setQueryText] = React.useState("");
@@ -2744,7 +2743,7 @@ export function render() {
     const state = pendingStateRef.current;
     pendingStateRef.current = null;
     if (restoreStateSnapshotRef.current) {
-      try { restoreStateSnapshotRef.current(state); } catch (e) { console.warn('Failed to restore shared state:', e); }
+      try { restoreStateSnapshotRef.current(state); } catch (e) { logger.warn('Failed to restore shared state:', e); }
     }
   }, [liveSchemaReady]);
 
@@ -2886,7 +2885,7 @@ export function render() {
     snapshot.activeTabId = activeTabId;
     const stateStr = btoa(JSON.stringify(snapshot)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     const url = window.location.origin + window.location.pathname + '#/' + configId + '?s=' + stateStr;
-    try { await navigator.clipboard.writeText(url); } catch (e) {}
+    try { await navigator.clipboard.writeText(url); } catch (e) { /* clipboard API unavailable (e.g. non-HTTPS) */ }
     setShareCode(url);
     setShowShareModal(true);
   }, [captureStateSnapshot, activeTabId, configId]);
@@ -3701,7 +3700,7 @@ export function render() {
       })
       .catch(err => {
         if (requestId !== liveAggRequestRef.current) return;
-        console.error('[Dashboard] Aggregation fetch error:', err);
+        logger.error('[Dashboard] Aggregation fetch error:', err);
         setLiveAggLoading(false);
       });
   }, [isLiveMode, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX, liveBooleanColumns]);
@@ -6111,7 +6110,7 @@ export function render() {
                             ]
                           : [],
                     };
-                    console.log("✅ Setting insightContext:", newContext);
+                    logger.log("Setting insightContext:", newContext);
                     return newContext;
                   });
 
@@ -10756,7 +10755,7 @@ export function render() {
                                 btn.style.backgroundColor = "#10b981";
                                 setTimeout(() => { btn.textContent = orig; btn.style.backgroundColor = "#6366f1"; }, 2000);
                               }
-                            }).catch(e => console.error("Failed to copy:", e));
+                            }).catch(e => logger.error("Failed to copy:", e));
                           }
                         }}
                       >

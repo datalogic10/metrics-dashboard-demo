@@ -1,5 +1,6 @@
 // Config DB client — stores dashboard configurations in a separate Supabase instance.
 // Table lives in dashboard_config schema; RPCs in public schema (SECURITY DEFINER).
+import { storageGet, storageSet } from './storage.js';
 
 const CONFIG_DB_URL = 'https://ash-infra-vm.eastus.cloudapp.azure.com';
 const CONFIG_DB_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzM1Njg5NjAwLCJleHAiOjE4OTM0NTYwMDB9.yLBvNnhPQk0WIq82mIdsvoIwnjpOylqo8dxk6VmgYP0';
@@ -67,11 +68,11 @@ export function deleteConfig(id, editSecret) {
 // --- Edit secret (localStorage) ---
 
 export function getEditSecret(configId) {
-  try { return localStorage.getItem('configEditSecret_' + configId); } catch (e) { return null; }
+  return storageGet('configEditSecret_' + configId);
 }
 
 export function setEditSecret(configId, secret) {
-  try { localStorage.setItem('configEditSecret_' + configId, secret); } catch (e) {}
+  storageSet('configEditSecret_' + configId, secret);
 }
 
 export function isCreator(configId) {

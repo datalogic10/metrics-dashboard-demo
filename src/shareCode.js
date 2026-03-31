@@ -1,3 +1,5 @@
+import logger from './logger.js';
+
 // Value abbreviation maps for compact state serialization
 export const VALUE_ABBREVIATIONS = {
   // Data frequencies
@@ -179,7 +181,7 @@ export function decodeShareCode(code, dimensionDefs) {
     const compact = JSON.parse(jsonString);
     return expandState(compact, dimensionDefs);
   } catch (error) {
-    console.error("Failed to decode share code:", error);
+    logger.error("Failed to decode share code:", error);
     return null;
   }
 }
