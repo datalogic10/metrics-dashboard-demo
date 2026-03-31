@@ -2036,20 +2036,23 @@ var __app = (() => {
         categoryTotals[column][categoryValue].metric2 += revenue;
       }
     }
-    Object.keys(aggregates).forEach((column) => {
-      Object.keys(aggregates[column]).forEach((period) => {
-        Object.keys(aggregates[column][period]).forEach((categoryValue) => {
-          const agg = aggregates[column][period][categoryValue];
+    for (let d = 0; d < dimCount; d++) {
+      const { column } = validDims[d];
+      const periods = Object.keys(aggregates[column]);
+      for (let p = 0; p < periods.length; p++) {
+        const cats = aggregates[column][periods[p]];
+        const catKeys = Object.keys(cats);
+        for (let c = 0; c < catKeys.length; c++) {
+          const agg = cats[catKeys[c]];
           agg.metric3 = agg.metric1 > 0 ? 1e4 * agg.metric2 / agg.metric1 : 0;
-        });
-      });
-    });
-    Object.keys(categoryTotals).forEach((column) => {
-      Object.keys(categoryTotals[column]).forEach((categoryValue) => {
-        const t = categoryTotals[column][categoryValue];
+        }
+      }
+      const totCats = Object.keys(categoryTotals[column]);
+      for (let c = 0; c < totCats.length; c++) {
+        const t = categoryTotals[column][totCats[c]];
         t.metric3 = t.metric1 > 0 ? 1e4 * t.metric2 / t.metric1 : 0;
-      });
-    });
+      }
+    }
     aggregates._categoryTotals = categoryTotals;
     return aggregates;
   }
