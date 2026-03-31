@@ -27,6 +27,11 @@ import {
   OVERLAY_CONFIG,
   calculatePeriodChange,
   calculateSMA,
+  forecastLinear,
+  forecastHoltWinters,
+  generateFuturePeriods,
+  detectSeasonalPeriod,
+  hexToRgba,
 } from './src/metrics.js';
 import {
   formatFilterName as formatFilterNameUtil,
@@ -1568,6 +1573,7 @@ export function render() {
               if (s.dateRange) setDateRange(s.dateRange);
               if (s.activeOverlays) setActiveOverlays(s.activeOverlays);
               if (s.smaWindow) setSmaWindow(s.smaWindow);
+              if (s.forecastHorizon) setForecastHorizon(s.forecastHorizon);
               if (s.activeInsightsTab !== undefined) setActiveInsightsTab(s.activeInsightsTab);
             }
           } catch (e) {}
@@ -1850,8 +1856,9 @@ export function render() {
   const [metric, setMetric] = React.useState("metric2");
   const [activePeriodComparison, setActivePeriodComparison] =
     React.useState("YoY"); // YoY, MoM, QoQ, WoW (stat boxes)
-  const [activeOverlays, setActiveOverlays] = React.useState({ yoy: true }); // chart overlay toggles
+  const [activeOverlays, setActiveOverlays] = React.useState({ yoy: true, forecast_linear: true }); // chart overlay toggles
   const [smaWindow, setSmaWindow] = React.useState(3);
+  const [forecastHorizon, setForecastHorizon] = React.useState(3);
   const [showOverlayMenu, setShowOverlayMenu] = React.useState(false);
   const [view, setView] = React.useState("Overall");
   const [topX, setTopX] = React.useState(3);
@@ -1999,14 +2006,14 @@ export function render() {
     // UI state
     dataFrequency, metric, view, topX, categorySelectionMode,
     selectedCategories, dynamicFilters, dateRange,
-    activeOverlays, smaWindow, activeInsightsTab,
+    activeOverlays, smaWindow, forecastHorizon, activeInsightsTab,
   }), [
     liveColumnMeta, liveSchemaReady, liveFilterOptions,
     livePeriodAggregates, liveDimensionAggregates, liveAggLoading,
     liveRowCount, liveDataTruncated, liveMetricConfig, liveDataError,
     dataFrequency, metric, view, topX, categorySelectionMode,
     selectedCategories, dynamicFilters, dateRange,
-    activeOverlays, smaWindow, activeInsightsTab,
+    activeOverlays, smaWindow, forecastHorizon, activeInsightsTab,
   ]);
 
   // Restore per-tab state from a snapshot
@@ -2031,8 +2038,9 @@ export function render() {
     setSelectedCategories(snap.selectedCategories || []);
     setDynamicFilters(snap.dynamicFilters || {});
     setDateRange(snap.dateRange || '1Y');
-    setActiveOverlays(snap.activeOverlays || { yoy: true });
+    setActiveOverlays(snap.activeOverlays || { yoy: true, forecast_linear: true });
     setSmaWindow(snap.smaWindow || 3);
+    setForecastHorizon(snap.forecastHorizon || 3);
     setActiveInsightsTab(snap.activeInsightsTab || null);
   }, []);
 
@@ -2047,14 +2055,14 @@ export function render() {
       const selections = {
         dataFrequency, metric, view, topX, categorySelectionMode,
         selectedCategories, dynamicFilters, dateRange,
-        activeOverlays, smaWindow, activeInsightsTab,
+        activeOverlays, smaWindow, forecastHorizon, activeInsightsTab,
       };
       try { localStorage.setItem(selectionsKey, JSON.stringify(selections)); } catch (e) {}
     }, 500);
     return () => clearTimeout(uiSelectionsSaveTimerRef.current);
   }, [connectionParams, liveSchemaReady, dataFrequency, metric, view, topX,
       categorySelectionMode, selectedCategories, dynamicFilters, dateRange,
-      activeOverlays, smaWindow, activeInsightsTab]);
+      activeOverlays, smaWindow, forecastHorizon, activeInsightsTab]);
 
   const switchTab = React.useCallback((targetTabId) => {
     if (targetTabId === activeTabId) return;
@@ -7665,7 +7673,7 @@ export function render() {
       chartData = [{ name: METRIC_LABELS[metric] || metric, visible: true }];
       OVERLAY_CONFIG.forEach(overlay => {
         if (activeOverlays[overlay.id]) {
-          const name = overlay.isSMA ? `SMA(${smaWindow})` : overlay.label + ' Change %';
+          const name = overlay.isForecast ? overlay.label : overlay.isSMA ? `SMA(${smaWindow})` : overlay.label + ' Change %';
           chartData.push({ name, visible: true });
         }
       });
@@ -7683,7 +7691,7 @@ export function render() {
       .map((trace) => trace.name);
 
     return visibleTraceNames;
-  }, [view, metric, dataFrequency, prepareChartDataByAttribute, VIEW_CONFIG, activeOverlays, smaWindow, METRIC_LABELS]);
+  }, [view, metric, dataFrequency, prepareChartDataByAttribute, VIEW_CONFIG, activeOverlays, smaWindow, forecastHorizon, METRIC_LABELS]);
 
   const setScenario = React.useCallback(
     (index) => {
@@ -7721,6 +7729,7 @@ export function render() {
 
       OVERLAY_CONFIG.forEach(overlay => {
         if (!activeOverlays[overlay.id]) return;
+        if (overlay.isForecast) return; // Handled separately below
 
         if (overlay.isSMA) {
           const smaData = calculateSMA(barData, smaWindow);
@@ -7760,8 +7769,82 @@ export function render() {
         }
       });
 
+      // Build forecast overlay traces (extended x-axis with future periods)
+      // Train on full history (sortedBaseDataPeriods + baseDataAggregatesByPeriod) — same
+      // data source as DoD/YoY overlays — so forecast is stable regardless of date range.
+      const activeForecastOverlays = OVERLAY_CONFIG.filter(o => o.isForecast && activeOverlays[o.id]);
+      let forecastExtendedPeriods = periods; // default: no extension
+      let forecastUpperMax = 0;
+
+      // Build full-history training data (dimension-filtered, not date-range-filtered)
+      const fullHistoryValues = sortedBaseDataPeriods.map(p => {
+        const agg = baseDataAggregatesByPeriod[p];
+        return agg ? (agg[metric] || 0) : 0;
+      });
+
+      if (activeForecastOverlays.length > 0 && fullHistoryValues.length >= 3) {
+        const futurePeriods = generateFuturePeriods(sortedBaseDataPeriods, dataFrequency, forecastHorizon);
+        forecastExtendedPeriods = [...periods, ...futurePeriods];
+
+        activeForecastOverlays.forEach(overlay => {
+          let result;
+          if (overlay.id === 'forecast_hw') {
+            const sp = detectSeasonalPeriod(dataFrequency);
+            result = (sp && fullHistoryValues.length >= sp * 2)
+              ? forecastHoltWinters(fullHistoryValues, forecastHorizon, sp)
+              : forecastLinear(fullHistoryValues, forecastHorizon);
+          } else {
+            result = forecastLinear(fullHistoryValues, forecastHorizon);
+          }
+          if (!result) return;
+
+          // Track max for y-axis range
+          forecastUpperMax = Math.max(forecastUpperMax, ...result.upper);
+
+          // Bridge: connect last actual value to first forecast for visual continuity
+          const lastActualValue = barData[barData.length - 1];
+          const bridgeY = new Array(periods.length).fill(null);
+          bridgeY[periods.length - 1] = lastActualValue;
+          const forecastY = [...bridgeY, ...result.forecast];
+          const upperY = [...bridgeY, ...result.upper];
+          const lowerY = [...new Array(periods.length).fill(null).map((_, i) => i === periods.length - 1 ? lastActualValue : null), ...result.lower];
+
+          const mapeLabel = result.mape > 0 ? ` (MAPE: ${result.mape.toFixed(1)}%)` : '';
+
+          // Forecast line
+          overlayTraces.push({
+            type: 'scatter', mode: 'lines',
+            x: forecastExtendedPeriods, y: forecastY,
+            name: `${overlay.label}${mapeLabel}`,
+            yaxis: 'y',
+            line: { color: overlay.color, width: 2.5, dash: 'dash' },
+            connectgaps: false,
+            customdata: forecastY.map(v => v !== null ? formatMetricValue(v, metric) : 'N/A'),
+            hovertemplate: `${overlay.label}: %{customdata}<extra></extra>`,
+          });
+
+          // Upper confidence bound (invisible anchor for fill)
+          overlayTraces.push({
+            type: 'scatter', mode: 'lines',
+            x: forecastExtendedPeriods, y: upperY,
+            yaxis: 'y', line: { width: 0 },
+            showlegend: false, hoverinfo: 'skip',
+          });
+
+          // Lower confidence bound with fill to upper
+          overlayTraces.push({
+            type: 'scatter', mode: 'lines',
+            x: forecastExtendedPeriods, y: lowerY,
+            yaxis: 'y', line: { width: 0 },
+            fill: 'tonexty',
+            fillcolor: hexToRgba(overlay.color, 0.12),
+            showlegend: false, hoverinfo: 'skip',
+          });
+        });
+      }
+
       // Create text annotations — show change only when exactly 1 period-change overlay active
-      const activeChangeOverlays = OVERLAY_CONFIG.filter(o => !o.isSMA && activeOverlays[o.id]);
+      const activeChangeOverlays = OVERLAY_CONFIG.filter(o => !o.isSMA && !o.isForecast && activeOverlays[o.id]);
       const textAnnotations = barData.map((value, index) => {
         let annotation = formatMetric(value);
         if (activeChangeOverlays.length === 1 && primaryOverlayData) {
@@ -7831,9 +7914,9 @@ export function render() {
           showgrid: false,
           showspikes: false,
           // Show all ticks if total number of ticks is <= 12
-          tickmode: periods.length <= 12 ? "array" : "auto",
-          tickvals: periods.length <= 12 ? periods : undefined,
-          ticktext: formatXAxisTicks(periods),
+          tickmode: forecastExtendedPeriods.length <= 12 ? "array" : "auto",
+          tickvals: forecastExtendedPeriods.length <= 12 ? forecastExtendedPeriods : undefined,
+          ticktext: formatXAxisTicks(forecastExtendedPeriods),
         },
         yaxis: {
           title: {
@@ -7848,19 +7931,25 @@ export function render() {
           range:
             barData.length > 0
               ? (() => {
-                  const maxValue = Math.max(...barData);
+                  const maxValue = Math.max(...barData, forecastUpperMax);
                   const minValue = Math.min(...barData);
                   if (minValue < 0) {
-                    // Include negative values with individual padding
                     return [minValue * 1.3, maxValue * 1.3];
                   } else if (maxValue > 0) {
-                    // Only positive values
                     return [0, maxValue * 1.3];
                   }
                   return undefined;
                 })()
               : undefined,
         },
+        // Vertical separator at forecast boundary
+        shapes: activeForecastOverlays.length > 0 ? [{
+          type: 'line',
+          x0: periods[periods.length - 1],
+          x1: periods[periods.length - 1],
+          y0: 0, y1: 1, yref: 'paper',
+          line: { color: '#9ca3af', width: 1.5, dash: 'dot' },
+        }] : [],
         yaxis2: activeChangeOverlays.length > 0 ? {
           title: {
             text: activeChangeOverlays.map(o => o.label).join(' / ') + " Change (%)",
@@ -8026,6 +8115,7 @@ export function render() {
     periodAggregates,
     activeOverlays,
     smaWindow,
+    forecastHorizon,
     sortedBaseDataPeriods,
     baseDataAggregatesByPeriod,
     formatMetricValue,
@@ -10297,6 +10387,20 @@ export function render() {
                                 type="number" min={2} max={52} value={smaWindow}
                                 onClick={e => e.stopPropagation()}
                                 onChange={e => setSmaWindow(Math.max(2, Math.min(52, parseInt(e.target.value) || 3)))}
+                                style={{
+                                  width: '36px', padding: '1px 3px', fontSize: '11px', borderRadius: '4px',
+                                  border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`, textAlign: 'center',
+                                  backgroundColor: isDarkMode ? '#111827' : '#f9fafb',
+                                  color: isDarkMode ? '#f3f4f6' : '#111827',
+                                  outline: 'none', marginLeft: 'auto',
+                                }}
+                              />
+                            )}
+                            {overlay.isForecast && isActive && (
+                              <input
+                                type="number" min={1} max={12} value={forecastHorizon}
+                                onClick={e => e.stopPropagation()}
+                                onChange={e => setForecastHorizon(Math.max(1, Math.min(12, parseInt(e.target.value) || 3)))}
                                 style={{
                                   width: '36px', padding: '1px 3px', fontSize: '11px', borderRadius: '4px',
                                   border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`, textAlign: 'center',

@@ -175,6 +175,8 @@ export const OVERLAY_CONFIG = [
   { id: 'qoq', label: 'QoQ', color: '#ec4899', lookback: { Daily: 90, Weekly: 13, Monthly: 3, Quarterly: 1, Yearly: 1 } },
   { id: 'yoy', label: 'YoY', color: '#a4133c', lookback: { Daily: 365, Weekly: 52, Monthly: 12, Quarterly: 4, Yearly: 1 } },
   { id: 'sma', label: 'SMA', color: '#10b981', isSMA: true, defaultWindow: 3 },
+  { id: 'forecast_linear', label: 'Linear', color: '#2563eb', isForecast: true, defaultHorizon: 3 },
+  { id: 'forecast_hw', label: 'Seasonal', color: '#d946ef', isForecast: true, defaultHorizon: 3 },
 ];
 
 /**
@@ -205,6 +207,219 @@ export function calculateSMA(barData, windowSize) {
     }
   }
   return result;
+}
+
+/**
+ * Convert hex color to rgba string.
+ */
+export function hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+/**
+ * Map dataFrequency to natural seasonal cycle length.
+ * Returns null for Yearly (no seasonality).
+ */
+export function detectSeasonalPeriod(dataFrequency) {
+  const map = { Daily: 7, Weekly: 52, Monthly: 12, Quarterly: 4 };
+  return map[dataFrequency] || null;
+}
+
+/**
+ * Generate future period strings continuing from the last period in the array.
+ * Matches the format used by the existing period strings (categorical x-axis).
+ */
+export function generateFuturePeriods(periods, dataFrequency, horizon) {
+  if (!periods.length) return [];
+  const last = periods[periods.length - 1];
+  const result = [];
+
+  if (dataFrequency === 'Yearly') {
+    const year = parseInt(last);
+    for (let i = 1; i <= horizon; i++) result.push(String(year + i));
+  } else if (dataFrequency === 'Quarterly') {
+    // Format: "YYYY-QN"
+    let year = parseInt(last.slice(0, 4));
+    let q = parseInt(last.slice(6));
+    for (let i = 0; i < horizon; i++) {
+      q++;
+      if (q > 4) { q = 1; year++; }
+      result.push(`${year}-Q${q}`);
+    }
+  } else if (dataFrequency === 'Monthly') {
+    // Format: "YYYY-MM" or "YYYY-MM-DD" — detect from string length
+    const isShort = last.length <= 7; // "YYYY-MM"
+    let year = parseInt(last.slice(0, 4));
+    let month = parseInt(last.slice(5, 7));
+    for (let i = 0; i < horizon; i++) {
+      month++;
+      if (month > 12) { month = 1; year++; }
+      const mm = String(month).padStart(2, '0');
+      result.push(isShort ? `${year}-${mm}` : `${year}-${mm}-01`);
+    }
+  } else {
+    // Daily or Weekly: increment by 1 or 7 days
+    const step = dataFrequency === 'Weekly' ? 7 : 1;
+    const d = new Date(last + 'T00:00:00');
+    for (let i = 0; i < horizon; i++) {
+      d.setDate(d.getDate() + step);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      result.push(`${y}-${m}-${day}`);
+    }
+  }
+  return result;
+}
+
+/**
+ * Linear trend forecast via least-squares regression.
+ * Returns forecast values, confidence bounds, and MAPE from holdout validation.
+ */
+export function forecastLinear(values, horizon) {
+  const n = values.length;
+  if (n < 3) return null;
+
+  // Fit regression on all data
+  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+  for (let i = 0; i < n; i++) {
+    sumX += i; sumY += values[i]; sumXY += i * values[i]; sumX2 += i * i;
+  }
+  const meanX = sumX / n;
+  const b = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+  const a = sumY / n - b * meanX;
+
+  // Standard error of regression
+  let sse = 0;
+  for (let i = 0; i < n; i++) {
+    const residual = values[i] - (a + b * i);
+    sse += residual * residual;
+  }
+  const se = n > 2 ? Math.sqrt(sse / (n - 2)) : 0;
+  const sxx = sumX2 - sumX * sumX / n;
+
+  // Forecast with widening prediction intervals
+  const forecast = [], upper = [], lower = [];
+  for (let h = 1; h <= horizon; h++) {
+    const t = n - 1 + h;
+    const yHat = a + b * t;
+    const interval = 1.96 * se * Math.sqrt(1 + 1 / n + (t - meanX) * (t - meanX) / sxx);
+    forecast.push(yHat);
+    upper.push(yHat + interval);
+    lower.push(Math.max(0, yHat - interval));
+  }
+
+  // MAPE via holdout: withhold last few points, refit, measure error
+  const holdout = Math.max(1, Math.min(horizon, Math.floor(n / 5)));
+  const trainN = n - holdout;
+  let tSumX = 0, tSumY = 0, tSumXY = 0, tSumX2 = 0;
+  for (let i = 0; i < trainN; i++) {
+    tSumX += i; tSumY += values[i]; tSumXY += i * values[i]; tSumX2 += i * i;
+  }
+  const tB = (trainN * tSumXY - tSumX * tSumY) / (trainN * tSumX2 - tSumX * tSumX);
+  const tA = tSumY / trainN - tB * (tSumX / trainN);
+
+  let mapeSum = 0, mapeCount = 0;
+  for (let i = trainN; i < n; i++) {
+    const predicted = tA + tB * i;
+    if (Math.abs(values[i]) > 0.001) {
+      mapeSum += Math.abs((values[i] - predicted) / values[i]);
+      mapeCount++;
+    }
+  }
+  const mape = mapeCount > 0 ? (mapeSum / mapeCount) * 100 : 0;
+
+  return { forecast, upper, lower, mape };
+}
+
+/**
+ * Holt-Winters additive triple exponential smoothing.
+ * Handles level + trend + seasonality. Falls back to null if insufficient data.
+ */
+export function forecastHoltWinters(values, horizon, seasonalPeriod) {
+  const n = values.length;
+  const m = seasonalPeriod;
+  if (n < m * 2) return null; // Need at least 2 full seasons
+
+  const alpha = 0.3, beta = 0.1, gamma = 0.3;
+
+  // Initialize: level = mean of first season, trend from first two seasons
+  let level = 0;
+  for (let i = 0; i < m; i++) level += values[i];
+  level /= m;
+
+  let level2 = 0;
+  for (let i = m; i < 2 * m; i++) level2 += values[i];
+  level2 /= m;
+  let trend = (level2 - level) / m;
+
+  const seasonal = new Array(n);
+  for (let i = 0; i < m; i++) seasonal[i] = values[i] - level;
+
+  // Run smoothing
+  let sse = 0;
+  for (let t = m; t < n; t++) {
+    const prevLevel = level;
+    const prevTrend = trend;
+    level = alpha * (values[t] - seasonal[t - m]) + (1 - alpha) * (prevLevel + prevTrend);
+    trend = beta * (level - prevLevel) + (1 - beta) * prevTrend;
+    seasonal[t] = gamma * (values[t] - level) + (1 - gamma) * seasonal[t - m];
+
+    const fitted = prevLevel + prevTrend + seasonal[t - m];
+    sse += (values[t] - fitted) * (values[t] - fitted);
+  }
+
+  const residualStd = Math.sqrt(sse / (n - m));
+
+  // Forecast
+  const forecast = [], upper = [], lower = [];
+  for (let h = 1; h <= horizon; h++) {
+    const seasonIdx = n - m + ((h - 1) % m);
+    const yHat = level + h * trend + seasonal[seasonIdx];
+    const interval = 1.96 * residualStd * Math.sqrt(h);
+    forecast.push(yHat);
+    upper.push(yHat + interval);
+    lower.push(Math.max(0, yHat - interval));
+  }
+
+  // MAPE via holdout
+  const holdout = Math.max(1, Math.min(horizon, Math.floor(n / 5)));
+  const trainN = n - holdout;
+  if (trainN < m * 2) return { forecast, upper, lower, mape: 0 }; // Can't validate
+
+  // Refit on training data
+  let tLevel = 0;
+  for (let i = 0; i < m; i++) tLevel += values[i];
+  tLevel /= m;
+  let tLevel2 = 0;
+  for (let i = m; i < 2 * m; i++) tLevel2 += values[i];
+  tLevel2 /= m;
+  let tTrend = (tLevel2 - tLevel) / m;
+  const tSeasonal = new Array(trainN);
+  for (let i = 0; i < m; i++) tSeasonal[i] = values[i] - tLevel;
+  for (let t = m; t < trainN; t++) {
+    const pl = tLevel;
+    tLevel = alpha * (values[t] - tSeasonal[t - m]) + (1 - alpha) * (tLevel + tTrend);
+    tTrend = beta * (tLevel - pl) + (1 - beta) * tTrend;
+    tSeasonal[t] = gamma * (values[t] - tLevel) + (1 - gamma) * tSeasonal[t - m];
+  }
+
+  let mapeSum = 0, mapeCount = 0;
+  for (let h = 1; h <= holdout; h++) {
+    const sIdx = trainN - m + ((h - 1) % m);
+    const predicted = tLevel + h * tTrend + tSeasonal[sIdx];
+    const actual = values[trainN + h - 1];
+    if (Math.abs(actual) > 0.001) {
+      mapeSum += Math.abs((actual - predicted) / actual);
+      mapeCount++;
+    }
+  }
+  const mape = mapeCount > 0 ? (mapeSum / mapeCount) * 100 : 0;
+
+  return { forecast, upper, lower, mape };
 }
 
 /**

@@ -1062,7 +1062,9 @@ var __app = (() => {
     { id: "mom", label: "MoM", color: "#06b6d4", lookback: { Daily: 30, Weekly: 4, Monthly: 1, Quarterly: 1, Yearly: 1 } },
     { id: "qoq", label: "QoQ", color: "#ec4899", lookback: { Daily: 90, Weekly: 13, Monthly: 3, Quarterly: 1, Yearly: 1 } },
     { id: "yoy", label: "YoY", color: "#a4133c", lookback: { Daily: 365, Weekly: 52, Monthly: 12, Quarterly: 4, Yearly: 1 } },
-    { id: "sma", label: "SMA", color: "#10b981", isSMA: true, defaultWindow: 3 }
+    { id: "sma", label: "SMA", color: "#10b981", isSMA: true, defaultWindow: 3 },
+    { id: "forecast_linear", label: "Linear", color: "#2563eb", isForecast: true, defaultHorizon: 3 },
+    { id: "forecast_hw", label: "Seasonal", color: "#d946ef", isForecast: true, defaultHorizon: 3 }
   ];
   function calculatePeriodChange(currentIndex, currentValue, lookbackEntries, sortedPeriods, aggregatesByPeriod, metricName) {
     if (currentIndex < lookbackEntries) return null;
@@ -1085,6 +1087,176 @@ var __app = (() => {
       }
     }
     return result;
+  }
+  function hexToRgba(hex, alpha) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+  function detectSeasonalPeriod(dataFrequency) {
+    const map = { Daily: 7, Weekly: 52, Monthly: 12, Quarterly: 4 };
+    return map[dataFrequency] || null;
+  }
+  function generateFuturePeriods(periods, dataFrequency, horizon) {
+    if (!periods.length) return [];
+    const last = periods[periods.length - 1];
+    const result = [];
+    if (dataFrequency === "Yearly") {
+      const year = parseInt(last);
+      for (let i = 1; i <= horizon; i++) result.push(String(year + i));
+    } else if (dataFrequency === "Quarterly") {
+      let year = parseInt(last.slice(0, 4));
+      let q = parseInt(last.slice(6));
+      for (let i = 0; i < horizon; i++) {
+        q++;
+        if (q > 4) {
+          q = 1;
+          year++;
+        }
+        result.push(`${year}-Q${q}`);
+      }
+    } else if (dataFrequency === "Monthly") {
+      const isShort = last.length <= 7;
+      let year = parseInt(last.slice(0, 4));
+      let month = parseInt(last.slice(5, 7));
+      for (let i = 0; i < horizon; i++) {
+        month++;
+        if (month > 12) {
+          month = 1;
+          year++;
+        }
+        const mm = String(month).padStart(2, "0");
+        result.push(isShort ? `${year}-${mm}` : `${year}-${mm}-01`);
+      }
+    } else {
+      const step = dataFrequency === "Weekly" ? 7 : 1;
+      const d = /* @__PURE__ */ new Date(last + "T00:00:00");
+      for (let i = 0; i < horizon; i++) {
+        d.setDate(d.getDate() + step);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        result.push(`${y}-${m}-${day}`);
+      }
+    }
+    return result;
+  }
+  function forecastLinear(values, horizon) {
+    const n = values.length;
+    if (n < 3) return null;
+    let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+    for (let i = 0; i < n; i++) {
+      sumX += i;
+      sumY += values[i];
+      sumXY += i * values[i];
+      sumX2 += i * i;
+    }
+    const meanX = sumX / n;
+    const b = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+    const a = sumY / n - b * meanX;
+    let sse = 0;
+    for (let i = 0; i < n; i++) {
+      const residual = values[i] - (a + b * i);
+      sse += residual * residual;
+    }
+    const se = n > 2 ? Math.sqrt(sse / (n - 2)) : 0;
+    const sxx = sumX2 - sumX * sumX / n;
+    const forecast = [], upper = [], lower = [];
+    for (let h = 1; h <= horizon; h++) {
+      const t = n - 1 + h;
+      const yHat = a + b * t;
+      const interval = 1.96 * se * Math.sqrt(1 + 1 / n + (t - meanX) * (t - meanX) / sxx);
+      forecast.push(yHat);
+      upper.push(yHat + interval);
+      lower.push(Math.max(0, yHat - interval));
+    }
+    const holdout = Math.max(1, Math.min(horizon, Math.floor(n / 5)));
+    const trainN = n - holdout;
+    let tSumX = 0, tSumY = 0, tSumXY = 0, tSumX2 = 0;
+    for (let i = 0; i < trainN; i++) {
+      tSumX += i;
+      tSumY += values[i];
+      tSumXY += i * values[i];
+      tSumX2 += i * i;
+    }
+    const tB = (trainN * tSumXY - tSumX * tSumY) / (trainN * tSumX2 - tSumX * tSumX);
+    const tA = tSumY / trainN - tB * (tSumX / trainN);
+    let mapeSum = 0, mapeCount = 0;
+    for (let i = trainN; i < n; i++) {
+      const predicted = tA + tB * i;
+      if (Math.abs(values[i]) > 1e-3) {
+        mapeSum += Math.abs((values[i] - predicted) / values[i]);
+        mapeCount++;
+      }
+    }
+    const mape = mapeCount > 0 ? mapeSum / mapeCount * 100 : 0;
+    return { forecast, upper, lower, mape };
+  }
+  function forecastHoltWinters(values, horizon, seasonalPeriod) {
+    const n = values.length;
+    const m = seasonalPeriod;
+    if (n < m * 2) return null;
+    const alpha = 0.3, beta = 0.1, gamma = 0.3;
+    let level = 0;
+    for (let i = 0; i < m; i++) level += values[i];
+    level /= m;
+    let level2 = 0;
+    for (let i = m; i < 2 * m; i++) level2 += values[i];
+    level2 /= m;
+    let trend = (level2 - level) / m;
+    const seasonal = new Array(n);
+    for (let i = 0; i < m; i++) seasonal[i] = values[i] - level;
+    let sse = 0;
+    for (let t = m; t < n; t++) {
+      const prevLevel = level;
+      const prevTrend = trend;
+      level = alpha * (values[t] - seasonal[t - m]) + (1 - alpha) * (prevLevel + prevTrend);
+      trend = beta * (level - prevLevel) + (1 - beta) * prevTrend;
+      seasonal[t] = gamma * (values[t] - level) + (1 - gamma) * seasonal[t - m];
+      const fitted = prevLevel + prevTrend + seasonal[t - m];
+      sse += (values[t] - fitted) * (values[t] - fitted);
+    }
+    const residualStd = Math.sqrt(sse / (n - m));
+    const forecast = [], upper = [], lower = [];
+    for (let h = 1; h <= horizon; h++) {
+      const seasonIdx = n - m + (h - 1) % m;
+      const yHat = level + h * trend + seasonal[seasonIdx];
+      const interval = 1.96 * residualStd * Math.sqrt(h);
+      forecast.push(yHat);
+      upper.push(yHat + interval);
+      lower.push(Math.max(0, yHat - interval));
+    }
+    const holdout = Math.max(1, Math.min(horizon, Math.floor(n / 5)));
+    const trainN = n - holdout;
+    if (trainN < m * 2) return { forecast, upper, lower, mape: 0 };
+    let tLevel = 0;
+    for (let i = 0; i < m; i++) tLevel += values[i];
+    tLevel /= m;
+    let tLevel2 = 0;
+    for (let i = m; i < 2 * m; i++) tLevel2 += values[i];
+    tLevel2 /= m;
+    let tTrend = (tLevel2 - tLevel) / m;
+    const tSeasonal = new Array(trainN);
+    for (let i = 0; i < m; i++) tSeasonal[i] = values[i] - tLevel;
+    for (let t = m; t < trainN; t++) {
+      const pl = tLevel;
+      tLevel = alpha * (values[t] - tSeasonal[t - m]) + (1 - alpha) * (tLevel + tTrend);
+      tTrend = beta * (tLevel - pl) + (1 - beta) * tTrend;
+      tSeasonal[t] = gamma * (values[t] - tLevel) + (1 - gamma) * tSeasonal[t - m];
+    }
+    let mapeSum = 0, mapeCount = 0;
+    for (let h = 1; h <= holdout; h++) {
+      const sIdx = trainN - m + (h - 1) % m;
+      const predicted = tLevel + h * tTrend + tSeasonal[sIdx];
+      const actual = values[trainN + h - 1];
+      if (Math.abs(actual) > 1e-3) {
+        mapeSum += Math.abs((actual - predicted) / actual);
+        mapeCount++;
+      }
+    }
+    const mape = mapeCount > 0 ? mapeSum / mapeCount * 100 : 0;
+    return { forecast, upper, lower, mape };
   }
   function getDimAggMetric(aggregates, column, period, categoryValue, metricName) {
     const dimAgg = aggregates[column];
@@ -3266,6 +3438,7 @@ var __app = (() => {
               if (s.dateRange) setDateRange(s.dateRange);
               if (s.activeOverlays) setActiveOverlays(s.activeOverlays);
               if (s.smaWindow) setSmaWindow(s.smaWindow);
+              if (s.forecastHorizon) setForecastHorizon(s.forecastHorizon);
               if (s.activeInsightsTab !== void 0) setActiveInsightsTab(s.activeInsightsTab);
             }
           } catch (e) {
@@ -3459,8 +3632,9 @@ var __app = (() => {
     const [dataFrequency, setDataFrequency] = React.useState("Monthly");
     const [metric, setMetric] = React.useState("metric2");
     const [activePeriodComparison, setActivePeriodComparison] = React.useState("YoY");
-    const [activeOverlays, setActiveOverlays] = React.useState({ yoy: true });
+    const [activeOverlays, setActiveOverlays] = React.useState({ yoy: true, forecast_linear: true });
     const [smaWindow, setSmaWindow] = React.useState(3);
+    const [forecastHorizon, setForecastHorizon] = React.useState(3);
     const [showOverlayMenu, setShowOverlayMenu] = React.useState(false);
     const [view, setView] = React.useState("Overall");
     const [topX, setTopX] = React.useState(3);
@@ -3587,6 +3761,7 @@ var __app = (() => {
       dateRange,
       activeOverlays,
       smaWindow,
+      forecastHorizon,
       activeInsightsTab
     }), [
       liveColumnMeta,
@@ -3609,6 +3784,7 @@ var __app = (() => {
       dateRange,
       activeOverlays,
       smaWindow,
+      forecastHorizon,
       activeInsightsTab
     ]);
     const restoreTabSnapshot = React.useCallback((snap) => {
@@ -3630,8 +3806,9 @@ var __app = (() => {
       setSelectedCategories(snap.selectedCategories || []);
       setDynamicFilters(snap.dynamicFilters || {});
       setDateRange(snap.dateRange || "1Y");
-      setActiveOverlays(snap.activeOverlays || { yoy: true });
+      setActiveOverlays(snap.activeOverlays || { yoy: true, forecast_linear: true });
       setSmaWindow(snap.smaWindow || 3);
+      setForecastHorizon(snap.forecastHorizon || 3);
       setActiveInsightsTab(snap.activeInsightsTab || null);
     }, []);
     const uiSelectionsSaveTimerRef = React.useRef(null);
@@ -3651,6 +3828,7 @@ var __app = (() => {
           dateRange,
           activeOverlays,
           smaWindow,
+          forecastHorizon,
           activeInsightsTab
         };
         try {
@@ -3672,6 +3850,7 @@ var __app = (() => {
       dateRange,
       activeOverlays,
       smaWindow,
+      forecastHorizon,
       activeInsightsTab
     ]);
     const switchTab = React.useCallback((targetTabId) => {
@@ -7938,7 +8117,7 @@ var __app = (() => {
         chartData2 = [{ name: METRIC_LABELS[metric] || metric, visible: true }];
         OVERLAY_CONFIG.forEach((overlay) => {
           if (activeOverlays[overlay.id]) {
-            const name = overlay.isSMA ? `SMA(${smaWindow})` : overlay.label + " Change %";
+            const name = overlay.isForecast ? overlay.label : overlay.isSMA ? `SMA(${smaWindow})` : overlay.label + " Change %";
             chartData2.push({ name, visible: true });
           }
         });
@@ -7953,7 +8132,7 @@ var __app = (() => {
         (trace) => trace.visible !== "legendonly" && trace.visible !== false
       ).map((trace) => trace.name);
       return visibleTraceNames;
-    }, [view, metric, dataFrequency, prepareChartDataByAttribute, VIEW_CONFIG, activeOverlays, smaWindow, METRIC_LABELS]);
+    }, [view, metric, dataFrequency, prepareChartDataByAttribute, VIEW_CONFIG, activeOverlays, smaWindow, forecastHorizon, METRIC_LABELS]);
     const setScenario = React.useCallback(
       (index) => {
         const snapshot = captureStateSnapshot();
@@ -7983,6 +8162,7 @@ var __app = (() => {
         let primaryOverlayData = null;
         OVERLAY_CONFIG.forEach((overlay) => {
           if (!activeOverlays[overlay.id]) return;
+          if (overlay.isForecast) return;
           if (overlay.isSMA) {
             const smaData = calculateSMA(barData, smaWindow);
             overlayTraces.push({
@@ -8021,7 +8201,70 @@ var __app = (() => {
             });
           }
         });
-        const activeChangeOverlays = OVERLAY_CONFIG.filter((o) => !o.isSMA && activeOverlays[o.id]);
+        const activeForecastOverlays = OVERLAY_CONFIG.filter((o) => o.isForecast && activeOverlays[o.id]);
+        let forecastExtendedPeriods = periods;
+        let forecastUpperMax = 0;
+        const fullHistoryValues = sortedBaseDataPeriods.map((p) => {
+          const agg = baseDataAggregatesByPeriod[p];
+          return agg ? agg[metric] || 0 : 0;
+        });
+        if (activeForecastOverlays.length > 0 && fullHistoryValues.length >= 3) {
+          const futurePeriods = generateFuturePeriods(sortedBaseDataPeriods, dataFrequency, forecastHorizon);
+          forecastExtendedPeriods = [...periods, ...futurePeriods];
+          activeForecastOverlays.forEach((overlay) => {
+            let result;
+            if (overlay.id === "forecast_hw") {
+              const sp = detectSeasonalPeriod(dataFrequency);
+              result = sp && fullHistoryValues.length >= sp * 2 ? forecastHoltWinters(fullHistoryValues, forecastHorizon, sp) : forecastLinear(fullHistoryValues, forecastHorizon);
+            } else {
+              result = forecastLinear(fullHistoryValues, forecastHorizon);
+            }
+            if (!result) return;
+            forecastUpperMax = Math.max(forecastUpperMax, ...result.upper);
+            const lastActualValue = barData[barData.length - 1];
+            const bridgeY = new Array(periods.length).fill(null);
+            bridgeY[periods.length - 1] = lastActualValue;
+            const forecastY = [...bridgeY, ...result.forecast];
+            const upperY = [...bridgeY, ...result.upper];
+            const lowerY = [...new Array(periods.length).fill(null).map((_, i) => i === periods.length - 1 ? lastActualValue : null), ...result.lower];
+            const mapeLabel = result.mape > 0 ? ` (MAPE: ${result.mape.toFixed(1)}%)` : "";
+            overlayTraces.push({
+              type: "scatter",
+              mode: "lines",
+              x: forecastExtendedPeriods,
+              y: forecastY,
+              name: `${overlay.label}${mapeLabel}`,
+              yaxis: "y",
+              line: { color: overlay.color, width: 2.5, dash: "dash" },
+              connectgaps: false,
+              customdata: forecastY.map((v) => v !== null ? formatMetricValue(v, metric) : "N/A"),
+              hovertemplate: `${overlay.label}: %{customdata}<extra></extra>`
+            });
+            overlayTraces.push({
+              type: "scatter",
+              mode: "lines",
+              x: forecastExtendedPeriods,
+              y: upperY,
+              yaxis: "y",
+              line: { width: 0 },
+              showlegend: false,
+              hoverinfo: "skip"
+            });
+            overlayTraces.push({
+              type: "scatter",
+              mode: "lines",
+              x: forecastExtendedPeriods,
+              y: lowerY,
+              yaxis: "y",
+              line: { width: 0 },
+              fill: "tonexty",
+              fillcolor: hexToRgba(overlay.color, 0.12),
+              showlegend: false,
+              hoverinfo: "skip"
+            });
+          });
+        }
+        const activeChangeOverlays = OVERLAY_CONFIG.filter((o) => !o.isSMA && !o.isForecast && activeOverlays[o.id]);
         const textAnnotations = barData.map((value, index) => {
           let annotation = formatMetric(value);
           if (activeChangeOverlays.length === 1 && primaryOverlayData) {
@@ -8086,9 +8329,9 @@ var __app = (() => {
             showgrid: false,
             showspikes: false,
             // Show all ticks if total number of ticks is <= 12
-            tickmode: periods.length <= 12 ? "array" : "auto",
-            tickvals: periods.length <= 12 ? periods : void 0,
-            ticktext: formatXAxisTicks(periods)
+            tickmode: forecastExtendedPeriods.length <= 12 ? "array" : "auto",
+            tickvals: forecastExtendedPeriods.length <= 12 ? forecastExtendedPeriods : void 0,
+            ticktext: formatXAxisTicks(forecastExtendedPeriods)
           },
           yaxis: {
             title: {
@@ -8101,7 +8344,7 @@ var __app = (() => {
             side: "left",
             showspikes: false,
             range: barData.length > 0 ? (() => {
-              const maxValue = Math.max(...barData);
+              const maxValue = Math.max(...barData, forecastUpperMax);
               const minValue = Math.min(...barData);
               if (minValue < 0) {
                 return [minValue * 1.3, maxValue * 1.3];
@@ -8111,6 +8354,16 @@ var __app = (() => {
               return void 0;
             })() : void 0
           },
+          // Vertical separator at forecast boundary
+          shapes: activeForecastOverlays.length > 0 ? [{
+            type: "line",
+            x0: periods[periods.length - 1],
+            x1: periods[periods.length - 1],
+            y0: 0,
+            y1: 1,
+            yref: "paper",
+            line: { color: "#9ca3af", width: 1.5, dash: "dot" }
+          }] : [],
           yaxis2: activeChangeOverlays.length > 0 ? {
             title: {
               text: activeChangeOverlays.map((o) => o.label).join(" / ") + " Change (%)",
@@ -8256,6 +8509,7 @@ var __app = (() => {
       periodAggregates,
       activeOverlays,
       smaWindow,
+      forecastHorizon,
       sortedBaseDataPeriods,
       baseDataAggregatesByPeriod,
       formatMetricValue,
@@ -10189,6 +10443,29 @@ var __app = (() => {
             value: smaWindow,
             onClick: (e) => e.stopPropagation(),
             onChange: (e) => setSmaWindow(Math.max(2, Math.min(52, parseInt(e.target.value) || 3))),
+            style: {
+              width: "36px",
+              padding: "1px 3px",
+              fontSize: "11px",
+              borderRadius: "4px",
+              border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`,
+              textAlign: "center",
+              backgroundColor: isDarkMode ? "#111827" : "#f9fafb",
+              color: isDarkMode ? "#f3f4f6" : "#111827",
+              outline: "none",
+              marginLeft: "auto"
+            }
+          }
+        ),
+        overlay.isForecast && isActive && /* @__PURE__ */ React.createElement(
+          "input",
+          {
+            type: "number",
+            min: 1,
+            max: 12,
+            value: forecastHorizon,
+            onClick: (e) => e.stopPropagation(),
+            onChange: (e) => setForecastHorizon(Math.max(1, Math.min(12, parseInt(e.target.value) || 3))),
             style: {
               width: "36px",
               padding: "1px 3px",
