@@ -1280,6 +1280,8 @@ export function render() {
 
   // Track whether we've restored saved UI selections for initial page load
   const uiSelectionsRestoredRef = React.useRef(new Set());
+  // Deferred restore for trace toggles (useState declared after schema effect)
+  const pendingTraceTogglesRef = React.useRef(null);
 
   // Derive connectionParams from baseConnection + active tab
   const activeTab = tabs.find(t => t.id === activeTabId) || null;
@@ -1582,6 +1584,14 @@ export function render() {
               if (s.smaWindow) setSmaWindow(s.smaWindow);
               if (s.forecastHorizon) setForecastHorizon(s.forecastHorizon);
               if (s.activeInsightsTab !== undefined) setActiveInsightsTab(s.activeInsightsTab);
+              // Trace toggles restored via pendingTraceTogglesRef (useState declared later)
+              if (s.showAllDollarTraces !== undefined || s.showAllShareTraces !== undefined || s.showAllGrowthTraces !== undefined) {
+                pendingTraceTogglesRef.current = {
+                  showAllDollarTraces: s.showAllDollarTraces,
+                  showAllShareTraces: s.showAllShareTraces,
+                  showAllGrowthTraces: s.showAllGrowthTraces,
+                };
+              }
             }
           } catch (e) {}
         }
@@ -2010,6 +2020,7 @@ export function render() {
     liveColumnMeta, liveSchemaReady, liveFilterOptions,
     livePeriodAggregates, liveDimensionAggregates, liveAggLoading,
     liveRowCount, liveDataTruncated, liveMetricConfig, liveDataError,
+    liveInsightsDimAggs,
     // UI state
     dataFrequency, metric, view, topX, categorySelectionMode,
     selectedCategories, dynamicFilters, dateRange,
@@ -2018,6 +2029,7 @@ export function render() {
     liveColumnMeta, liveSchemaReady, liveFilterOptions,
     livePeriodAggregates, liveDimensionAggregates, liveAggLoading,
     liveRowCount, liveDataTruncated, liveMetricConfig, liveDataError,
+    liveInsightsDimAggs,
     dataFrequency, metric, view, topX, categorySelectionMode,
     selectedCategories, dynamicFilters, dateRange,
     activeOverlays, smaWindow, forecastHorizon, activeInsightsTab,
@@ -2036,6 +2048,7 @@ export function render() {
     setLiveDataTruncated(snap.liveDataTruncated || false);
     setLiveMetricConfig(snap.liveMetricConfig || null);
     setLiveDataError(snap.liveDataError || null);
+    setLiveInsightsDimAggs(snap.liveInsightsDimAggs || {});
     // UI state
     const grainToFreq = { day: 'Daily', week: 'Weekly', month: 'Monthly', quarter: 'Quarterly', year: 'Yearly' };
     const defaultFromGrain = snap.liveMetricConfig?.defaultGrain ? grainToFreq[snap.liveMetricConfig.defaultGrain] : null;
@@ -2409,6 +2422,33 @@ export function render() {
   const [showAllShareTraces, setShowAllShareTraces] = React.useState(false);
   const [showAllGrowthTraces, setShowAllGrowthTraces] = React.useState(false);
   const [showAllDollarTraces, setShowAllDollarTraces] = React.useState(true);
+
+  // Apply deferred trace toggle restore from localStorage (declared after schema effect)
+  React.useEffect(() => {
+    if (pendingTraceTogglesRef.current) {
+      const p = pendingTraceTogglesRef.current;
+      if (p.showAllDollarTraces !== undefined) setShowAllDollarTraces(p.showAllDollarTraces);
+      if (p.showAllShareTraces !== undefined) setShowAllShareTraces(p.showAllShareTraces);
+      if (p.showAllGrowthTraces !== undefined) setShowAllGrowthTraces(p.showAllGrowthTraces);
+      pendingTraceTogglesRef.current = null;
+    }
+  });
+
+  // Persist trace toggles to localStorage (separate effect because useState is declared late)
+  React.useEffect(() => {
+    if (!connectionParams || !liveSchemaReady || !activeTabId) return;
+    const selectionsKey = 'uiSelections_' + connectionParams.supabaseUrl + '_' + activeTabId;
+    try {
+      const saved = localStorage.getItem(selectionsKey);
+      if (saved) {
+        const existing = JSON.parse(saved);
+        existing.showAllDollarTraces = showAllDollarTraces;
+        existing.showAllShareTraces = showAllShareTraces;
+        existing.showAllGrowthTraces = showAllGrowthTraces;
+        localStorage.setItem(selectionsKey, JSON.stringify(existing));
+      }
+    } catch (e) {}
+  }, [connectionParams, liveSchemaReady, activeTabId, showAllDollarTraces, showAllShareTraces, showAllGrowthTraces]);
 
   const [queryText, setQueryText] = React.useState("");
   const [showQueryTooltip, setShowQueryTooltip] = React.useState(false);
@@ -6756,7 +6796,7 @@ export function render() {
             const categoryColor = getCategoryColor(category, index);
             const blendedColor = scenarioColor; // Use scenario color instead
 
-            if (scenarioMetric === "metric3") {
+            if (resolveChartType(scenarioMetric) === "line") {
               scenarioTraces.push({
                 type: "scatter",
                 mode: "lines+markers",
@@ -10249,7 +10289,7 @@ export function render() {
           )}
 
           {/* Toggle buttons for $ Share, %Share and %Share Growth traces (only for Volume and Revenue) */}
-          {view !== "Overall" && metric !== "metric3" && (
+          {view !== "Overall" && resolveChartType(metric) !== "line" && (
             <div
               style={{
                 display: "flex",
@@ -10261,7 +10301,7 @@ export function render() {
               }}
             >
               <button
-                onClick={() => setShowAllDollarTraces(!showAllDollarTraces)}
+                onClick={() => { setShowAllDollarTraces(!showAllDollarTraces); setTraceVisibility({}); }}
                 style={{
                   padding: "6px 12px",
                   backgroundColor: showAllDollarTraces ? "#8b5cf6" : "white",
@@ -10276,7 +10316,7 @@ export function render() {
                 {showAllDollarTraces ? "✓" : ""} $ Share
               </button>
               <button
-                onClick={() => setShowAllShareTraces(!showAllShareTraces)}
+                onClick={() => { setShowAllShareTraces(!showAllShareTraces); setTraceVisibility({}); }}
                 style={{
                   padding: "6px 12px",
                   backgroundColor: showAllShareTraces ? "#6366f1" : "white",
@@ -10291,7 +10331,7 @@ export function render() {
                 {showAllShareTraces ? "✓" : ""} %Share
               </button>
               <button
-                onClick={() => setShowAllGrowthTraces(!showAllGrowthTraces)}
+                onClick={() => { setShowAllGrowthTraces(!showAllGrowthTraces); setTraceVisibility({}); }}
                 style={{
                   padding: "6px 12px",
                   backgroundColor: showAllGrowthTraces ? "#10b981" : "white",

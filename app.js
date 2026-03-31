@@ -3205,6 +3205,7 @@ var __app = (() => {
       });
     }, []);
     const uiSelectionsRestoredRef = React.useRef(/* @__PURE__ */ new Set());
+    const pendingTraceTogglesRef = React.useRef(null);
     const activeTab = tabs.find((t) => t.id === activeTabId) || null;
     const connectionParams = React.useMemo(() => {
       if (!baseConnection || !activeTab || !activeTab.dataset) return null;
@@ -3452,6 +3453,13 @@ var __app = (() => {
               if (s.smaWindow) setSmaWindow(s.smaWindow);
               if (s.forecastHorizon) setForecastHorizon(s.forecastHorizon);
               if (s.activeInsightsTab !== void 0) setActiveInsightsTab(s.activeInsightsTab);
+              if (s.showAllDollarTraces !== void 0 || s.showAllShareTraces !== void 0 || s.showAllGrowthTraces !== void 0) {
+                pendingTraceTogglesRef.current = {
+                  showAllDollarTraces: s.showAllDollarTraces,
+                  showAllShareTraces: s.showAllShareTraces,
+                  showAllGrowthTraces: s.showAllGrowthTraces
+                };
+              }
             }
           } catch (e) {
           }
@@ -3762,6 +3770,7 @@ var __app = (() => {
       liveDataTruncated,
       liveMetricConfig,
       liveDataError,
+      liveInsightsDimAggs,
       // UI state
       dataFrequency,
       metric,
@@ -3786,6 +3795,7 @@ var __app = (() => {
       liveDataTruncated,
       liveMetricConfig,
       liveDataError,
+      liveInsightsDimAggs,
       dataFrequency,
       metric,
       view,
@@ -3810,6 +3820,7 @@ var __app = (() => {
       setLiveDataTruncated(snap.liveDataTruncated || false);
       setLiveMetricConfig(snap.liveMetricConfig || null);
       setLiveDataError(snap.liveDataError || null);
+      setLiveInsightsDimAggs(snap.liveInsightsDimAggs || {});
       const grainToFreq = { day: "Daily", week: "Weekly", month: "Monthly", quarter: "Quarterly", year: "Yearly" };
       const defaultFromGrain = snap.liveMetricConfig?.defaultGrain ? grainToFreq[snap.liveMetricConfig.defaultGrain] : null;
       setDataFrequency(snap.dataFrequency || defaultFromGrain || "Monthly");
@@ -4178,6 +4189,30 @@ var __app = (() => {
     const [showAllShareTraces, setShowAllShareTraces] = React.useState(false);
     const [showAllGrowthTraces, setShowAllGrowthTraces] = React.useState(false);
     const [showAllDollarTraces, setShowAllDollarTraces] = React.useState(true);
+    React.useEffect(() => {
+      if (pendingTraceTogglesRef.current) {
+        const p = pendingTraceTogglesRef.current;
+        if (p.showAllDollarTraces !== void 0) setShowAllDollarTraces(p.showAllDollarTraces);
+        if (p.showAllShareTraces !== void 0) setShowAllShareTraces(p.showAllShareTraces);
+        if (p.showAllGrowthTraces !== void 0) setShowAllGrowthTraces(p.showAllGrowthTraces);
+        pendingTraceTogglesRef.current = null;
+      }
+    });
+    React.useEffect(() => {
+      if (!connectionParams || !liveSchemaReady || !activeTabId) return;
+      const selectionsKey = "uiSelections_" + connectionParams.supabaseUrl + "_" + activeTabId;
+      try {
+        const saved = localStorage.getItem(selectionsKey);
+        if (saved) {
+          const existing = JSON.parse(saved);
+          existing.showAllDollarTraces = showAllDollarTraces;
+          existing.showAllShareTraces = showAllShareTraces;
+          existing.showAllGrowthTraces = showAllGrowthTraces;
+          localStorage.setItem(selectionsKey, JSON.stringify(existing));
+        }
+      } catch (e) {
+      }
+    }, [connectionParams, liveSchemaReady, activeTabId, showAllDollarTraces, showAllShareTraces, showAllGrowthTraces]);
     const [queryText, setQueryText] = React.useState("");
     const [showQueryTooltip, setShowQueryTooltip] = React.useState(false);
     const lastExecutedQueryRef = React.useRef("");
@@ -7442,7 +7477,7 @@ var __app = (() => {
               });
               const categoryColor = getCategoryColor(category, index);
               const blendedColor = scenarioColor;
-              if (scenarioMetric === "metric3") {
+              if (resolveChartType(scenarioMetric) === "line") {
                 scenarioTraces.push({
                   type: "scatter",
                   mode: "lines+markers",
@@ -10284,7 +10319,7 @@ var __app = (() => {
         ),
         /* @__PURE__ */ React.createElement("span", { style: styles.categoryLabelText }, formatFilterName2(category))
       );
-    }) : /* @__PURE__ */ React.createElement("div", { style: styles.noCategoriesFound }, 'No categories found matching "', categorySearchText, '"')))))), view !== "Overall" && metric !== "metric3" && /* @__PURE__ */ React.createElement(
+    }) : /* @__PURE__ */ React.createElement("div", { style: styles.noCategoriesFound }, 'No categories found matching "', categorySearchText, '"')))))), view !== "Overall" && resolveChartType(metric) !== "line" && /* @__PURE__ */ React.createElement(
       "div",
       {
         style: {
@@ -10299,7 +10334,10 @@ var __app = (() => {
       /* @__PURE__ */ React.createElement(
         "button",
         {
-          onClick: () => setShowAllDollarTraces(!showAllDollarTraces),
+          onClick: () => {
+            setShowAllDollarTraces(!showAllDollarTraces);
+            setTraceVisibility({});
+          },
           style: {
             padding: "6px 12px",
             backgroundColor: showAllDollarTraces ? "#8b5cf6" : "white",
@@ -10317,7 +10355,10 @@ var __app = (() => {
       /* @__PURE__ */ React.createElement(
         "button",
         {
-          onClick: () => setShowAllShareTraces(!showAllShareTraces),
+          onClick: () => {
+            setShowAllShareTraces(!showAllShareTraces);
+            setTraceVisibility({});
+          },
           style: {
             padding: "6px 12px",
             backgroundColor: showAllShareTraces ? "#6366f1" : "white",
@@ -10335,7 +10376,10 @@ var __app = (() => {
       /* @__PURE__ */ React.createElement(
         "button",
         {
-          onClick: () => setShowAllGrowthTraces(!showAllGrowthTraces),
+          onClick: () => {
+            setShowAllGrowthTraces(!showAllGrowthTraces);
+            setTraceVisibility({});
+          },
           style: {
             padding: "6px 12px",
             backgroundColor: showAllGrowthTraces ? "#10b981" : "white",
