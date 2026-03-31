@@ -5759,6 +5759,13 @@ var __app = (() => {
       }
       return metricName === "metric3" ? "line" : "stacked";
     }, [isLiveMode, liveMetricConfig]);
+    const isFormulaMetric = React.useCallback((metricName) => {
+      if (isLiveMode && liveMetricConfig) {
+        const prefix = metricName === "metric1" ? "volume" : metricName === "metric2" ? "revenue" : "derived";
+        return (liveMetricConfig[prefix + "Mode"] || "aggregation") === "formula";
+      }
+      return metricName === "metric3";
+    }, [isLiveMode, liveMetricConfig]);
     const formatMetricValue = React.useCallback((value, metricName) => {
       if (isLiveMode && liveMetricConfig) {
         if (metricName === "metric1") {
@@ -5886,7 +5893,7 @@ var __app = (() => {
           const useSimpleMode = marketAvgGrowth == null;
           const excessVsMarket = marketAvgGrowth != null ? categoryGrowth - marketAvgGrowth : null;
           let baseShare, excessContribution, pctOfExcess;
-          if (metric === "metric3") {
+          if (isFormulaMetric(metric)) {
             const categoryFirstRev = getDimAggMetric(
               dimensionAggregates,
               column,
@@ -6512,7 +6519,7 @@ var __app = (() => {
       };
       const detectMarketShareShifts = () => {
         if (completePeriods.length < 2) return [];
-        if (metric === "metric3") return [];
+        if (isFormulaMetric(metric)) return [];
         const insights = DIMENSION_DEFINITIONS.flatMap((dim) => {
           const column = COLUMNS[dim.columnKey];
           if (!columnExists(column)) return [];
@@ -6651,7 +6658,7 @@ var __app = (() => {
         if (sorted.length === 0) return;
         const [topValue, topMetricValue] = sorted[0];
         let marketShare, displayValue;
-        if (metric === "metric3") {
+        if (isFormulaMetric(metric)) {
           const catData = dimData[topValue];
           displayValue = topMetricValue;
           marketShare = totalRevShare > 0 ? catData.metric2 / totalRevShare * 100 : 0;
@@ -6661,8 +6668,8 @@ var __app = (() => {
         }
         const minThreshold = INSIGHT_THRESHOLDS.minMarketShareThreshold;
         const isNear100Percent = marketShare >= 99.5;
-        if ((metric === "metric3" || marketShare > minThreshold) && !isNear100Percent) {
-          const shareText = metric === "metric3" ? formatMetric(displayValue) : `${marketShare.toFixed(1)}% share (${formatMetric(
+        if ((isFormulaMetric(metric) || marketShare > minThreshold) && !isNear100Percent) {
+          const shareText = isFormulaMetric(metric) ? formatMetric(displayValue) : `${marketShare.toFixed(1)}% share (${formatMetric(
             displayValue
           )})`;
           const priority = calculateBasePriority(marketShare, "market_share");
@@ -7453,7 +7460,7 @@ var __app = (() => {
                 (row) => scenarioFilteredDates.includes(row[scenarioDateField]) && row[attribute] === attrValue
               );
               let total;
-              if (scenarioMetric === "metric3") {
+              if (isFormulaMetric(scenarioMetric)) {
                 total = attrRows.reduce(
                   (sum, row) => sum + (row[COLUMNS.METRIC2] || 0),
                   0
@@ -7768,7 +7775,7 @@ var __app = (() => {
             metric1: 0,
             metric2: 0
           };
-          const total = metric === "metric3" ? totals.metric2 : totals[metric] || totals.metric1;
+          const total = isFormulaMetric(metric) ? totals.metric2 : totals[metric] || totals.metric1;
           return { attrValue, total };
         });
         const sortedAttributes = attributeTotals.sort(
@@ -7818,7 +7825,7 @@ var __app = (() => {
                 metric
               );
             }
-            if (metric === "metric3") {
+            if (isFormulaMetric(metric)) {
               let m1Sum = 0, m2Sum = 0;
               const dimAgg2 = dimensionAggregates[attribute];
               restAttributes.forEach((restAttr) => {
@@ -7846,7 +7853,7 @@ var __app = (() => {
             const totalForPeriod = periodTotals[periodIndex];
             const periodTotalAgg = periodAggregates[period];
             let percentage;
-            if (metric === "metric3") {
+            if (isFormulaMetric(metric)) {
               const totalM1 = periodTotalAgg ? periodTotalAgg.metric1 : 0;
               let categoryM1 = 0;
               if (category === "Rest Combined" && !(isLiveMode && topX > 0)) {
@@ -7862,7 +7869,7 @@ var __app = (() => {
             } else {
               percentage = value !== null && totalForPeriod > 0 ? value / totalForPeriod * 100 : 0;
             }
-            if (metric !== "metric3") {
+            if (!isFormulaMetric(metric)) {
               if (!sharePercentages[category]) {
                 sharePercentages[category] = [];
               }

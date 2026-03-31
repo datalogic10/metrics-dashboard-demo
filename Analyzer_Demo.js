@@ -4422,6 +4422,17 @@ export function render() {
     return metricName === 'metric3' ? 'line' : 'stacked';
   }, [isLiveMode, liveMetricConfig]);
 
+  // Check if a metric is computed via formula (ratio/derived) vs aggregation (sum/count)
+  // Used to gate ratio-aware logic: market share, %Share traces, sorting, Rest Combined
+  const isFormulaMetric = React.useCallback((metricName) => {
+    if (isLiveMode && liveMetricConfig) {
+      const prefix = metricName === 'metric1' ? 'volume' : metricName === 'metric2' ? 'revenue' : 'derived';
+      return (liveMetricConfig[prefix + 'Mode'] || 'aggregation') === 'formula';
+    }
+    // Demo mode: metric3 is the only formula metric
+    return metricName === 'metric3';
+  }, [isLiveMode, liveMetricConfig]);
+
   const formatMetricValue = React.useCallback((value, metricName) => {
     // Live mode: use metric config formatting with prefix/suffix
     if (isLiveMode && liveMetricConfig) {
@@ -4602,7 +4613,7 @@ export function render() {
 
         let baseShare, excessContribution, pctOfExcess;
 
-        if (metric === "metric3") {
+        if (isFormulaMetric(metric)) {
           const categoryFirstRev = getDimAggMetric(
             dimensionAggregates,
             column,
@@ -5419,8 +5430,8 @@ export function render() {
     const detectMarketShareShifts = () => {
       if (completePeriods.length < 2) return [];
 
-      // Market share shifts don't make sense for Margin Rate metric
-      if (metric === "metric3") return [];
+      // Market share shifts don't make sense for formula (ratio/derived) metrics
+      if (isFormulaMetric(metric)) return [];
 
       const insights = DIMENSION_DEFINITIONS.flatMap((dim) => {
         const column = COLUMNS[dim.columnKey];
@@ -5635,7 +5646,7 @@ export function render() {
 
       // Calculate market share and display value
       let marketShare, displayValue;
-      if (metric === "metric3") {
+      if (isFormulaMetric(metric)) {
         // 🚀 PERFORMANCE: Use precomputed aggregates instead of row-level reduce
         const catData = dimData[topValue];
         displayValue = topMetricValue;
@@ -5651,11 +5662,11 @@ export function render() {
       const isNear100Percent = marketShare >= 99.5;
 
       if (
-        (metric === "metric3" || marketShare > minThreshold) &&
+        (isFormulaMetric(metric) || marketShare > minThreshold) &&
         !isNear100Percent
       ) {
         const shareText =
-          metric === "metric3"
+          isFormulaMetric(metric)
             ? formatMetric(displayValue)
             : `${marketShare.toFixed(1)}% share (${formatMetric(
                 displayValue
@@ -6765,7 +6776,7 @@ export function render() {
                 row[attribute] === attrValue
             );
             let total;
-            if (scenarioMetric === "metric3") {
+            if (isFormulaMetric(scenarioMetric)) {
               total = attrRows.reduce(
                 (sum, row) =>
                   sum +
@@ -7209,9 +7220,9 @@ export function render() {
           metric1: 0,
           metric2: 0,
         };
-        // For metric3 (derived), use metric2 for sorting instead of the ratio
+        // For formula (derived) metrics, use metric2 for sorting instead of the ratio
         const total =
-          metric === "metric3"
+          isFormulaMetric(metric)
             ? totals.metric2
             : totals[metric] || totals.metric1;
         return { attrValue, total };
@@ -7298,8 +7309,8 @@ export function render() {
             );
           }
 
-          // For client-side "Rest Combined": sum base metrics first for metric3 (not the ratios themselves)
-          if (metric === "metric3") {
+          // For client-side "Rest Combined": sum base metrics first for formula metrics (not the ratios themselves)
+          if (isFormulaMetric(metric)) {
             let m1Sum = 0,
               m2Sum = 0;
             const dimAgg = dimensionAggregates[attribute];
@@ -7336,8 +7347,8 @@ export function render() {
           const periodTotalAgg = periodAggregates[period];
           let percentage;
 
-          if (metric === "metric3") {
-            // For metric3 (derived), calculate share based on metric1 using pre-computed aggregates
+          if (isFormulaMetric(metric)) {
+            // For formula (derived) metrics, calculate share based on metric1 using pre-computed aggregates
             const totalM1 = periodTotalAgg ? periodTotalAgg.metric1 : 0;
 
             let categoryM1 = 0;
@@ -7359,8 +7370,8 @@ export function render() {
               (value !== null && totalForPeriod > 0) ? (value / totalForPeriod) * 100 : 0;
           }
 
-          // Store share percentage for %Share traces (only for Volume and Revenue)
-          if (metric !== "metric3") {
+          // Store share percentage for %Share traces (skip for formula/ratio metrics)
+          if (!isFormulaMetric(metric)) {
             if (!sharePercentages[category]) {
               sharePercentages[category] = [];
             }
