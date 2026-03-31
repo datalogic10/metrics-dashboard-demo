@@ -10326,7 +10326,7 @@ export function render() {
             </div>
           )}
 
-          {/* Toggle buttons for $ Share, %Share and %Share Growth traces (only for Volume and Revenue) */}
+          {/* Toggle buttons for Values, %Share and %Share Growth traces (only for non-formula metrics) */}
           {view !== "Overall" && resolveChartType(metric) !== "line" && (
             <div
               style={{
@@ -10351,7 +10351,7 @@ export function render() {
                   cursor: "pointer",
                 }}
               >
-                {showAllDollarTraces ? "✓" : ""} $ Share
+                {showAllDollarTraces ? "✓" : ""} Values
               </button>
               <button
                 onClick={() => { setShowAllShareTraces(!showAllShareTraces); setTraceVisibility({}); }}

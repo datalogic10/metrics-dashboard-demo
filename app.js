@@ -10378,7 +10378,7 @@ var __app = (() => {
           }
         },
         showAllDollarTraces ? "\u2713" : "",
-        " $ Share"
+        " Values"
       ),
       /* @__PURE__ */ React.createElement(
         "button",
