@@ -5590,7 +5590,7 @@ export function render() {
 
       structuredInsights.basicInsights.overallTrends.push(
         createInsight(
-          `Overall ${metric} ${direction} ${absoluteGrowth.toFixed(
+          `Overall ${METRIC_LABELS[metric] || metric} ${direction} ${absoluteGrowth.toFixed(
             1
           )}% from ${formatMetric(firstValue)} to ${formatMetric(
             lastValue
@@ -5890,7 +5890,7 @@ export function render() {
 
               structuredInsights.advancedInsights.allTimeGrowth.push(
                 createInsight(
-                  `${metric} from ${formattedSegment} users ${
+                  `${METRIC_LABELS[metric] || metric} from ${formattedSegment} users ${
                     item.direction
                   } ${item.absoluteGrowth.toFixed(1)}% from ${formatMetric(
                     item.firstValue
@@ -6062,7 +6062,7 @@ export function render() {
               createInsight(
                 `${formatFilterName(
                   categoryValue
-                )} ${metric} ${direction} ${absoluteGrowth.toFixed(
+                )} ${METRIC_LABELS[metric] || metric} ${direction} ${absoluteGrowth.toFixed(
                   1
                 )}% in recent periods (${formatMetric(
                   categoryFirstValue

@@ -6621,7 +6621,7 @@ var __app = (() => {
         const priority = calculateBasePriority(totalGrowth, "growth_percentage");
         structuredInsights2.basicInsights.overallTrends.push(
           createInsight(
-            `Overall ${metric} ${direction} ${absoluteGrowth.toFixed(
+            `Overall ${METRIC_LABELS[metric] || metric} ${direction} ${absoluteGrowth.toFixed(
               1
             )}% from ${formatMetric(firstValue)} to ${formatMetric(
               lastValue
@@ -6847,7 +6847,7 @@ var __app = (() => {
               );
               structuredInsights2.advancedInsights.allTimeGrowth.push(
                 createInsight(
-                  `${metric} from ${formattedSegment} users ${item.direction} ${item.absoluteGrowth.toFixed(1)}% from ${formatMetric(
+                  `${METRIC_LABELS[metric] || metric} from ${formattedSegment} users ${item.direction} ${item.absoluteGrowth.toFixed(1)}% from ${formatMetric(
                     item.firstValue
                   )} to ${formatMetric(item.lastValue)}${relativeText}`,
                   priority,
@@ -6945,7 +6945,7 @@ var __app = (() => {
                 createInsight(
                   `${formatFilterName2(
                     categoryValue
-                  )} ${metric} ${direction} ${absoluteGrowth.toFixed(
+                  )} ${METRIC_LABELS[metric] || metric} ${direction} ${absoluteGrowth.toFixed(
                     1
                   )}% in recent periods (${formatMetric(
                     categoryFirstValue
