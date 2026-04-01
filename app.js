@@ -1,8 +1,13 @@
 var __app = (() => {
+  var __create = Object.create;
   var __defProp = Object.defineProperty;
   var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
   var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __getProtoOf = Object.getPrototypeOf;
   var __hasOwnProp = Object.prototype.hasOwnProperty;
+  var __commonJS = (cb, mod) => function __require() {
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  };
   var __export = (target, all) => {
     for (var name in all)
       __defProp(target, name, { get: all[name], enumerable: true });
@@ -15,7 +20,431 @@ var __app = (() => {
     }
     return to;
   };
+  var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+    // If the importer is in node compatibility mode or this is not an ESM
+    // file that has been converted to a CommonJS file using a Babel-
+    // compatible transform (i.e. "__esModule" has not been set), then set
+    // "default" to the CommonJS "module.exports" for node compatibility.
+    isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+    mod
+  ));
   var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+
+  // node_modules/papaparse/papaparse.min.js
+  var require_papaparse_min = __commonJS({
+    "node_modules/papaparse/papaparse.min.js"(exports, module) {
+      ((e, t) => {
+        "function" == typeof define && define.amd ? define([], t) : "object" == typeof module && "undefined" != typeof exports ? module.exports = t() : e.Papa = t();
+      })(exports, function r() {
+        var n = "undefined" != typeof self ? self : "undefined" != typeof window ? window : void 0 !== n ? n : {};
+        var d, s = !n.document && !!n.postMessage, a = n.IS_PAPA_WORKER || false, o = {}, h = 0, v = {};
+        function u(e) {
+          this._handle = null, this._finished = false, this._completed = false, this._halted = false, this._input = null, this._baseIndex = 0, this._partialLine = "", this._rowCount = 0, this._start = 0, this._nextChunk = null, this.isFirstChunk = true, this._completeResults = { data: [], errors: [], meta: {} }, function(e2) {
+            var t = b(e2);
+            t.chunkSize = parseInt(t.chunkSize), e2.step || e2.chunk || (t.chunkSize = null);
+            this._handle = new i(t), (this._handle.streamer = this)._config = t;
+          }.call(this, e), this.parseChunk = function(t, e2) {
+            var i2 = parseInt(this._config.skipFirstNLines) || 0;
+            if (this.isFirstChunk && 0 < i2) {
+              let e3 = this._config.newline;
+              e3 || (r2 = this._config.quoteChar || '"', e3 = this._handle.guessLineEndings(t, r2)), t = [...t.split(e3).slice(i2)].join(e3);
+            }
+            this.isFirstChunk && U(this._config.beforeFirstChunk) && void 0 !== (r2 = this._config.beforeFirstChunk(t)) && (t = r2), this.isFirstChunk = false, this._halted = false;
+            var i2 = this._partialLine + t, r2 = (this._partialLine = "", this._handle.parse(i2, this._baseIndex, !this._finished));
+            if (!this._handle.paused() && !this._handle.aborted()) {
+              t = r2.meta.cursor, i2 = (this._finished || (this._partialLine = i2.substring(t - this._baseIndex), this._baseIndex = t), r2 && r2.data && (this._rowCount += r2.data.length), this._finished || this._config.preview && this._rowCount >= this._config.preview);
+              if (a) n.postMessage({ results: r2, workerId: v.WORKER_ID, finished: i2 });
+              else if (U(this._config.chunk) && !e2) {
+                if (this._config.chunk(r2, this._handle), this._handle.paused() || this._handle.aborted()) return void (this._halted = true);
+                this._completeResults = r2 = void 0;
+              }
+              return this._config.step || this._config.chunk || (this._completeResults.data = this._completeResults.data.concat(r2.data), this._completeResults.errors = this._completeResults.errors.concat(r2.errors), this._completeResults.meta = r2.meta), this._completed || !i2 || !U(this._config.complete) || r2 && r2.meta.aborted || (this._config.complete(this._completeResults, this._input), this._completed = true), i2 || r2 && r2.meta.paused || this._nextChunk(), r2;
+            }
+            this._halted = true;
+          }, this._sendError = function(e2) {
+            U(this._config.error) ? this._config.error(e2) : a && this._config.error && n.postMessage({ workerId: v.WORKER_ID, error: e2, finished: false });
+          };
+        }
+        function f(e) {
+          var r2;
+          (e = e || {}).chunkSize || (e.chunkSize = v.RemoteChunkSize), u.call(this, e), this._nextChunk = s ? function() {
+            this._readChunk(), this._chunkLoaded();
+          } : function() {
+            this._readChunk();
+          }, this.stream = function(e2) {
+            this._input = e2, this._nextChunk();
+          }, this._readChunk = function() {
+            if (this._finished) this._chunkLoaded();
+            else {
+              if (r2 = new XMLHttpRequest(), this._config.withCredentials && (r2.withCredentials = this._config.withCredentials), s || (r2.onload = y(this._chunkLoaded, this), r2.onerror = y(this._chunkError, this)), r2.open(this._config.downloadRequestBody ? "POST" : "GET", this._input, !s), this._config.downloadRequestHeaders) {
+                var e2, t = this._config.downloadRequestHeaders;
+                for (e2 in t) r2.setRequestHeader(e2, t[e2]);
+              }
+              var i2;
+              this._config.chunkSize && (i2 = this._start + this._config.chunkSize - 1, r2.setRequestHeader("Range", "bytes=" + this._start + "-" + i2));
+              try {
+                r2.send(this._config.downloadRequestBody);
+              } catch (e3) {
+                this._chunkError(e3.message);
+              }
+              s && 0 === r2.status && this._chunkError();
+            }
+          }, this._chunkLoaded = function() {
+            4 === r2.readyState && (r2.status < 200 || 400 <= r2.status ? this._chunkError() : (this._start += this._config.chunkSize || r2.responseText.length, this._finished = !this._config.chunkSize || this._start >= ((e2) => null !== (e2 = e2.getResponseHeader("Content-Range")) ? parseInt(e2.substring(e2.lastIndexOf("/") + 1)) : -1)(r2), this.parseChunk(r2.responseText)));
+          }, this._chunkError = function(e2) {
+            e2 = r2.statusText || e2;
+            this._sendError(new Error(e2));
+          };
+        }
+        function l(e) {
+          (e = e || {}).chunkSize || (e.chunkSize = v.LocalChunkSize), u.call(this, e);
+          var i2, r2, n2 = "undefined" != typeof FileReader;
+          this.stream = function(e2) {
+            this._input = e2, r2 = e2.slice || e2.webkitSlice || e2.mozSlice, n2 ? ((i2 = new FileReader()).onload = y(this._chunkLoaded, this), i2.onerror = y(this._chunkError, this)) : i2 = new FileReaderSync(), this._nextChunk();
+          }, this._nextChunk = function() {
+            this._finished || this._config.preview && !(this._rowCount < this._config.preview) || this._readChunk();
+          }, this._readChunk = function() {
+            var e2 = this._input, t = (this._config.chunkSize && (t = Math.min(this._start + this._config.chunkSize, this._input.size), e2 = r2.call(e2, this._start, t)), i2.readAsText(e2, this._config.encoding));
+            n2 || this._chunkLoaded({ target: { result: t } });
+          }, this._chunkLoaded = function(e2) {
+            this._start += this._config.chunkSize, this._finished = !this._config.chunkSize || this._start >= this._input.size, this.parseChunk(e2.target.result);
+          }, this._chunkError = function() {
+            this._sendError(i2.error);
+          };
+        }
+        function c(e) {
+          var i2;
+          u.call(this, e = e || {}), this.stream = function(e2) {
+            return i2 = e2, this._nextChunk();
+          }, this._nextChunk = function() {
+            var e2, t;
+            if (!this._finished) return e2 = this._config.chunkSize, i2 = e2 ? (t = i2.substring(0, e2), i2.substring(e2)) : (t = i2, ""), this._finished = !i2, this.parseChunk(t);
+          };
+        }
+        function p(e) {
+          u.call(this, e = e || {});
+          var t = [], i2 = true, r2 = false;
+          this.pause = function() {
+            u.prototype.pause.apply(this, arguments), this._input.pause();
+          }, this.resume = function() {
+            u.prototype.resume.apply(this, arguments), this._input.resume();
+          }, this.stream = function(e2) {
+            this._input = e2, this._input.on("data", this._streamData), this._input.on("end", this._streamEnd), this._input.on("error", this._streamError);
+          }, this._checkIsFinished = function() {
+            r2 && 1 === t.length && (this._finished = true);
+          }, this._nextChunk = function() {
+            this._checkIsFinished(), t.length ? this.parseChunk(t.shift()) : i2 = true;
+          }, this._streamData = y(function(e2) {
+            try {
+              t.push("string" == typeof e2 ? e2 : e2.toString(this._config.encoding)), i2 && (i2 = false, this._checkIsFinished(), this.parseChunk(t.shift()));
+            } catch (e3) {
+              this._streamError(e3);
+            }
+          }, this), this._streamError = y(function(e2) {
+            this._streamCleanUp(), this._sendError(e2);
+          }, this), this._streamEnd = y(function() {
+            this._streamCleanUp(), r2 = true, this._streamData("");
+          }, this), this._streamCleanUp = y(function() {
+            this._input.removeListener("data", this._streamData), this._input.removeListener("end", this._streamEnd), this._input.removeListener("error", this._streamError);
+          }, this);
+        }
+        function i(m2) {
+          var n2, s2, a2, t, o2 = Math.pow(2, 53), h2 = -o2, u2 = /^\s*-?(\d+\.?|\.\d+|\d+\.\d+)([eE][-+]?\d+)?\s*$/, d2 = /^((\d{4}-[01]\d-[0-3]\dT[0-2]\d:[0-5]\d:[0-5]\d\.\d+([+-][0-2]\d:[0-5]\d|Z))|(\d{4}-[01]\d-[0-3]\dT[0-2]\d:[0-5]\d:[0-5]\d([+-][0-2]\d:[0-5]\d|Z))|(\d{4}-[01]\d-[0-3]\dT[0-2]\d:[0-5]\d([+-][0-2]\d:[0-5]\d|Z)))$/, i2 = this, r2 = 0, f2 = 0, l2 = false, e = false, c2 = [], p2 = { data: [], errors: [], meta: {} };
+          function y2(e2) {
+            return "greedy" === m2.skipEmptyLines ? "" === e2.join("").trim() : 1 === e2.length && 0 === e2[0].length;
+          }
+          function g2() {
+            if (p2 && a2 && (k("Delimiter", "UndetectableDelimiter", "Unable to auto-detect delimiting character; defaulted to '" + v.DefaultDelimiter + "'"), a2 = false), m2.skipEmptyLines && (p2.data = p2.data.filter(function(e3) {
+              return !y2(e3);
+            })), _2()) {
+              let t3 = function(e3, t4) {
+                U(m2.transformHeader) && (e3 = m2.transformHeader(e3, t4)), c2.push(e3);
+              };
+              var t2 = t3;
+              if (p2) if (Array.isArray(p2.data[0])) {
+                for (var e2 = 0; _2() && e2 < p2.data.length; e2++) p2.data[e2].forEach(t3);
+                p2.data.splice(0, 1);
+              } else p2.data.forEach(t3);
+            }
+            function i3(e3, t3) {
+              for (var i4 = m2.header ? {} : [], r4 = 0; r4 < e3.length; r4++) {
+                var n3 = r4, s3 = e3[r4], s3 = ((e4, t4) => ((e5) => (m2.dynamicTypingFunction && void 0 === m2.dynamicTyping[e5] && (m2.dynamicTyping[e5] = m2.dynamicTypingFunction(e5)), true === (m2.dynamicTyping[e5] || m2.dynamicTyping)))(e4) ? "true" === t4 || "TRUE" === t4 || "false" !== t4 && "FALSE" !== t4 && (((e5) => {
+                  if (u2.test(e5)) {
+                    e5 = parseFloat(e5);
+                    if (h2 < e5 && e5 < o2) return 1;
+                  }
+                })(t4) ? parseFloat(t4) : d2.test(t4) ? new Date(t4) : "" === t4 ? null : t4) : t4)(n3 = m2.header ? r4 >= c2.length ? "__parsed_extra" : c2[r4] : n3, s3 = m2.transform ? m2.transform(s3, n3) : s3);
+                "__parsed_extra" === n3 ? (i4[n3] = i4[n3] || [], i4[n3].push(s3)) : i4[n3] = s3;
+              }
+              return m2.header && (r4 > c2.length ? k("FieldMismatch", "TooManyFields", "Too many fields: expected " + c2.length + " fields but parsed " + r4, f2 + t3) : r4 < c2.length && k("FieldMismatch", "TooFewFields", "Too few fields: expected " + c2.length + " fields but parsed " + r4, f2 + t3)), i4;
+            }
+            var r3;
+            p2 && (m2.header || m2.dynamicTyping || m2.transform) && (r3 = 1, !p2.data.length || Array.isArray(p2.data[0]) ? (p2.data = p2.data.map(i3), r3 = p2.data.length) : p2.data = i3(p2.data, 0), m2.header && p2.meta && (p2.meta.fields = c2), f2 += r3);
+          }
+          function _2() {
+            return m2.header && 0 === c2.length;
+          }
+          function k(e2, t2, i3, r3) {
+            e2 = { type: e2, code: t2, message: i3 };
+            void 0 !== r3 && (e2.row = r3), p2.errors.push(e2);
+          }
+          U(m2.step) && (t = m2.step, m2.step = function(e2) {
+            p2 = e2, _2() ? g2() : (g2(), 0 !== p2.data.length && (r2 += e2.data.length, m2.preview && r2 > m2.preview ? s2.abort() : (p2.data = p2.data[0], t(p2, i2))));
+          }), this.parse = function(e2, t2, i3) {
+            var r3 = m2.quoteChar || '"', r3 = (m2.newline || (m2.newline = this.guessLineEndings(e2, r3)), a2 = false, m2.delimiter ? U(m2.delimiter) && (m2.delimiter = m2.delimiter(e2), p2.meta.delimiter = m2.delimiter) : ((r3 = ((e3, t3, i4, r4, n3) => {
+              var s3, a3, o3, h3;
+              n3 = n3 || [",", "	", "|", ";", v.RECORD_SEP, v.UNIT_SEP];
+              for (var u3 = 0; u3 < n3.length; u3++) {
+                for (var d3, f3 = n3[u3], l3 = 0, c3 = 0, p3 = 0, g3 = (o3 = void 0, new E({ comments: r4, delimiter: f3, newline: t3, preview: 10 }).parse(e3)), _3 = 0; _3 < g3.data.length; _3++) i4 && y2(g3.data[_3]) ? p3++ : (d3 = g3.data[_3].length, c3 += d3, void 0 === o3 ? o3 = d3 : 0 < d3 && (l3 += Math.abs(d3 - o3), o3 = d3));
+                0 < g3.data.length && (c3 /= g3.data.length - p3), (void 0 === a3 || l3 <= a3) && (void 0 === h3 || h3 < c3) && 1.99 < c3 && (a3 = l3, s3 = f3, h3 = c3);
+              }
+              return { successful: !!(m2.delimiter = s3), bestDelimiter: s3 };
+            })(e2, m2.newline, m2.skipEmptyLines, m2.comments, m2.delimitersToGuess)).successful ? m2.delimiter = r3.bestDelimiter : (a2 = true, m2.delimiter = v.DefaultDelimiter), p2.meta.delimiter = m2.delimiter), b(m2));
+            return m2.preview && m2.header && r3.preview++, n2 = e2, s2 = new E(r3), p2 = s2.parse(n2, t2, i3), g2(), l2 ? { meta: { paused: true } } : p2 || { meta: { paused: false } };
+          }, this.paused = function() {
+            return l2;
+          }, this.pause = function() {
+            l2 = true, s2.abort(), n2 = U(m2.chunk) ? "" : n2.substring(s2.getCharIndex());
+          }, this.resume = function() {
+            i2.streamer._halted ? (l2 = false, i2.streamer.parseChunk(n2, true)) : setTimeout(i2.resume, 3);
+          }, this.aborted = function() {
+            return e;
+          }, this.abort = function() {
+            e = true, s2.abort(), p2.meta.aborted = true, U(m2.complete) && m2.complete(p2), n2 = "";
+          }, this.guessLineEndings = function(e2, t2) {
+            e2 = e2.substring(0, 1048576);
+            var t2 = new RegExp(P(t2) + "([^]*?)" + P(t2), "gm"), i3 = (e2 = e2.replace(t2, "")).split("\r"), t2 = e2.split("\n"), e2 = 1 < t2.length && t2[0].length < i3[0].length;
+            if (1 === i3.length || e2) return "\n";
+            for (var r3 = 0, n3 = 0; n3 < i3.length; n3++) "\n" === i3[n3][0] && r3++;
+            return r3 >= i3.length / 2 ? "\r\n" : "\r";
+          };
+        }
+        function P(e) {
+          return e.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        }
+        function E(C) {
+          var S = (C = C || {}).delimiter, O = C.newline, x = C.comments, I = C.step, A = C.preview, T = C.fastMode, D = null, L = false, F = null == C.quoteChar ? '"' : C.quoteChar, j = F;
+          if (void 0 !== C.escapeChar && (j = C.escapeChar), ("string" != typeof S || -1 < v.BAD_DELIMITERS.indexOf(S)) && (S = ","), x === S) throw new Error("Comment character same as delimiter");
+          true === x ? x = "#" : ("string" != typeof x || -1 < v.BAD_DELIMITERS.indexOf(x)) && (x = false), "\n" !== O && "\r" !== O && "\r\n" !== O && (O = "\n");
+          var z = 0, M = false;
+          this.parse = function(i2, t, r2) {
+            if ("string" != typeof i2) throw new Error("Input must be a string");
+            var n2 = i2.length, e = S.length, s2 = O.length, a2 = x.length, o2 = U(I), h2 = [], u2 = [], d2 = [], f2 = z = 0;
+            if (!i2) return w();
+            if (T || false !== T && -1 === i2.indexOf(F)) {
+              for (var l2 = i2.split(O), c2 = 0; c2 < l2.length; c2++) {
+                if (d2 = l2[c2], z += d2.length, c2 !== l2.length - 1) z += O.length;
+                else if (r2) return w();
+                if (!x || d2.substring(0, a2) !== x) {
+                  if (o2) {
+                    if (h2 = [], k(d2.split(S)), R(), M) return w();
+                  } else k(d2.split(S));
+                  if (A && A <= c2) return h2 = h2.slice(0, A), w(true);
+                }
+              }
+              return w();
+            }
+            for (var p2 = i2.indexOf(S, z), g2 = i2.indexOf(O, z), _2 = new RegExp(P(j) + P(F), "g"), m2 = i2.indexOf(F, z); ; ) if (i2[z] === F) for (m2 = z, z++; ; ) {
+              if (-1 === (m2 = i2.indexOf(F, m2 + 1))) return r2 || u2.push({ type: "Quotes", code: "MissingQuotes", message: "Quoted field unterminated", row: h2.length, index: z }), E2();
+              if (m2 === n2 - 1) return E2(i2.substring(z, m2).replace(_2, F));
+              if (F === j && i2[m2 + 1] === j) m2++;
+              else if (F === j || 0 === m2 || i2[m2 - 1] !== j) {
+                -1 !== p2 && p2 < m2 + 1 && (p2 = i2.indexOf(S, m2 + 1));
+                var y2 = v2(-1 === (g2 = -1 !== g2 && g2 < m2 + 1 ? i2.indexOf(O, m2 + 1) : g2) ? p2 : Math.min(p2, g2));
+                if (i2.substr(m2 + 1 + y2, e) === S) {
+                  d2.push(i2.substring(z, m2).replace(_2, F)), i2[z = m2 + 1 + y2 + e] !== F && (m2 = i2.indexOf(F, z)), p2 = i2.indexOf(S, z), g2 = i2.indexOf(O, z);
+                  break;
+                }
+                y2 = v2(g2);
+                if (i2.substring(m2 + 1 + y2, m2 + 1 + y2 + s2) === O) {
+                  if (d2.push(i2.substring(z, m2).replace(_2, F)), b2(m2 + 1 + y2 + s2), p2 = i2.indexOf(S, z), m2 = i2.indexOf(F, z), o2 && (R(), M)) return w();
+                  if (A && h2.length >= A) return w(true);
+                  break;
+                }
+                u2.push({ type: "Quotes", code: "InvalidQuotes", message: "Trailing quote on quoted field is malformed", row: h2.length, index: z }), m2++;
+              }
+            }
+            else if (x && 0 === d2.length && i2.substring(z, z + a2) === x) {
+              if (-1 === g2) return w();
+              z = g2 + s2, g2 = i2.indexOf(O, z), p2 = i2.indexOf(S, z);
+            } else if (-1 !== p2 && (p2 < g2 || -1 === g2)) d2.push(i2.substring(z, p2)), z = p2 + e, p2 = i2.indexOf(S, z);
+            else {
+              if (-1 === g2) break;
+              if (d2.push(i2.substring(z, g2)), b2(g2 + s2), o2 && (R(), M)) return w();
+              if (A && h2.length >= A) return w(true);
+            }
+            return E2();
+            function k(e2) {
+              h2.push(e2), f2 = z;
+            }
+            function v2(e2) {
+              var t2 = 0;
+              return t2 = -1 !== e2 && (e2 = i2.substring(m2 + 1, e2)) && "" === e2.trim() ? e2.length : t2;
+            }
+            function E2(e2) {
+              return r2 || (void 0 === e2 && (e2 = i2.substring(z)), d2.push(e2), z = n2, k(d2), o2 && R()), w();
+            }
+            function b2(e2) {
+              z = e2, k(d2), d2 = [], g2 = i2.indexOf(O, z);
+            }
+            function w(e2) {
+              if (C.header && !t && h2.length && !L) {
+                var s3 = h2[0], a3 = /* @__PURE__ */ Object.create(null), o3 = new Set(s3);
+                let n3 = false;
+                for (let r3 = 0; r3 < s3.length; r3++) {
+                  let i3 = s3[r3];
+                  if (a3[i3 = U(C.transformHeader) ? C.transformHeader(i3, r3) : i3]) {
+                    let e3, t2 = a3[i3];
+                    for (; e3 = i3 + "_" + t2, t2++, o3.has(e3); ) ;
+                    o3.add(e3), s3[r3] = e3, a3[i3]++, n3 = true, (D = null === D ? {} : D)[e3] = i3;
+                  } else a3[i3] = 1, s3[r3] = i3;
+                  o3.add(i3);
+                }
+                n3 && console.warn("Duplicate headers found and renamed."), L = true;
+              }
+              return { data: h2, errors: u2, meta: { delimiter: S, linebreak: O, aborted: M, truncated: !!e2, cursor: f2 + (t || 0), renamedHeaders: D } };
+            }
+            function R() {
+              I(w()), h2 = [], u2 = [];
+            }
+          }, this.abort = function() {
+            M = true;
+          }, this.getCharIndex = function() {
+            return z;
+          };
+        }
+        function g(e) {
+          var t = e.data, i2 = o[t.workerId], r2 = false;
+          if (t.error) i2.userError(t.error, t.file);
+          else if (t.results && t.results.data) {
+            var n2 = { abort: function() {
+              r2 = true, _(t.workerId, { data: [], errors: [], meta: { aborted: true } });
+            }, pause: m, resume: m };
+            if (U(i2.userStep)) {
+              for (var s2 = 0; s2 < t.results.data.length && (i2.userStep({ data: t.results.data[s2], errors: t.results.errors, meta: t.results.meta }, n2), !r2); s2++) ;
+              delete t.results;
+            } else U(i2.userChunk) && (i2.userChunk(t.results, n2, t.file), delete t.results);
+          }
+          t.finished && !r2 && _(t.workerId, t.results);
+        }
+        function _(e, t) {
+          var i2 = o[e];
+          U(i2.userComplete) && i2.userComplete(t), i2.terminate(), delete o[e];
+        }
+        function m() {
+          throw new Error("Not implemented.");
+        }
+        function b(e) {
+          if ("object" != typeof e || null === e) return e;
+          var t, i2 = Array.isArray(e) ? [] : {};
+          for (t in e) i2[t] = b(e[t]);
+          return i2;
+        }
+        function y(e, t) {
+          return function() {
+            e.apply(t, arguments);
+          };
+        }
+        function U(e) {
+          return "function" == typeof e;
+        }
+        return v.parse = function(e, t) {
+          var i2 = (t = t || {}).dynamicTyping || false;
+          U(i2) && (t.dynamicTypingFunction = i2, i2 = {});
+          if (t.dynamicTyping = i2, t.transform = !!U(t.transform) && t.transform, !t.worker || !v.WORKERS_SUPPORTED) return i2 = null, v.NODE_STREAM_INPUT, "string" == typeof e ? (e = ((e2) => 65279 !== e2.charCodeAt(0) ? e2 : e2.slice(1))(e), i2 = new (t.download ? f : c)(t)) : true === e.readable && U(e.read) && U(e.on) ? i2 = new p(t) : (n.File && e instanceof File || e instanceof Object) && (i2 = new l(t)), i2.stream(e);
+          (i2 = (() => {
+            var e2;
+            return !!v.WORKERS_SUPPORTED && (e2 = (() => {
+              var e3 = n.URL || n.webkitURL || null, t2 = r.toString();
+              return v.BLOB_URL || (v.BLOB_URL = e3.createObjectURL(new Blob(["var global = (function() { if (typeof self !== 'undefined') { return self; } if (typeof window !== 'undefined') { return window; } if (typeof global !== 'undefined') { return global; } return {}; })(); global.IS_PAPA_WORKER=true; ", "(", t2, ")();"], { type: "text/javascript" })));
+            })(), (e2 = new n.Worker(e2)).onmessage = g, e2.id = h++, o[e2.id] = e2);
+          })()).userStep = t.step, i2.userChunk = t.chunk, i2.userComplete = t.complete, i2.userError = t.error, t.step = U(t.step), t.chunk = U(t.chunk), t.complete = U(t.complete), t.error = U(t.error), delete t.worker, i2.postMessage({ input: e, config: t, workerId: i2.id });
+        }, v.unparse = function(e, t) {
+          var n2 = false, _2 = true, m2 = ",", y2 = "\r\n", s2 = '"', a2 = s2 + s2, i2 = false, r2 = null, o2 = false, h2 = ((() => {
+            if ("object" == typeof t) {
+              if ("string" != typeof t.delimiter || v.BAD_DELIMITERS.filter(function(e2) {
+                return -1 !== t.delimiter.indexOf(e2);
+              }).length || (m2 = t.delimiter), "boolean" != typeof t.quotes && "function" != typeof t.quotes && !Array.isArray(t.quotes) || (n2 = t.quotes), "boolean" != typeof t.skipEmptyLines && "string" != typeof t.skipEmptyLines || (i2 = t.skipEmptyLines), "string" == typeof t.newline && (y2 = t.newline), "string" == typeof t.quoteChar && (s2 = t.quoteChar), "boolean" == typeof t.header && (_2 = t.header), Array.isArray(t.columns)) {
+                if (0 === t.columns.length) throw new Error("Option columns is empty");
+                r2 = t.columns;
+              }
+              void 0 !== t.escapeChar && (a2 = t.escapeChar + s2), t.escapeFormulae instanceof RegExp ? o2 = t.escapeFormulae : "boolean" == typeof t.escapeFormulae && t.escapeFormulae && (o2 = /^[=+\-@\t\r].*$/);
+            }
+          })(), new RegExp(P(s2), "g"));
+          "string" == typeof e && (e = JSON.parse(e));
+          if (Array.isArray(e)) {
+            if (!e.length || Array.isArray(e[0])) return u2(null, e, i2);
+            if ("object" == typeof e[0]) return u2(r2 || Object.keys(e[0]), e, i2);
+          } else if ("object" == typeof e) return "string" == typeof e.data && (e.data = JSON.parse(e.data)), Array.isArray(e.data) && (e.fields || (e.fields = e.meta && e.meta.fields || r2), e.fields || (e.fields = Array.isArray(e.data[0]) ? e.fields : "object" == typeof e.data[0] ? Object.keys(e.data[0]) : []), Array.isArray(e.data[0]) || "object" == typeof e.data[0] || (e.data = [e.data])), u2(e.fields || [], e.data || [], i2);
+          throw new Error("Unable to serialize unrecognized input");
+          function u2(e2, t2, i3) {
+            var r3 = "", n3 = ("string" == typeof e2 && (e2 = JSON.parse(e2)), "string" == typeof t2 && (t2 = JSON.parse(t2)), Array.isArray(e2) && 0 < e2.length), s3 = !Array.isArray(t2[0]);
+            if (n3 && _2) {
+              for (var a3 = 0; a3 < e2.length; a3++) 0 < a3 && (r3 += m2), r3 += k(e2[a3], a3);
+              0 < t2.length && (r3 += y2);
+            }
+            for (var o3 = 0; o3 < t2.length; o3++) {
+              var h3 = (n3 ? e2 : t2[o3]).length, u3 = false, d2 = n3 ? 0 === Object.keys(t2[o3]).length : 0 === t2[o3].length;
+              if (i3 && !n3 && (u3 = "greedy" === i3 ? "" === t2[o3].join("").trim() : 1 === t2[o3].length && 0 === t2[o3][0].length), "greedy" === i3 && n3) {
+                for (var f2 = [], l2 = 0; l2 < h3; l2++) {
+                  var c2 = s3 ? e2[l2] : l2;
+                  f2.push(t2[o3][c2]);
+                }
+                u3 = "" === f2.join("").trim();
+              }
+              if (!u3) {
+                for (var p2 = 0; p2 < h3; p2++) {
+                  0 < p2 && !d2 && (r3 += m2);
+                  var g2 = n3 && s3 ? e2[p2] : p2;
+                  r3 += k(t2[o3][g2], p2);
+                }
+                o3 < t2.length - 1 && (!i3 || 0 < h3 && !d2) && (r3 += y2);
+              }
+            }
+            return r3;
+          }
+          function k(e2, t2) {
+            var i3, r3;
+            return null == e2 ? "" : e2.constructor === Date ? JSON.stringify(e2).slice(1, 25) : (r3 = false, o2 && "string" == typeof e2 && o2.test(e2) && (e2 = "'" + e2, r3 = true), i3 = e2.toString().replace(h2, a2), (r3 = r3 || true === n2 || "function" == typeof n2 && n2(e2, t2) || Array.isArray(n2) && n2[t2] || ((e3, t3) => {
+              for (var i4 = 0; i4 < t3.length; i4++) if (-1 < e3.indexOf(t3[i4])) return true;
+              return false;
+            })(i3, v.BAD_DELIMITERS) || -1 < i3.indexOf(m2) || " " === i3.charAt(0) || " " === i3.charAt(i3.length - 1)) ? s2 + i3 + s2 : i3);
+          }
+        }, v.RECORD_SEP = String.fromCharCode(30), v.UNIT_SEP = String.fromCharCode(31), v.BYTE_ORDER_MARK = "\uFEFF", v.BAD_DELIMITERS = ["\r", "\n", '"', v.BYTE_ORDER_MARK], v.WORKERS_SUPPORTED = !s && !!n.Worker, v.NODE_STREAM_INPUT = 1, v.LocalChunkSize = 10485760, v.RemoteChunkSize = 5242880, v.DefaultDelimiter = ",", v.Parser = E, v.ParserHandle = i, v.NetworkStreamer = f, v.FileStreamer = l, v.StringStreamer = c, v.ReadableStreamStreamer = p, n.jQuery && ((d = n.jQuery).fn.parse = function(o2) {
+          var i2 = o2.config || {}, h2 = [];
+          return this.each(function(e2) {
+            if (!("INPUT" === d(this).prop("tagName").toUpperCase() && "file" === d(this).attr("type").toLowerCase() && n.FileReader) || !this.files || 0 === this.files.length) return true;
+            for (var t = 0; t < this.files.length; t++) h2.push({ file: this.files[t], inputElem: this, instanceConfig: d.extend({}, i2) });
+          }), e(), this;
+          function e() {
+            if (0 === h2.length) U(o2.complete) && o2.complete();
+            else {
+              var e2, t, i3, r2, n2 = h2[0];
+              if (U(o2.before)) {
+                var s2 = o2.before(n2.file, n2.inputElem);
+                if ("object" == typeof s2) {
+                  if ("abort" === s2.action) return e2 = "AbortError", t = n2.file, i3 = n2.inputElem, r2 = s2.reason, void (U(o2.error) && o2.error({ name: e2 }, t, i3, r2));
+                  if ("skip" === s2.action) return void u2();
+                  "object" == typeof s2.config && (n2.instanceConfig = d.extend(n2.instanceConfig, s2.config));
+                } else if ("skip" === s2) return void u2();
+              }
+              var a2 = n2.instanceConfig.complete;
+              n2.instanceConfig.complete = function(e3) {
+                U(a2) && a2(e3, n2.file, n2.inputElem), u2();
+              }, v.parse(n2.file, n2.instanceConfig);
+            }
+          }
+          function u2() {
+            h2.splice(0, 1), e();
+          }
+        }), a && (n.onmessage = function(e) {
+          e = e.data;
+          void 0 === v.WORKER_ID && e && (v.WORKER_ID = e.workerId);
+          "string" == typeof e.input ? n.postMessage({ workerId: v.WORKER_ID, results: v.parse(e.input, e.config), finished: true }) : (n.File && e.input instanceof File || e.input instanceof Object) && (e = v.parse(e.input, e.config)) && n.postMessage({ workerId: v.WORKER_ID, results: e, finished: true });
+        }), (f.prototype = Object.create(u.prototype)).constructor = f, (l.prototype = Object.create(u.prototype)).constructor = l, (c.prototype = Object.create(c.prototype)).constructor = c, (p.prototype = Object.create(u.prototype)).constructor = p, v;
+      });
+    }
+  });
 
   // Analyzer_Demo.js
   var Analyzer_Demo_exports = {};
@@ -153,284 +582,369 @@ var __app = (() => {
     return fallbackPalette[index % fallbackPalette.length];
   }
 
-  // src/syntheticData.js
-  function generateSyntheticData() {
-    var rows = [];
-    var rngState = 1234567891;
-    var rng = function() {
-      rngState = rngState * 1664525 + 1013904223 & 2147483647;
-      return rngState / 2147483647;
+  // Analyzer_Demo.js
+  var import_papaparse = __toESM(require_papaparse_min());
+
+  // src/csvDataSource.js
+  var ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}/;
+  var QUARTER_RE = /^\d{4}-Q[1-4]$/;
+  function inferColumnTypes(headers, sampleRows) {
+    return headers.map((name) => {
+      let allNumeric = true;
+      let allDate = true;
+      let allBool = true;
+      let nonEmpty = 0;
+      for (let i = 0; i < sampleRows.length; i++) {
+        const val = sampleRows[i][name];
+        if (val == null || val === "") continue;
+        nonEmpty++;
+        if (typeof val === "boolean") {
+          allNumeric = false;
+          allDate = false;
+          continue;
+        }
+        if (typeof val === "number") {
+          allBool = false;
+          allDate = false;
+          continue;
+        }
+        const s = String(val);
+        allBool = false;
+        if (allNumeric && isNaN(Number(s))) allNumeric = false;
+        if (allDate && !ISO_DATE_RE.test(s) && !QUARTER_RE.test(s)) allDate = false;
+      }
+      if (nonEmpty === 0) return { name, udt: "text" };
+      if (allBool) return { name, udt: "bool" };
+      if (allNumeric) return { name, udt: "float8" };
+      if (allDate) return { name, udt: "date" };
+      return { name, udt: "text" };
+    });
+  }
+  function buildCsvFilterOptions(rows, dimensionColumns) {
+    const sets = {};
+    for (let i = 0; i < dimensionColumns.length; i++) {
+      sets[dimensionColumns[i]] = /* @__PURE__ */ new Set();
+    }
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      for (let d = 0; d < dimensionColumns.length; d++) {
+        const col = dimensionColumns[d];
+        const val = row[col];
+        if (val != null && val !== "") sets[col].add(val);
+      }
+    }
+    const result = {};
+    for (let d = 0; d < dimensionColumns.length; d++) {
+      const col = dimensionColumns[d];
+      result[col] = Array.from(sets[col]).sort();
+    }
+    return result;
+  }
+  function bucketDateToGrain(dateStr, grain) {
+    if (!dateStr) return null;
+    const s = String(dateStr);
+    switch (grain) {
+      case "day":
+        return s.slice(0, 10);
+      // YYYY-MM-DD
+      case "week": {
+        const d = /* @__PURE__ */ new Date(s.slice(0, 10) + "T00:00:00");
+        const day = d.getDay();
+        const diff = day === 0 ? -6 : 1 - day;
+        d.setDate(d.getDate() + diff);
+        return d.toISOString().slice(0, 10);
+      }
+      case "month":
+        return s.slice(0, 7) + "-01";
+      // YYYY-MM-01
+      case "quarter": {
+        const parts = s.slice(0, 10).split("-");
+        const mo = parseInt(parts[1], 10);
+        return parts[0] + "-Q" + Math.ceil(mo / 3);
+      }
+      case "year":
+        return s.slice(0, 4);
+      // YYYY
+      default:
+        return s.slice(0, 7) + "-01";
+    }
+  }
+  function applyOperator(a, b, op) {
+    switch (op) {
+      case "/":
+        return b !== 0 ? a / b : 0;
+      case "*":
+        return a * b;
+      case "+":
+        return a + b;
+      case "-":
+        return a - b;
+      default:
+        return b !== 0 ? a / b : 0;
+    }
+  }
+  function finalizeAgg(acc) {
+    switch (acc.type) {
+      case "sum":
+        return acc.sum;
+      case "avg":
+        return acc.count > 0 ? acc.sum / acc.count : 0;
+      case "count":
+        return acc.count;
+      case "count_distinct":
+        return acc.set.size;
+      case "min":
+        return acc.min === Infinity ? 0 : acc.min;
+      case "max":
+        return acc.max === -Infinity ? 0 : acc.max;
+      default:
+        return acc.sum;
+    }
+  }
+  function createAcc(type) {
+    return { type, sum: 0, count: 0, min: Infinity, max: -Infinity, set: type === "count_distinct" ? /* @__PURE__ */ new Set() : null };
+  }
+  function addToAcc(acc, val) {
+    const n = Number(val) || 0;
+    acc.sum += n;
+    acc.count += 1;
+    if (n < acc.min) acc.min = n;
+    if (n > acc.max) acc.max = n;
+    if (acc.set) acc.set.add(val);
+  }
+  function slotConfig(metricConfig, prefix) {
+    const mode = metricConfig[prefix + "Mode"] || "simple";
+    if (mode === "formula") {
+      return {
+        mode: "formula",
+        numAggType: metricConfig[prefix + "FormulaNumAggType"] || "sum",
+        numColumn: metricConfig[prefix + "FormulaNumColumn"],
+        denAggType: metricConfig[prefix + "FormulaDenAggType"] || "sum",
+        denColumn: metricConfig[prefix + "FormulaDenColumn"],
+        operator: metricConfig[prefix + "FormulaOperator"] || "/",
+        multiplier: metricConfig[prefix + "Multiplier"] || (prefix === "derived" ? metricConfig.derivedMultiplier || 1 : 1)
+      };
+    }
+    return {
+      mode: "simple",
+      aggType: metricConfig[prefix + "AggType"] || (metricConfig[prefix + "Column"] ? "sum" : "count"),
+      column: metricConfig[prefix + "Column"]
     };
-    var productNames = ["Core Product", "Support Add-on", "Analytics Add-on", "Enterprise Suite"];
-    var productGroupMap = {
-      "Core Product": "Core Products",
-      "Support Add-on": "Core Products",
-      "Analytics Add-on": "Growth Products",
-      "Enterprise Suite": "Growth Products"
-    };
-    var pricingTypeMap = {
-      "Core Product": ["Annual Contract", "Monthly Subscription"],
-      "Support Add-on": ["Volume License", "Monthly Subscription"],
-      "Analytics Add-on": ["Usage-Based", "Annual Contract"],
-      "Enterprise Suite": ["Annual Contract", "Volume License"]
-    };
-    var regions = ["NA", "EMEA", "APAC", "LATAM"];
-    var countryMap = {
-      "NA": ["US", "Canada"],
-      "EMEA": ["UK", "Germany", "France"],
-      "APAC": ["Japan", "Australia", "Singapore"],
-      "LATAM": ["Brazil", "Mexico"]
-    };
-    var channels = ["Direct", "Partner", "Self-Serve", "Inbound"];
-    var channelTypeMap = {
-      "Direct": "Sales-Led",
-      "Partner": "Partner-Led",
-      "Self-Serve": "Product-Led",
-      "Inbound": "Marketing-Led"
-    };
-    var segmentMap = {
-      "Core Product": "Enterprise",
-      "Support Add-on": "SMB",
-      "Analytics Add-on": "Mid-Market",
-      "Enterprise Suite": "Enterprise"
-    };
-    var acquisitionChannels = ["Organic Search", "Paid Search", "Referral", "Partnership"];
-    var customerTypes = ["Tech-Native", "Traditional", "Digital-First"];
-    var baseWeeklyVolumes = {
-      "Core Product": 12e7 / 52,
-      "Support Add-on": 45e6 / 52,
-      "Analytics Add-on": 35e6 / 52,
-      "Enterprise Suite": 6e7 / 52
-    };
-    var regionFactors = { "NA": 0.45, "EMEA": 0.3, "APAC": 0.18, "LATAM": 0.07 };
-    var marginRates = {
-      "Core Product": 0.3,
-      "Support Add-on": 0.2,
-      "Analytics Add-on": 0.35,
-      "Enterprise Suite": 0.28
-    };
-    var annualGrowthRates = {
-      "Core Product": 0.32,
-      "Support Add-on": -0.18,
-      "Analytics Add-on": 0.85,
-      "Enterprise Suite": 0.55
-    };
-    var currentDate = new Date(2023, 0, 2);
-    var today = /* @__PURE__ */ new Date();
-    var dayOfWeek = today.getDay();
-    var endDate = new Date(today);
-    endDate.setDate(today.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
-    var weekIndex = 0;
-    while (currentDate <= endDate) {
-      var yr = currentDate.getFullYear();
-      var mo = currentDate.getMonth() + 1;
-      var dy = currentDate.getDate();
-      var moStr = mo < 10 ? "0" + mo : String(mo);
-      var dyStr = dy < 10 ? "0" + dy : String(dy);
-      var weekStr = yr + "-" + moStr + "-" + dyStr;
-      var monthStr = yr + "-" + moStr + "-01";
-      var quarter = Math.ceil(mo / 3);
-      var quarterStr = yr + "-Q" + quarter;
-      var yearStr = String(yr);
-      for (var pIdx = 0; pIdx < productNames.length; pIdx++) {
-        var productName = productNames[pIdx];
-        var growthRate = annualGrowthRates[productName];
-        var weeklyGrowthFactor = Math.pow(1 + growthRate, weekIndex / 52);
-        for (var rIdx = 0; rIdx < regions.length; rIdx++) {
-          var region = regions[rIdx];
-          var regionFactor = regionFactors[region];
-          var countries = countryMap[region];
-          var country = countries[(pIdx + rIdx) % countries.length];
-          var noise = 0.92 + rng() * 0.16;
-          var seasonality = 1 + 0.12 * Math.sin((mo - 3) * Math.PI / 6);
-          var volume = Math.round(
-            baseWeeklyVolumes[productName] * regionFactor * weeklyGrowthFactor * seasonality * noise
-          );
-          var marginRate = marginRates[productName];
-          var revenue = Math.round(volume * marginRate * (0.95 + rng() * 0.1));
-          var comboIdx = pIdx * regions.length + rIdx;
-          var channel = channels[comboIdx % channels.length];
-          var channelType = channelTypeMap[channel];
-          var segment = segmentMap[productName];
-          var acqChannel = acquisitionChannels[comboIdx % acquisitionChannels.length];
-          var customerType = customerTypes[pIdx % customerTypes.length];
-          var pricingTypes = pricingTypeMap[productName];
-          var pricingType = pricingTypes[rIdx % pricingTypes.length];
-          rows.push({
-            reporting_week: weekStr,
-            reporting_month: monthStr,
-            reporting_quarter: quarterStr,
-            reporting_year: yearStr,
-            product_group_l1: productGroupMap[productName],
-            product_name: productName,
-            product: pricingType,
-            region,
-            country,
-            channel,
-            channel_type: channelType,
-            customer_segment: segment,
-            acquisition_channel: acqChannel,
-            customer_type: customerType,
-            volume,
-            revenue
-          });
+  }
+  function filterRows(rows, filters) {
+    if (!filters || Object.keys(filters).length === 0) return rows;
+    const filterEntries = Object.entries(filters).filter(([, v]) => v && v.length > 0);
+    if (filterEntries.length === 0) return rows;
+    const filterSets = filterEntries.map(([col, vals]) => [col, new Set(vals)]);
+    const result = [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      let pass = true;
+      for (let f = 0; f < filterSets.length; f++) {
+        const [col, valSet] = filterSets[f];
+        if (!valSet.has(row[col])) {
+          pass = false;
+          break;
         }
       }
-      currentDate.setDate(currentDate.getDate() + 7);
-      weekIndex++;
+      if (pass) result.push(row);
     }
-    return { rows };
+    return result;
   }
-  var DEMO_COLUMNS = {
-    REPORTING_WEEK: "reporting_week",
-    REPORTING_MONTH: "reporting_month",
-    REPORTING_QUARTER: "reporting_quarter",
-    REPORTING_YEAR: "reporting_year",
-    PRODUCT_GROUP_L1: "product_group_l1",
-    PRODUCT_NAME: "product_name",
-    PRODUCT: "product",
-    CUSTOMER_SEGMENT: "customer_segment",
-    REGION: "region",
-    COUNTRY: "country",
-    ACQUISITION_CHANNEL: "acquisition_channel",
-    CUSTOMER_TYPE: "customer_type",
-    CHANNEL: "channel",
-    CHANNEL_TYPE: "channel_type",
-    METRIC1: "volume",
-    METRIC2: "revenue"
-  };
-  var DEMO_DIMENSION_DEFINITIONS = [
-    {
-      columnKey: "PRODUCT_GROUP_L1",
-      filterKey: "productGroupFilter",
-      abbreviation: "pg",
-      filterLabel: "Product Group",
-      viewName: "Product Group",
-      viewLabel: "Product Groups",
-      insightLabel: "product group",
-      marketLeaderLabel: "product groups",
-      insightTextPrefix: "leads",
-      isProductDimension: true,
-      displayOrder: 1
-    },
-    {
-      columnKey: "PRODUCT_NAME",
-      filterKey: "productFilter",
-      abbreviation: "pn",
-      filterLabel: "Product",
-      viewName: "Product",
-      viewLabel: "Products",
-      insightLabel: "product",
-      marketLeaderLabel: "products",
-      insightTextPrefix: "leads",
-      isProductDimension: true,
-      displayOrder: 2
-    },
-    {
-      columnKey: "PRODUCT",
-      filterKey: "pricingTypeFilter",
-      abbreviation: "pt",
-      filterLabel: "Pricing Type",
-      viewName: "Pricing Type",
-      viewLabel: "Pricing Types",
-      insightLabel: "pricing type",
-      marketLeaderLabel: "pricing types",
-      insightTextPrefix: "leads",
-      isProductDimension: true,
-      displayOrder: 3
-    },
-    {
-      columnKey: "COUNTRY",
-      filterKey: "revenueCountryFilter",
-      abbreviation: "rc",
-      filterLabel: "Country",
-      viewName: "Country",
-      viewLabel: "Countries",
-      insightLabel: "country",
-      marketLeaderLabel: "countries",
-      insightTextPrefix: "leads",
-      isProductDimension: false,
-      displayOrder: 4
-    },
-    {
-      columnKey: "REGION",
-      filterKey: "revenueRegionFilter",
-      abbreviation: "rr",
-      filterLabel: "Region",
-      viewName: "Region",
-      viewLabel: "Regions",
-      insightLabel: "region",
-      marketLeaderLabel: "regions",
-      insightTextPrefix: "leads",
-      isProductDimension: false,
-      displayOrder: 5
-    },
-    {
-      columnKey: "CHANNEL",
-      filterKey: "channelFilter",
-      abbreviation: "ch",
-      filterLabel: "Channel",
-      viewName: "Channel",
-      viewLabel: "Channels",
-      insightLabel: "channel",
-      marketLeaderLabel: "channels",
-      insightTextPrefix: "leads",
-      isProductDimension: false,
-      displayOrder: 6
-    },
-    {
-      columnKey: "CHANNEL_TYPE",
-      filterKey: "channelTypeFilter",
-      abbreviation: "cht",
-      filterLabel: "Channel Type",
-      viewName: "Channel Type",
-      viewLabel: "Channel Types",
-      insightLabel: "channel type",
-      marketLeaderLabel: "channel types",
-      insightTextPrefix: "leads",
-      isProductDimension: false,
-      displayOrder: 7
-    },
-    {
-      columnKey: "CUSTOMER_SEGMENT",
-      filterKey: "companySegmentFilter",
-      abbreviation: "cs",
-      filterLabel: "Customer Segment",
-      viewName: "Customer Segment",
-      viewLabel: "Customer Segments",
-      insightLabel: "segment",
-      marketLeaderLabel: "segments",
-      insightTextPrefix: "leads",
-      isProductDimension: false,
-      displayOrder: 8
-    },
-    {
-      columnKey: "ACQUISITION_CHANNEL",
-      filterKey: "acquisitionChannelFilter",
-      abbreviation: "ac",
-      filterLabel: "Acquisition Channel",
-      viewName: "Acquisition Channel",
-      viewLabel: "Acquisition Channels",
-      insightLabel: "acquisition channel",
-      marketLeaderLabel: "acquisition channels",
-      insightTextPrefix: "leads",
-      isProductDimension: false,
-      displayOrder: 9
-    },
-    {
-      columnKey: "CUSTOMER_TYPE",
-      filterKey: "isAiCompanyFilter",
-      abbreviation: "ct",
-      filterLabel: "Customer Type",
-      viewName: "Customer Type",
-      viewLabel: "Customer Types",
-      insightLabel: "customer type",
-      marketLeaderLabel: "customer types",
-      insightTextPrefix: "leads",
-      isProductDimension: false,
-      displayOrder: 10
+  function computeSlotValue(slot, acc, numAcc, denAcc) {
+    if (slot.mode === "formula") {
+      const num = finalizeAgg(numAcc);
+      const den = finalizeAgg(denAcc);
+      return applyOperator(num, den, slot.operator) * (slot.multiplier || 1);
     }
-  ];
+    return finalizeAgg(acc);
+  }
+  function aggregateCsvPeriods(rows, config) {
+    const { metricConfig, grain, dateColumn, filters } = config;
+    const filtered = filterRows(rows, filters);
+    const volSlot = slotConfig(metricConfig, "volume");
+    const revSlot = slotConfig(metricConfig, "revenue");
+    const derSlot = slotConfig(metricConfig, "derived");
+    const hasDerived = derSlot.mode === "formula" || !!metricConfig.derivedAggType || !!metricConfig.derivedColumn;
+    const groups = {};
+    for (let i = 0; i < filtered.length; i++) {
+      const row = filtered[i];
+      const period = bucketDateToGrain(row[dateColumn], grain);
+      if (!period) continue;
+      if (!groups[period]) {
+        groups[period] = {
+          vol: createAcc(volSlot.aggType || "sum"),
+          volNum: volSlot.mode === "formula" ? createAcc(volSlot.numAggType) : null,
+          volDen: volSlot.mode === "formula" ? createAcc(volSlot.denAggType) : null,
+          rev: createAcc(revSlot.aggType || "sum"),
+          revNum: revSlot.mode === "formula" ? createAcc(revSlot.numAggType) : null,
+          revDen: revSlot.mode === "formula" ? createAcc(revSlot.denAggType) : null,
+          der: hasDerived && derSlot.mode !== "formula" ? createAcc(derSlot.aggType || "sum") : null,
+          derNum: derSlot.mode === "formula" ? createAcc(derSlot.numAggType) : null,
+          derDen: derSlot.mode === "formula" ? createAcc(derSlot.denAggType) : null
+        };
+      }
+      const g = groups[period];
+      if (volSlot.mode === "formula") {
+        addToAcc(g.volNum, row[volSlot.numColumn]);
+        addToAcc(g.volDen, row[volSlot.denColumn]);
+      } else {
+        addToAcc(g.vol, volSlot.column ? row[volSlot.column] : 1);
+      }
+      if (revSlot.mode === "formula") {
+        addToAcc(g.revNum, row[revSlot.numColumn]);
+        addToAcc(g.revDen, row[revSlot.denColumn]);
+      } else {
+        addToAcc(g.rev, revSlot.column ? row[revSlot.column] : 1);
+      }
+      if (derSlot.mode === "formula") {
+        addToAcc(g.derNum, row[derSlot.numColumn]);
+        addToAcc(g.derDen, row[derSlot.denColumn]);
+      } else if (g.der) {
+        addToAcc(g.der, derSlot.column ? row[derSlot.column] : 1);
+      }
+    }
+    const result = {};
+    const periods = Object.keys(groups);
+    for (let p = 0; p < periods.length; p++) {
+      const period = periods[p];
+      const g = groups[period];
+      const m1 = computeSlotValue(volSlot, g.vol, g.volNum, g.volDen);
+      const m2 = computeSlotValue(revSlot, g.rev, g.revNum, g.revDen);
+      let m3;
+      if (hasDerived) {
+        m3 = computeSlotValue(derSlot, g.der, g.derNum, g.derDen);
+      } else {
+        m3 = m1 > 0 ? 1e4 * m2 / m1 : 0;
+      }
+      result[period] = { metric1: m1, metric2: m2, metric3: m3 };
+    }
+    return result;
+  }
+  function aggregateCsvDimensions(rows, dimColumn, config) {
+    const { metricConfig, grain, dateColumn, filters } = config;
+    const filtered = filterRows(rows, filters);
+    const volSlot = slotConfig(metricConfig, "volume");
+    const revSlot = slotConfig(metricConfig, "revenue");
+    const derSlot = slotConfig(metricConfig, "derived");
+    const hasDerived = derSlot.mode === "formula" || !!metricConfig.derivedAggType || !!metricConfig.derivedColumn;
+    const groups = {};
+    const catTotals = {};
+    function makeAccs() {
+      return {
+        vol: createAcc(volSlot.aggType || "sum"),
+        volNum: volSlot.mode === "formula" ? createAcc(volSlot.numAggType) : null,
+        volDen: volSlot.mode === "formula" ? createAcc(volSlot.denAggType) : null,
+        rev: createAcc(revSlot.aggType || "sum"),
+        revNum: revSlot.mode === "formula" ? createAcc(revSlot.numAggType) : null,
+        revDen: revSlot.mode === "formula" ? createAcc(revSlot.denAggType) : null,
+        der: hasDerived && derSlot.mode !== "formula" ? createAcc(derSlot.aggType || "sum") : null,
+        derNum: derSlot.mode === "formula" ? createAcc(derSlot.numAggType) : null,
+        derDen: derSlot.mode === "formula" ? createAcc(derSlot.denAggType) : null
+      };
+    }
+    function accumulateRow(accs, row) {
+      if (volSlot.mode === "formula") {
+        addToAcc(accs.volNum, row[volSlot.numColumn]);
+        addToAcc(accs.volDen, row[volSlot.denColumn]);
+      } else {
+        addToAcc(accs.vol, volSlot.column ? row[volSlot.column] : 1);
+      }
+      if (revSlot.mode === "formula") {
+        addToAcc(accs.revNum, row[revSlot.numColumn]);
+        addToAcc(accs.revDen, row[revSlot.denColumn]);
+      } else {
+        addToAcc(accs.rev, revSlot.column ? row[revSlot.column] : 1);
+      }
+      if (derSlot.mode === "formula") {
+        addToAcc(accs.derNum, row[derSlot.numColumn]);
+        addToAcc(accs.derDen, row[derSlot.denColumn]);
+      } else if (accs.der) {
+        addToAcc(accs.der, derSlot.column ? row[derSlot.column] : 1);
+      }
+    }
+    for (let i = 0; i < filtered.length; i++) {
+      const row = filtered[i];
+      const period = bucketDateToGrain(row[dateColumn], grain);
+      if (!period) continue;
+      const cat = row[dimColumn] || "Unknown";
+      if (!groups[period]) groups[period] = {};
+      if (!groups[period][cat]) groups[period][cat] = makeAccs();
+      accumulateRow(groups[period][cat], row);
+      if (!catTotals[cat]) catTotals[cat] = makeAccs();
+      accumulateRow(catTotals[cat], row);
+    }
+    function finalizeAccs(accs) {
+      const m1 = computeSlotValue(volSlot, accs.vol, accs.volNum, accs.volDen);
+      const m2 = computeSlotValue(revSlot, accs.rev, accs.revNum, accs.revDen);
+      let m3;
+      if (hasDerived) {
+        m3 = computeSlotValue(derSlot, accs.der, accs.derNum, accs.derDen);
+      } else {
+        m3 = m1 > 0 ? 1e4 * m2 / m1 : 0;
+      }
+      return { metric1: m1, metric2: m2, metric3: m3 };
+    }
+    const dimAggs = {};
+    const periods = Object.keys(groups);
+    for (let p = 0; p < periods.length; p++) {
+      const period = periods[p];
+      dimAggs[period] = {};
+      const cats = Object.keys(groups[period]);
+      for (let c = 0; c < cats.length; c++) {
+        dimAggs[period][cats[c]] = finalizeAccs(groups[period][cats[c]]);
+      }
+    }
+    const categoryTotalsOut = {};
+    const totalCats = Object.keys(catTotals);
+    for (let c = 0; c < totalCats.length; c++) {
+      categoryTotalsOut[totalCats[c]] = finalizeAccs(catTotals[totalCats[c]]);
+    }
+    const result = {};
+    result[dimColumn] = dimAggs;
+    result._categoryTotals = {};
+    result._categoryTotals[dimColumn] = categoryTotalsOut;
+    return result;
+  }
+  function aggregateAllDimensions(rows, dimensionColumns, config) {
+    const merged = {};
+    const mergedTotals = {};
+    for (let d = 0; d < dimensionColumns.length; d++) {
+      const dimCol = dimensionColumns[d];
+      const result = aggregateCsvDimensions(rows, dimCol, config);
+      merged[dimCol] = result[dimCol];
+      if (result._categoryTotals && result._categoryTotals[dimCol]) {
+        mergedTotals[dimCol] = result._categoryTotals[dimCol];
+      }
+    }
+    merged._categoryTotals = mergedTotals;
+    return merged;
+  }
+  var DEMO_METRIC_CONFIG = {
+    volumeColumn: "volume",
+    volumeLabel: "Gross Volume",
+    volumeFormat: "0.0a",
+    volumePrefix: "$",
+    volumeSuffix: "",
+    revenueColumn: "revenue",
+    revenueLabel: "Net Revenue",
+    revenueFormat: "0.0a",
+    revenuePrefix: "$",
+    revenueSuffix: "",
+    derivedMode: "formula",
+    derivedFormulaNumAggType: "sum",
+    derivedFormulaNumColumn: "revenue",
+    derivedFormulaDenAggType: "sum",
+    derivedFormulaDenColumn: "volume",
+    derivedFormulaOperator: "/",
+    derivedMultiplier: 1e4,
+    derivedLabel: "Margin Rate",
+    derivedFormat: "0.0",
+    derivedPrefix: "",
+    derivedSuffix: " bps",
+    dateColumn: "reporting_week",
+    defaultGrain: "month"
+  };
 
   // src/liveConnection.js
   var DEFAULT_METRIC_CONFIGS = {
@@ -628,7 +1142,7 @@ var __app = (() => {
     addSlot("derived", "derived");
     return metrics;
   }
-  function applyOperator(a, b, op) {
+  function applyOperator2(a, b, op) {
     switch (op) {
       case "/":
         return b !== 0 ? a / b : 0;
@@ -647,7 +1161,7 @@ var __app = (() => {
     if (fc) {
       const num = Number(row[alias + "_num"]) || 0;
       const den = Number(row[alias + "_den"]) || 0;
-      return applyOperator(num, den, fc.operator);
+      return applyOperator2(num, den, fc.operator);
     }
     return Number(row[alias]) || 0;
   }
@@ -722,10 +1236,10 @@ var __app = (() => {
     }
     Object.keys(categoryTotals[dimColumn]).forEach((cat) => {
       const t = categoryTotals[dimColumn][cat];
-      t.metric1 = formulaConfigs && formulaConfigs.volume ? applyOperator(t._volNumSum, t._volDenSum, formulaConfigs.volume.operator) : t.metric1;
-      t.metric2 = formulaConfigs && formulaConfigs.revenue ? applyOperator(t._revNumSum, t._revDenSum, formulaConfigs.revenue.operator) : t.metric2;
+      t.metric1 = formulaConfigs && formulaConfigs.volume ? applyOperator2(t._volNumSum, t._volDenSum, formulaConfigs.volume.operator) : t.metric1;
+      t.metric2 = formulaConfigs && formulaConfigs.revenue ? applyOperator2(t._revNumSum, t._revDenSum, formulaConfigs.revenue.operator) : t.metric2;
       if (formulaConfigs && formulaConfigs.derived) {
-        t.metric3 = applyOperator(t._derNumSum, t._derDenSum, formulaConfigs.derived.operator);
+        t.metric3 = applyOperator2(t._derNumSum, t._derDenSum, formulaConfigs.derived.operator);
       } else if (hasMetric3) {
         t.metric3 = t._derivedCount > 0 ? t._derivedSum / t._derivedCount : 0;
       } else {
@@ -1963,100 +2477,6 @@ var __app = (() => {
     );
   }
 
-  // src/aggregation.js
-  function buildPeriodAggregates(data, dtField, columns) {
-    const aggregates = {};
-    const volCol = columns.METRIC1;
-    const revCol = columns.METRIC2;
-    const n = data.length;
-    for (let i = 0; i < n; i++) {
-      const row = data[i];
-      const period = row[dtField];
-      if (!aggregates[period]) {
-        aggregates[period] = { metric1: 0, metric2: 0 };
-      }
-      aggregates[period].metric1 += row[volCol] || 0;
-      aggregates[period].metric2 += row[revCol] || 0;
-    }
-    const periods = Object.keys(aggregates);
-    for (let p = 0; p < periods.length; p++) {
-      const agg = aggregates[periods[p]];
-      agg.metric3 = agg.metric1 > 0 ? 1e4 * agg.metric2 / agg.metric1 : 0;
-    }
-    return aggregates;
-  }
-  function buildDimensionAggregates(data, dtField, columns, dimensionDefs) {
-    const aggregates = {};
-    const categoryTotals = {};
-    const validDims = [];
-    for (let d = 0; d < dimensionDefs.length; d++) {
-      const dim = dimensionDefs[d];
-      const column = columns[dim.columnKey];
-      if (column) {
-        validDims.push({ column });
-        aggregates[column] = {};
-        categoryTotals[column] = {};
-      }
-    }
-    const dimCount = validDims.length;
-    if (dimCount === 0) {
-      aggregates._categoryTotals = categoryTotals;
-      return aggregates;
-    }
-    const volCol = columns.METRIC1;
-    const revCol = columns.METRIC2;
-    const n = data.length;
-    for (let i = 0; i < n; i++) {
-      const row = data[i];
-      const period = row[dtField];
-      if (!period) continue;
-      const volume = row[volCol] || 0;
-      const revenue = row[revCol] || 0;
-      for (let d = 0; d < dimCount; d++) {
-        const { column } = validDims[d];
-        const categoryValue = row[column] || "Unknown";
-        if (!aggregates[column][period]) {
-          aggregates[column][period] = {};
-        }
-        if (!aggregates[column][period][categoryValue]) {
-          aggregates[column][period][categoryValue] = {
-            metric1: 0,
-            metric2: 0
-          };
-        }
-        aggregates[column][period][categoryValue].metric1 += volume;
-        aggregates[column][period][categoryValue].metric2 += revenue;
-        if (!categoryTotals[column][categoryValue]) {
-          categoryTotals[column][categoryValue] = {
-            metric1: 0,
-            metric2: 0
-          };
-        }
-        categoryTotals[column][categoryValue].metric1 += volume;
-        categoryTotals[column][categoryValue].metric2 += revenue;
-      }
-    }
-    for (let d = 0; d < dimCount; d++) {
-      const { column } = validDims[d];
-      const periods = Object.keys(aggregates[column]);
-      for (let p = 0; p < periods.length; p++) {
-        const cats = aggregates[column][periods[p]];
-        const catKeys = Object.keys(cats);
-        for (let c = 0; c < catKeys.length; c++) {
-          const agg = cats[catKeys[c]];
-          agg.metric3 = agg.metric1 > 0 ? 1e4 * agg.metric2 / agg.metric1 : 0;
-        }
-      }
-      const totCats = Object.keys(categoryTotals[column]);
-      for (let c = 0; c < totCats.length; c++) {
-        const t = categoryTotals[column][totCats[c]];
-        t.metric3 = t.metric1 > 0 ? 1e4 * t.metric2 / t.metric1 : 0;
-      }
-    }
-    aggregates._categoryTotals = categoryTotals;
-    return aggregates;
-  }
-
   // Analyzer_Demo.js
   function render() {
     const [isDarkMode, setIsDarkMode] = React.useState(false);
@@ -3255,7 +3675,8 @@ var __app = (() => {
     const [liveRowCount, setLiveRowCount] = React.useState(0);
     const [liveDataTruncated, setLiveDataTruncated] = React.useState(false);
     const [liveMetricConfig, setLiveMetricConfig] = React.useState(null);
-    const isLiveMode = connectionParams !== null && liveSchemaReady;
+    const [dataSourceType, setDataSourceType] = React.useState(null);
+    const csvRowsRef = React.useRef(null);
     const [showMetricsEditor, setShowMetricsEditor] = React.useState(false);
     const [metricsEditorDraft, setMetricsEditorDraft] = React.useState(null);
     const [metricsEditorSuggesting, setMetricsEditorSuggesting] = React.useState(false);
@@ -3501,23 +3922,77 @@ var __app = (() => {
         setLiveDataLoading(false);
       });
     }, [connectionParams]);
+    React.useEffect(() => {
+      if (urlRoute.mode === "config") return;
+      setLiveDataLoading(true);
+      fetch("data/demo.csv").then((r) => {
+        if (!r.ok) throw new Error("Failed to load demo.csv (HTTP " + r.status + ")");
+        return r.text();
+      }).then((text) => {
+        const parsed = import_papaparse.default.parse(text, { header: true, dynamicTyping: true, skipEmptyLines: true });
+        csvRowsRef.current = parsed.data;
+        const columnMeta = inferColumnTypes(parsed.meta.fields, parsed.data.slice(0, 100));
+        setLiveColumnMeta(columnMeta);
+        const dateCol = detectDateColumn(columnMeta);
+        const classified = classifySchema(columnMeta, dateCol);
+        const dimCols = classified.dimensions.map((d) => d.name);
+        setLiveFilterOptions(buildCsvFilterOptions(parsed.data, dimCols));
+        setLiveMetricConfig({ ...DEMO_METRIC_CONFIG, dateColumn: dateCol || "reporting_week" });
+        if (DEMO_METRIC_CONFIG.defaultGrain) {
+          const grainToFreq = { day: "Daily", week: "Weekly", month: "Monthly", quarter: "Quarterly", year: "Yearly" };
+          setDataFrequency(grainToFreq[DEMO_METRIC_CONFIG.defaultGrain] || "Monthly");
+        }
+        setDataSourceType("csv");
+        setLiveSchemaReady(true);
+        setLiveDataLoading(false);
+      }).catch((err) => {
+        logger_default.error("[Dashboard] Failed to load demo CSV:", err);
+        setLiveDataError(err.message);
+        setLiveDataLoading(false);
+      });
+    }, []);
+    const handleCsvUpload = React.useCallback((file) => {
+      setLiveDataLoading(true);
+      setLiveDataError(null);
+      import_papaparse.default.parse(file, {
+        header: true,
+        dynamicTyping: true,
+        skipEmptyLines: true,
+        complete: (result) => {
+          csvRowsRef.current = result.data;
+          const columnMeta = inferColumnTypes(result.meta.fields, result.data.slice(0, 100));
+          setLiveColumnMeta(columnMeta);
+          const dateCol = detectDateColumn(columnMeta);
+          const classified = classifySchema(columnMeta, dateCol);
+          const dimCols = classified.dimensions.map((d) => d.name);
+          setLiveFilterOptions(buildCsvFilterOptions(result.data, dimCols));
+          setDataSourceType("csv");
+          setLiveSchemaReady(true);
+          setLiveDataLoading(false);
+          setShowMetricsEditor(true);
+        },
+        error: (err) => {
+          setLiveDataError("CSV parse error: " + err.message);
+          setLiveDataLoading(false);
+        }
+      });
+    }, []);
     const restoreStateSnapshotRef = React.useRef(null);
     const [dynamicFilters, setDynamicFilters] = React.useState({});
-    const COLUMNS = isLiveMode ? buildLiveColumns(visibleLiveDimensions) : DEMO_COLUMNS;
-    const DIMENSION_DEFINITIONS = isLiveMode ? buildLiveDimensions(visibleLiveDimensions) : DEMO_DIMENSION_DEFINITIONS;
-    const METRIC_LABELS = isLiveMode && liveMetricConfig ? {
+    const COLUMNS = buildLiveColumns(visibleLiveDimensions);
+    const DIMENSION_DEFINITIONS = buildLiveDimensions(visibleLiveDimensions);
+    const METRIC_LABELS = liveMetricConfig ? {
       metric1: liveMetricConfig.volumeLabel,
       metric2: liveMetricConfig.revenueLabel,
       metric3: liveMetricConfig.derivedLabel
     } : {
-      metric1: "Gross Volume",
-      metric2: "Net Revenue",
-      metric3: "Margin Rate"
+      metric1: "Metric 1",
+      metric2: "Metric 2",
+      metric3: "Metric 3"
     };
     const queryData = React.useMemo(function() {
-      if (connectionParams) return { rows: [] };
-      return generateSyntheticData();
-    }, [connectionParams]);
+      return { rows: [] };
+    }, []);
     const { cleanedQueryData, metadataVariables } = React.useMemo(() => {
       if (!queryData.rows || queryData.rows.length === 0) {
         return {
@@ -3574,7 +4049,7 @@ var __app = (() => {
       };
     }, [queryData]);
     const availableColumns = React.useMemo(() => {
-      if (isLiveMode && liveColumnMeta) {
+      if (liveColumnMeta) {
         const cols = new Set(liveColumnMeta.map((c) => c.name));
         cols.add("reporting_day");
         cols.add("reporting_week");
@@ -3589,7 +4064,7 @@ var __app = (() => {
         return /* @__PURE__ */ new Set();
       const firstRow = cleanedQueryData.rows[0];
       return new Set(Object.keys(firstRow));
-    }, [isLiveMode, liveColumnMeta, cleanedQueryData.rows]);
+    }, [liveColumnMeta, cleanedQueryData.rows]);
     const columnExists = React.useCallback(
       (columnName) => {
         return availableColumns.has(columnName);
@@ -3736,67 +4211,18 @@ var __app = (() => {
     }, [columnExists]);
     const getFilterState = React.useCallback(
       (key) => {
-        if (isLiveMode) {
-          return dynamicFilters[key] || [];
-        }
-        const stateMap = {
-          productNameFilter,
-          pricingTypeFilter,
-          companySegmentFilter,
-          revenueRegionFilter,
-          revenueCountryFilter,
-          acquisitionChannelFilter,
-          channelFilter,
-          productGroupFilter,
-          productSubFilter,
-          isAiCompanyFilter,
-          channelTypeFilter,
-          customerConnectFilter
-        };
-        return stateMap[key] || [];
+        return dynamicFilters[key] || [];
       },
-      [
-        isLiveMode,
-        dynamicFilters,
-        productNameFilter,
-        pricingTypeFilter,
-        companySegmentFilter,
-        revenueRegionFilter,
-        revenueCountryFilter,
-        acquisitionChannelFilter,
-        channelFilter,
-        productGroupFilter,
-        productSubFilter,
-        isAiCompanyFilter,
-        channelTypeFilter,
-        customerConnectFilter
-      ]
+      [dynamicFilters]
     );
     const getFilterSetState = React.useCallback((key) => {
-      if (isLiveMode) {
-        return (value) => {
-          setDynamicFilters((prev) => ({
-            ...prev,
-            [key]: typeof value === "function" ? value(prev[key] || []) : value
-          }));
-        };
-      }
-      const setStateMap = {
-        productNameFilter: setProductNameFilter,
-        pricingTypeFilter: setPricingTypeFilter,
-        companySegmentFilter: setCompanySegmentFilter,
-        revenueRegionFilter: setRevenueRegionFilter,
-        revenueCountryFilter: setRevenueCountryFilter,
-        acquisitionChannelFilter: setAcquisitionChannelFilter,
-        channelFilter: setChannelFilter,
-        productGroupFilter: setProductGroupFilter,
-        productSubFilter: setProductSubFilter,
-        isAiCompanyFilter: setIsAiCompanyFilter,
-        channelTypeFilter: setChannelTypeFilter,
-        customerConnectFilter: setCustomerConnectFilter
+      return (value) => {
+        setDynamicFilters((prev) => ({
+          ...prev,
+          [key]: typeof value === "function" ? value(prev[key] || []) : value
+        }));
       };
-      return setStateMap[key];
-    }, [isLiveMode]);
+    }, []);
     const FILTER_CONFIG = React.useMemo(() => {
       return FILTER_CONFIG_STATIC.map((filter) => ({
         ...filter,
@@ -5187,7 +5613,31 @@ var __app = (() => {
     }, [dataFrequency]);
     const liveAggRequestRef = React.useRef(0);
     React.useEffect(() => {
-      if (!isLiveMode || !liveMetricConfig) return;
+      if (!liveSchemaReady || !liveMetricConfig) return;
+      if (dataSourceType === "csv" && csvRowsRef.current) {
+        const grain2 = frequencyToGrain[dataFrequency] || "month";
+        const dateCol2 = liveMetricConfig.dateColumn || "reporting_week";
+        const viewConfig2 = view !== "Overall" ? VIEW_CONFIG[view] : null;
+        const dimColumn2 = viewConfig2 ? viewConfig2.column : null;
+        const pFilters2 = {};
+        Object.keys(dynamicFilters).forEach((fk) => {
+          const vals = dynamicFilters[fk];
+          if (!vals || vals.length === 0) return;
+          pFilters2[fk.replace(/^dim_/, "").replace(/_filter$/, "")] = vals;
+        });
+        const aggConfig = { metricConfig: liveMetricConfig, grain: grain2, dateColumn: dateCol2, filters: pFilters2 };
+        const periodAggs = aggregateCsvPeriods(csvRowsRef.current, aggConfig);
+        setLivePeriodAggregates(periodAggs);
+        if (dimColumn2) {
+          setLiveDimensionAggregates(aggregateCsvDimensions(csvRowsRef.current, dimColumn2, aggConfig));
+        } else {
+          setLiveDimensionAggregates({});
+        }
+        setLiveRowCount(csvRowsRef.current.length);
+        setLiveDataTruncated(false);
+        setLiveAggLoading(false);
+        return;
+      }
       const requestId = ++liveAggRequestRef.current;
       setLiveAggLoading(true);
       const grain = frequencyToGrain[dataFrequency] || "month";
@@ -5250,10 +5700,30 @@ var __app = (() => {
         logger_default.error("[Dashboard] Aggregation fetch error:", err);
         setLiveAggLoading(false);
       });
-    }, [isLiveMode, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX, liveBooleanColumns]);
+    }, [liveSchemaReady, dataSourceType, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX, liveBooleanColumns]);
     React.useEffect(() => {
-      if (!isLiveMode || !activeInsightsTab || !liveMetricConfig) return;
+      if (!liveSchemaReady || !activeInsightsTab || !liveMetricConfig) return;
       let cancelled = false;
+      if (dataSourceType === "csv" && csvRowsRef.current) {
+        const grain2 = frequencyToGrain[dataFrequency] || "month";
+        const dateCol2 = liveMetricConfig.dateColumn || "reporting_week";
+        const dimCols2 = visibleLiveDimensions.map((d) => d.name);
+        if (dimCols2.length === 0) return;
+        const pFilters2 = {};
+        Object.keys(dynamicFilters).forEach((fk) => {
+          const vals = dynamicFilters[fk];
+          if (!vals || vals.length === 0) return;
+          pFilters2[fk.replace(/^dim_/, "").replace(/_filter$/, "")] = vals;
+        });
+        const aggConfig = { metricConfig: liveMetricConfig, grain: grain2, dateColumn: dateCol2, filters: pFilters2 };
+        const allDimAggs = aggregateAllDimensions(csvRowsRef.current, dimCols2, aggConfig);
+        const merged2 = {};
+        Object.keys(allDimAggs).forEach((key) => {
+          if (key !== "_categoryTotals") merged2[key] = allDimAggs[key];
+        });
+        setLiveInsightsDimAggs(merged2);
+        return;
+      }
       const grain = frequencyToGrain[dataFrequency] || "month";
       const dateCol = liveMetricConfig.dateColumn || liveDateColumn;
       const rpcMetrics = buildRpcMetrics(liveMetricConfig);
@@ -5306,7 +5776,7 @@ var __app = (() => {
         cancelled = true;
       };
     }, [
-      isLiveMode,
+      dataSourceType,
       activeInsightsTab,
       liveMetricConfig,
       dataFrequency,
@@ -5333,63 +5803,20 @@ var __app = (() => {
       }
     }, [dataFrequency]);
     const dataExtracts = React.useMemo(() => {
-      if (isLiveMode) {
-        var liveAllDates = livePeriodAggregates ? Object.keys(livePeriodAggregates).sort() : [];
-        var liveFoMap = {};
-        FILTER_CONFIG_STATIC.forEach(function(fc2) {
-          var colName = fc2.key.replace(/^dim_/, "").replace(/_filter$/, "");
-          var vals = liveFilterOptions[colName] || [];
-          liveFoMap[fc2.key] = ["All"].concat(vals);
-        });
-        return {
-          allDates: liveAllDates,
-          filterOptionsMap: liveFoMap,
-          pricingTypes: ["All"],
-          pricingTypeToGroup: /* @__PURE__ */ new Map()
-        };
-      }
-      var rows = cleanedQueryData.rows;
-      var n = rows.length;
-      var dtCol = dateField;
-      var ptCol = COLUMNS.PRODUCT_NAME;
-      var ptgCol = COLUMNS.PRODUCT_GROUP_L1;
-      var filterCols = [];
-      for (var f = 0; f < FILTER_CONFIG_STATIC.length; f++) {
-        var fc = FILTER_CONFIG_STATIC[f];
-        filterCols.push({ key: fc.key, column: fc.column, values: /* @__PURE__ */ new Set() });
-      }
-      var fcLen = filterCols.length;
-      var dateSet = /* @__PURE__ */ new Set();
-      var ptToGroup = /* @__PURE__ */ new Map();
-      for (var i = 0; i < n; i++) {
-        var row = rows[i];
-        var d = row[dtCol];
-        if (d != null && d !== "") dateSet.add(d);
-        for (var j = 0; j < fcLen; j++) {
-          var val = row[filterCols[j].column];
-          if (val && val !== "Unknown") filterCols[j].values.add(val);
-        }
-        var pm = row[ptCol];
-        var pmf = row[ptgCol];
-        if (pm && pmf) {
-          ptToGroup.set(pm, pmf);
-        }
-      }
-      var allDatesArr = Array.from(dateSet).sort();
-      var foMap = {};
-      for (var fi = 0; fi < fcLen; fi++) {
-        foMap[filterCols[fi].key] = ["All"].concat(
-          Array.from(filterCols[fi].values)
-        );
-      }
-      var ptArr = foMap["pricingTypeFilter"] || ["All"];
+      var liveAllDates = livePeriodAggregates ? Object.keys(livePeriodAggregates).sort() : [];
+      var liveFoMap = {};
+      FILTER_CONFIG_STATIC.forEach(function(fc) {
+        var colName = fc.key.replace(/^dim_/, "").replace(/_filter$/, "");
+        var vals = liveFilterOptions[colName] || [];
+        liveFoMap[fc.key] = ["All"].concat(vals);
+      });
       return {
-        allDates: allDatesArr,
-        filterOptionsMap: foMap,
-        pricingTypes: ptArr,
-        pricingTypeToGroup: ptToGroup
+        allDates: liveAllDates,
+        filterOptionsMap: liveFoMap,
+        pricingTypes: ["All"],
+        pricingTypeToGroup: /* @__PURE__ */ new Map()
       };
-    }, [isLiveMode, livePeriodAggregates, liveFilterOptions, cleanedQueryData.rows, dateField, FILTER_CONFIG_STATIC]);
+    }, [livePeriodAggregates, liveFilterOptions, FILTER_CONFIG_STATIC]);
     var allDates = dataExtracts.allDates;
     var filterOptionsMap = dataExtracts.filterOptionsMap;
     var pricingTypes = dataExtracts.pricingTypes;
@@ -5465,7 +5892,7 @@ var __app = (() => {
       return {
         metrics: metricMap,
         views,
-        dataFrequencies: isLiveMode ? ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"] : ["Weekly", "Monthly", "Quarterly", "Yearly"],
+        dataFrequencies: ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"],
         dateRanges: DATE_RANGES,
         filters
       };
@@ -5615,18 +6042,14 @@ var __app = (() => {
       return buildFilterDescription("short", " x ", "", "", "All Data");
     }, [buildFilterDescription]);
     const resetAllFilters = React.useCallback(() => {
-      if (isLiveMode) {
-        setDynamicFilters({});
-      } else {
-        FILTER_CONFIG.forEach(({ setState }) => setState([]));
-      }
+      setDynamicFilters({});
       setDateRange("YTD");
       setView("Overall");
       setActiveInsightsTab(null);
       setFilterSearchText("");
       setShowFilterSuggestions(false);
       setInsightContext(null);
-    }, [FILTER_CONFIG, isLiveMode]);
+    }, []);
     const handleDataFrequencyChange = React.useCallback((newFrequency) => {
       setDataFrequency(newFrequency);
       setInsightContext(null);
@@ -5659,10 +6082,9 @@ var __app = (() => {
       });
       return grouped;
     }, [filteredData, dateField]);
-    const buildPeriodAggregates2 = (data, dtField) => buildPeriodAggregates(data, dtField, COLUMNS);
     const baseDataAggregatesByPeriod = React.useMemo(
-      () => isLiveMode ? livePeriodAggregates || {} : buildPeriodAggregates2(baseFilteredData, dateField),
-      [isLiveMode, livePeriodAggregates, baseFilteredData, dateField]
+      () => livePeriodAggregates || {},
+      [livePeriodAggregates]
     );
     const sortedBaseDataPeriods = React.useMemo(() => {
       return Object.keys(baseDataAggregatesByPeriod).sort();
@@ -5679,10 +6101,9 @@ var __app = (() => {
       }
       return result;
     }, [baseDataAggregatesByPeriod, filteredDatesSet]);
-    const buildDimensionAggregates2 = (data, dtField) => buildDimensionAggregates(data, dtField, COLUMNS, DIMENSION_DEFINITIONS);
     const baseDimensionAggregates = React.useMemo(
-      () => isLiveMode ? liveDimensionAggregates || { _categoryTotals: {} } : buildDimensionAggregates2(baseFilteredData, dateField),
-      [isLiveMode, liveDimensionAggregates, baseFilteredData, dateField]
+      () => liveDimensionAggregates || { _categoryTotals: {} },
+      [liveDimensionAggregates]
     );
     const dimensionAggregates = React.useMemo(() => {
       var base = baseDimensionAggregates;
@@ -5771,7 +6192,7 @@ var __app = (() => {
       [metric, calculateMetricValue]
     );
     const resolveChartType = React.useCallback((metricName) => {
-      if (isLiveMode && liveMetricConfig) {
+      if (liveMetricConfig) {
         const prefix = metricName === "metric1" ? "volume" : metricName === "metric2" ? "revenue" : "derived";
         const configuredType = liveMetricConfig[prefix + "ChartType"] || "auto";
         if (configuredType !== "auto") return configuredType;
@@ -5779,16 +6200,16 @@ var __app = (() => {
         return mode === "formula" ? "line" : "stacked";
       }
       return metricName === "metric3" ? "line" : "stacked";
-    }, [isLiveMode, liveMetricConfig]);
+    }, [liveMetricConfig]);
     const isFormulaMetric = React.useCallback((metricName) => {
-      if (isLiveMode && liveMetricConfig) {
+      if (liveMetricConfig) {
         const prefix = metricName === "metric1" ? "volume" : metricName === "metric2" ? "revenue" : "derived";
         return (liveMetricConfig[prefix + "Mode"] || "aggregation") === "formula";
       }
       return metricName === "metric3";
-    }, [isLiveMode, liveMetricConfig]);
+    }, [liveMetricConfig]);
     const formatMetricValue = React.useCallback((value, metricName) => {
-      if (isLiveMode && liveMetricConfig) {
+      if (liveMetricConfig) {
         if (metricName === "metric1") {
           const formatted = numeral(value).format(liveMetricConfig.volumeFormat);
           return (liveMetricConfig.volumePrefix || "") + formatted + (liveMetricConfig.volumeSuffix || "");
@@ -5813,7 +6234,7 @@ var __app = (() => {
         default:
           return numeral(value).format("0.0a");
       }
-    }, [isLiveMode, liveMetricConfig]);
+    }, [liveMetricConfig]);
     const formatMetric = React.useCallback(
       (value) => formatMetricValue(value, metric),
       [metric, formatMetricValue]
@@ -6131,7 +6552,7 @@ var __app = (() => {
       ]
     );
     const generateStructuredInsights = (tabType) => {
-      if (periods.length < 3 || !isLiveMode && filteredData.length === 0) {
+      if (periods.length < 3) {
         return {
           basicInsights: {
             decomposition: [],
@@ -6163,83 +6584,41 @@ var __app = (() => {
         recommendations: []
       };
       const completePeriods = periods.slice(0, -1);
-      let completeFilteredData, completeDataByPeriod;
-      if (isLiveMode) {
-        completeFilteredData = [];
-        completeDataByPeriod = {};
-        completePeriods.forEach((period) => {
-          const agg = periodAggregates[period];
-          if (!agg) return;
-          const syntheticRow = { [dateField]: period, [COLUMNS.METRIC1]: agg.metric1, [COLUMNS.METRIC2]: agg.metric2, __metric3: agg.metric3 };
-          completeFilteredData.push(syntheticRow);
-          completeDataByPeriod[period] = [syntheticRow];
-        });
-      } else {
-        completeFilteredData = filteredData.filter(
-          (row) => completePeriods.includes(row[dateField])
-        );
-        completeDataByPeriod = {};
-        for (let i = 0; i < completeFilteredData.length; i++) {
-          const row = completeFilteredData[i];
-          const period = row[dateField];
-          if (!completeDataByPeriod[period]) completeDataByPeriod[period] = [];
-          completeDataByPeriod[period].push(row);
-        }
-      }
+      let completeFilteredData = [];
+      let completeDataByPeriod = {};
+      completePeriods.forEach((period) => {
+        const agg = periodAggregates[period];
+        if (!agg) return;
+        const syntheticRow = { [dateField]: period, [COLUMNS.METRIC1]: agg.metric1, [COLUMNS.METRIC2]: agg.metric2, __metric3: agg.metric3 };
+        completeFilteredData.push(syntheticRow);
+        completeDataByPeriod[period] = [syntheticRow];
+      });
       const activeDimColumns = DIMENSION_DEFINITIONS.filter((dim) => columnExists(COLUMNS[dim.columnKey])).map((dim) => COLUMNS[dim.columnKey]);
       const precomputed = {};
       activeDimColumns.forEach((col) => {
         precomputed[col] = {};
       });
-      if (isLiveMode) {
-        activeDimColumns.forEach((col) => {
-          const dimPeriods = liveInsightsDimAggs[col] || {};
-          Object.keys(dimPeriods).forEach((period) => {
-            if (!completePeriods.includes(period)) return;
-            const cats = dimPeriods[period];
-            Object.keys(cats).forEach((val) => {
-              if (!val || val === "Unknown") return;
-              const catAgg = cats[val];
-              let cat = precomputed[col][val];
-              if (!cat) {
-                cat = { metric1: 0, metric2: 0, byPeriod: {} };
-                precomputed[col][val] = cat;
-              }
-              const vol = catAgg.metric1 || 0;
-              const rev = catAgg.metric2 || 0;
-              cat.metric1 += vol;
-              cat.metric2 += rev;
-              cat.byPeriod[period] = { metric1: vol, metric2: rev, metric3: catAgg.metric3 };
-            });
-          });
-        });
-      } else {
-        for (let i = 0; i < completeFilteredData.length; i++) {
-          const row = completeFilteredData[i];
-          const period = row[dateField];
-          const volume = row[COLUMNS.METRIC1] || 0;
-          const revenue = row[COLUMNS.METRIC2] || 0;
-          for (let d = 0; d < activeDimColumns.length; d++) {
-            const col = activeDimColumns[d];
-            const val = row[col];
-            if (!val) continue;
+      activeDimColumns.forEach((col) => {
+        const dimPeriods = liveInsightsDimAggs[col] || {};
+        Object.keys(dimPeriods).forEach((period) => {
+          if (!completePeriods.includes(period)) return;
+          const cats = dimPeriods[period];
+          Object.keys(cats).forEach((val) => {
+            if (!val || val === "Unknown") return;
+            const catAgg = cats[val];
             let cat = precomputed[col][val];
             if (!cat) {
               cat = { metric1: 0, metric2: 0, byPeriod: {} };
               precomputed[col][val] = cat;
             }
-            cat.metric1 += volume;
-            cat.metric2 += revenue;
-            let pAgg = cat.byPeriod[period];
-            if (!pAgg) {
-              pAgg = { metric1: 0, metric2: 0 };
-              cat.byPeriod[period] = pAgg;
-            }
-            pAgg.metric1 += volume;
-            pAgg.metric2 += revenue;
-          }
-        }
-      }
+            const vol = catAgg.metric1 || 0;
+            const rev = catAgg.metric2 || 0;
+            cat.metric1 += vol;
+            cat.metric2 += rev;
+            cat.byPeriod[period] = { metric1: vol, metric2: rev, metric3: catAgg.metric3 };
+          });
+        });
+      });
       const metricFromAgg = (m1, m2, m3) => {
         switch (metric) {
           case "metric1":
@@ -6809,7 +7188,7 @@ var __app = (() => {
             setters: [setAcquisitionChannelFilter, setRevenueRegionFilter]
           }
         ];
-        if (!isLiveMode) crossDimensionalCombos.forEach((combo) => {
+        if (false) crossDimensionalCombos.forEach((combo) => {
           const hasVariation = combo.filters.some(
             (filter) => Array.isArray(filter) && filter.length === 0
           );
@@ -7103,7 +7482,7 @@ var __app = (() => {
         productGroup: productGroupFilter,
         productSub: productSubFilter
       };
-      const dimDataKey = isLiveMode ? Object.keys(liveInsightsDimAggs).sort().join(",") : "";
+      const dimDataKey = Object.keys(liveInsightsDimAggs).sort().join(",");
       const cacheKey = createInsightsCacheKey(
         metric,
         activeInsightsTab,
@@ -7150,7 +7529,6 @@ var __app = (() => {
       productSubFilter,
       insightContext,
       // 🆕 CRITICAL: Must include insightContext so insights regenerate when drilling down
-      isLiveMode,
       periodAggregates,
       dimensionAggregates,
       liveInsightsDimAggs
@@ -7803,7 +8181,7 @@ var __app = (() => {
           (a, b) => b.total - a.total
         );
         let topAttributes, restAttributes;
-        if (isLiveMode && topX > 0) {
+        if (topX > 0) {
           topAttributes = attributeValues;
           restAttributes = [];
         } else {
@@ -7833,8 +8211,8 @@ var __app = (() => {
         const chartData2 = [];
         allCategories.forEach((category, index) => {
           const traceData = periods.map((period) => {
-            if (category !== "Rest Combined" || isLiveMode && topX > 0) {
-              if (isLiveMode && topX > 0) {
+            if (category !== "Rest Combined" || topX > 0) {
+              if (topX > 0) {
                 const periodAgg = dimensionAggregates[attribute]?.[period];
                 if (!periodAgg || !(category in periodAgg)) return null;
               }
@@ -7877,7 +8255,7 @@ var __app = (() => {
             if (isFormulaMetric(metric)) {
               const totalM1 = periodTotalAgg ? periodTotalAgg.metric1 : 0;
               let categoryM1 = 0;
-              if (category === "Rest Combined" && !(isLiveMode && topX > 0)) {
+              if (category === "Rest Combined" && !(topX > 0)) {
                 restAttributes.forEach((restAttr) => {
                   const catAgg = dimAgg[period] && dimAgg[period][restAttr];
                   if (catAgg) categoryM1 += catAgg.metric1;
@@ -7972,7 +8350,7 @@ var __app = (() => {
             const yoyGrowthRatesForPeriods = periodsForYoY.map(
               (currentPeriod) => {
                 let currentCategoryValue;
-                if (category === "Rest Combined" && !(isLiveMode && topX > 0)) {
+                if (category === "Rest Combined" && !(topX > 0)) {
                   currentCategoryValue = 0;
                   restAttributes.forEach((restAttr) => {
                     currentCategoryValue += getDimMetric(
@@ -8010,7 +8388,7 @@ var __app = (() => {
                   return null;
                 }
                 let previousCategoryValue;
-                if (category === "Rest Combined" && !(isLiveMode && topX > 0)) {
+                if (category === "Rest Combined" && !(topX > 0)) {
                   previousCategoryValue = 0;
                   restAttributes.forEach((restAttr) => {
                     previousCategoryValue += getDimMetric(
@@ -8124,7 +8502,7 @@ var __app = (() => {
           },
           yaxis: {
             title: {
-              text: isLiveMode ? METRIC_LABELS[metric] || metric : splitChartType === "line" ? "Basis Points" : "USD",
+              text: METRIC_LABELS[metric] || metric,
               font: { size: 14, color: "#374151" }
             },
             tickfont: { color: "#6b7280" },
@@ -8440,7 +8818,7 @@ var __app = (() => {
           },
           yaxis: {
             title: {
-              text: isLiveMode ? METRIC_LABELS[metric] || metric : overallChartType === "line" ? "Basis Points" : "USD",
+              text: METRIC_LABELS[metric] || metric,
               font: { size: 14, color: "#374151" }
             },
             tickfont: { color: "#6b7280" },
@@ -8818,7 +9196,7 @@ var __app = (() => {
             }
           }
         }
-        const validFreqs = isLiveMode ? ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"] : ["Weekly", "Monthly", "Quarterly", "Yearly"];
+        const validFreqs = ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"];
         if (response.dataFrequency && validFreqs.includes(response.dataFrequency)) {
           setDataFrequency(response.dataFrequency);
         }
@@ -8905,7 +9283,7 @@ var __app = (() => {
       [buildLLMSchema, applyLLMResponse, LLM_WORKER_URL]
     );
     const LLM_EXAMPLE_QUESTIONS = React.useMemo(() => {
-      if (isLiveMode && liveMetricConfig) {
+      if (liveMetricConfig) {
         const mLabels = [METRIC_LABELS.metric1, METRIC_LABELS.metric2, METRIC_LABELS.metric3].filter(Boolean);
         const dimLabels = DIMENSION_DEFINITIONS.map((d) => d.viewName || d.filterLabel);
         const sampleCats = [];
@@ -8948,7 +9326,7 @@ var __app = (() => {
         "How does revenue break down by customer segment?",
         "Show me quarterly margin rate trends"
       ];
-    }, [isLiveMode, liveMetricConfig, METRIC_LABELS, DIMENSION_DEFINITIONS, COLUMNS, dimensionCategoryTotals]);
+    }, [liveMetricConfig, METRIC_LABELS, DIMENSION_DEFINITIONS, COLUMNS, dimensionCategoryTotals]);
     React.useEffect(() => {
       if (isRestoringRef.current) return;
       if (isExecutingQueryRef.current) return;
@@ -9366,7 +9744,7 @@ var __app = (() => {
       marginBottom: "12px",
       fontSize: "12px",
       color: isDarkMode ? "#fbbf24" : "#92400e"
-    } }, /* @__PURE__ */ React.createElement("span", null, "Data truncated \u2014 results hit the row limit. Metrics may be incomplete.")), !isLiveMode && !liveDataLoading && !liveDataError && /* @__PURE__ */ React.createElement("div", { style: {
+    } }, /* @__PURE__ */ React.createElement("span", null, "Data truncated \u2014 results hit the row limit. Metrics may be incomplete.")), dataSourceType === "csv" && !connectionParams && !liveDataLoading && !liveDataError && /* @__PURE__ */ React.createElement("div", { style: {
       display: "flex",
       alignItems: "center",
       gap: "8px",
@@ -9377,12 +9755,24 @@ var __app = (() => {
       marginBottom: "12px",
       fontSize: "12px",
       color: isDarkMode ? "#fcd34d" : "#92400e"
-    } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: "14px" } }, "\u26A0\uFE0F"), /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("strong", null, "Demo only:"), " Viewing synthetic data."), /* @__PURE__ */ React.createElement(
+    } }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("strong", null, "Demo Data"), " \u2014 viewing sample CSV."), /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto", display: "flex", gap: "6px" } }, /* @__PURE__ */ React.createElement("label", { style: {
+      padding: "4px 12px",
+      borderRadius: "4px",
+      fontSize: "11px",
+      cursor: "pointer",
+      border: `1px solid ${isDarkMode ? "rgba(16, 185, 129, 0.5)" : "rgba(16, 185, 129, 0.5)"}`,
+      background: isDarkMode ? "rgba(16, 185, 129, 0.2)" : "rgba(16, 185, 129, 0.1)",
+      color: isDarkMode ? "#6ee7b7" : "#065f46",
+      fontWeight: 600,
+      whiteSpace: "nowrap"
+    } }, "Upload CSV", /* @__PURE__ */ React.createElement("input", { type: "file", accept: ".csv,.tsv", hidden: true, onChange: (e) => {
+      if (e.target.files[0]) handleCsvUpload(e.target.files[0]);
+      e.target.value = "";
+    } })), /* @__PURE__ */ React.createElement(
       "button",
       {
         onClick: () => setShowConnectModal(true),
         style: {
-          marginLeft: "auto",
           padding: "4px 12px",
           borderRadius: "4px",
           fontSize: "11px",
@@ -9395,7 +9785,7 @@ var __app = (() => {
         }
       },
       "Connect to Database"
-    )), /* @__PURE__ */ React.createElement("div", { style: styles.topSection }, /* @__PURE__ */ React.createElement("div", { style: styles.queryContainer, "data-guide": "quick-query" }, /* @__PURE__ */ React.createElement("div", { style: styles.queryInputGroup }, /* @__PURE__ */ React.createElement("div", { style: styles.queryLabelContainer }, /* @__PURE__ */ React.createElement("label", { style: styles.queryLabel }, "Quick Query"), /* @__PURE__ */ React.createElement(
+    ))), /* @__PURE__ */ React.createElement("div", { style: styles.topSection }, /* @__PURE__ */ React.createElement("div", { style: styles.queryContainer, "data-guide": "quick-query" }, /* @__PURE__ */ React.createElement("div", { style: styles.queryInputGroup }, /* @__PURE__ */ React.createElement("div", { style: styles.queryLabelContainer }, /* @__PURE__ */ React.createElement("label", { style: styles.queryLabel }, "Quick Query"), /* @__PURE__ */ React.createElement(
       "div",
       {
         style: styles.queryTooltipIcon,
@@ -9442,7 +9832,7 @@ var __app = (() => {
           }
         )
       ),
-      showQueryTooltip && /* @__PURE__ */ React.createElement("div", { style: styles.queryTooltip }, /* @__PURE__ */ React.createElement("div", { style: styles.queryTooltipArrow }), /* @__PURE__ */ React.createElement("div", { style: styles.fontWeight600 }, "How to Use"), /* @__PURE__ */ React.createElement("div", { style: styles.textGray }, isLiveMode && METRIC_LABELS ? `Type a natural language question like "How is ${METRIC_LABELS.metric1 || "the metric"} trending${DIMENSION_DEFINITIONS.length > 0 ? ` by ${DIMENSION_DEFINITIONS[0].viewName}` : ""}?" or click "Feeling Lucky" for examples.` : 'Type a natural language question like "How is revenue trending in EMEA?" or click "Feeling Lucky" for examples. Press Enter or click "Ask" to query.'))
+      showQueryTooltip && /* @__PURE__ */ React.createElement("div", { style: styles.queryTooltip }, /* @__PURE__ */ React.createElement("div", { style: styles.queryTooltipArrow }), /* @__PURE__ */ React.createElement("div", { style: styles.fontWeight600 }, "How to Use"), /* @__PURE__ */ React.createElement("div", { style: styles.textGray }, METRIC_LABELS ? `Type a natural language question like "How is ${METRIC_LABELS.metric1 || "the metric"} trending${DIMENSION_DEFINITIONS.length > 0 ? ` by ${DIMENSION_DEFINITIONS[0].viewName}` : ""}?" or click "Feeling Lucky" for examples.` : 'Type a natural language question like "How is revenue trending in EMEA?" or click "Feeling Lucky" for examples. Press Enter or click "Ask" to query.'))
     )), /* @__PURE__ */ React.createElement("div", { style: styles.queryInputWrapper }, /* @__PURE__ */ React.createElement(
       "input",
       {
@@ -9454,7 +9844,7 @@ var __app = (() => {
             handleLLMQuery(queryText);
           }
         },
-        placeholder: isLiveMode && METRIC_LABELS ? `Ask a question... e.g. How is ${METRIC_LABELS.metric1 || "the metric"} trending${DIMENSION_DEFINITIONS.length > 0 ? ` by ${DIMENSION_DEFINITIONS[0].viewName}` : ""}?` : "Ask a question... e.g. How is revenue trending in EMEA?",
+        placeholder: METRIC_LABELS ? `Ask a question... e.g. How is ${METRIC_LABELS.metric1 || "the metric"} trending${DIMENSION_DEFINITIONS.length > 0 ? ` by ${DIMENSION_DEFINITIONS[0].viewName}` : ""}?` : "Ask a question... e.g. How is revenue trending in EMEA?",
         disabled: isLLMLoading,
         style: {
           flex: 1,
@@ -9547,7 +9937,7 @@ var __app = (() => {
         title: showGuide ? "Stop Guide" : "Guide Me - Click to start tour"
       },
       showGuide ? "\u2715" : "Guide Me"
-    )), /* @__PURE__ */ React.createElement("div", { style: styles.statBoxContainer, "data-guide": "metric-statboxes" }, (isLiveMode && liveMetricConfig && !liveMetricConfig.derivedAggType && liveMetricConfig.derivedMode !== "formula" ? ["metric1", "metric2"] : ["metric1", "metric2", "metric3"]).map((metricName) => {
+    )), /* @__PURE__ */ React.createElement("div", { style: styles.statBoxContainer, "data-guide": "metric-statboxes" }, (liveMetricConfig && !liveMetricConfig.derivedAggType && liveMetricConfig.derivedMode !== "formula" ? ["metric1", "metric2"] : ["metric1", "metric2", "metric3"]).map((metricName) => {
       const metricStatData = allMetricsStatData[metricName];
       if (!metricStatData) return null;
       const displayLabel = METRIC_LABELS[metricName] || metricName;
@@ -9820,7 +10210,7 @@ var __app = (() => {
         )
       )),
       /* @__PURE__ */ React.createElement("div", { style: styles.controlGroup }, renderButtonGroup(
-        isLiveMode ? ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"] : ["Weekly", "Monthly", "Quarterly", "Yearly"],
+        ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"],
         dataFrequency,
         handleDataFrequencyChange,
         styles.dataFrequencyGroup,
@@ -10619,7 +11009,7 @@ var __app = (() => {
       },
       /* @__PURE__ */ React.createElement("span", { style: { fontSize: "12px" } }, showDataSummary ? "\u25BC" : "\u25B6"),
       "Data Summary"
-    ), showDataSummary && /* @__PURE__ */ React.createElement("div", { style: styles.summaryGrid }, /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Date Aggregation:"), " ", dataFrequency), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Metric:"), " ", metric), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Split By Dimension:"), " ", view), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Date Range:"), " ", dateRange), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Total Records:"), " ", filteredData.length.toLocaleString()), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Period Range:"), " ", periods.length > 0 ? periods[0] + " to " + periods[periods.length - 1] : "No data"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Active Filters:"), " ", FILTER_CONFIG.flatMap(({ state, formatValue, key }) => {
+    ), showDataSummary && /* @__PURE__ */ React.createElement("div", { style: styles.summaryGrid }, /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Date Aggregation:"), " ", dataFrequency), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Metric:"), " ", metric), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Split By Dimension:"), " ", view), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Date Range:"), " ", dateRange), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Total Records:"), " ", (liveRowCount || filteredData.length).toLocaleString()), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Period Range:"), " ", periods.length > 0 ? periods[0] + " to " + periods[periods.length - 1] : "No data"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Active Filters:"), " ", FILTER_CONFIG.flatMap(({ state, formatValue, key }) => {
       if (state.length === 0) return [];
       return state.map(
         (val) => formatValue ? formatValue(val) : formatFilterName2(val)
@@ -11031,3 +11421,13 @@ var __app = (() => {
   }
   return __toCommonJS(Analyzer_Demo_exports);
 })();
+/*! Bundled license information:
+
+papaparse/papaparse.min.js:
+  (* @license
+  Papa Parse
+  v5.5.3
+  https://github.com/mholt/PapaParse
+  License: MIT
+  *)
+*/

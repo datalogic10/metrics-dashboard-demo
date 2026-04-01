@@ -1,7 +1,11 @@
 import logger from './src/logger.js';
 import { storageGet, storageSet, storageGetJSON, storageSetJSON } from './src/storage.js';
 import { THEME_CONFIG, MODERN_COLOR_PALETTE, getCategoryColor } from './src/theme.js';
-import { generateSyntheticData, DEMO_COLUMNS, DEMO_DIMENSION_DEFINITIONS } from './src/syntheticData.js';
+import Papa from 'papaparse';
+import {
+  inferColumnTypes, buildCsvFilterOptions, aggregateCsvPeriods,
+  aggregateCsvDimensions, aggregateAllDimensions, DEMO_METRIC_CONFIG,
+} from './src/csvDataSource.js';
 import {
   DEFAULT_METRIC_CONFIGS, parseUrlRoute, parseStateParam,
   createRpcCaller, createQueryCache,
@@ -44,10 +48,6 @@ import {
 import { InsightContextBanner } from './src/components/InsightContextBanner.js';
 import { MetricsEditorModal } from './src/components/MetricsEditorModal.js';
 import { StatBox } from './src/components/StatBox.js';
-import {
-  buildPeriodAggregates as buildPeriodAggregatesUtil,
-  buildDimensionAggregates as buildDimensionAggregatesUtil,
-} from './src/aggregation.js';
 
 export function render() {
 
@@ -1307,7 +1307,9 @@ export function render() {
   // Metric config for live mode — defines how columns map to the 3 metric slots
   const [liveMetricConfig, setLiveMetricConfig] = React.useState(null); // set from Config DB
 
-  const isLiveMode = connectionParams !== null && liveSchemaReady;
+  // CSV data source state
+  const [dataSourceType, setDataSourceType] = React.useState(null); // 'csv' | 'supabase' | null
+  const csvRowsRef = React.useRef(null); // parsed CSV rows (large array, stored in ref to avoid re-renders)
 
   // Metrics editor modal state
   const [showMetricsEditor, setShowMetricsEditor] = React.useState(false);
@@ -1604,34 +1606,95 @@ export function render() {
       });
   }, [connectionParams]);
 
+  // ===== CSV MODE: Auto-load demo.csv when no Supabase connection =====
+  React.useEffect(() => {
+    if (urlRoute.mode === 'config') return; // Config/Supabase mode — skip CSV demo
+    setLiveDataLoading(true);
+    fetch('data/demo.csv')
+      .then(r => {
+        if (!r.ok) throw new Error('Failed to load demo.csv (HTTP ' + r.status + ')');
+        return r.text();
+      })
+      .then(text => {
+        const parsed = Papa.parse(text, { header: true, dynamicTyping: true, skipEmptyLines: true });
+        csvRowsRef.current = parsed.data;
+        const columnMeta = inferColumnTypes(parsed.meta.fields, parsed.data.slice(0, 100));
+        setLiveColumnMeta(columnMeta);
+        const dateCol = detectDateColumn(columnMeta);
+        const classified = classifySchema(columnMeta, dateCol);
+        const dimCols = classified.dimensions.map(d => d.name);
+        setLiveFilterOptions(buildCsvFilterOptions(parsed.data, dimCols));
+        setLiveMetricConfig({ ...DEMO_METRIC_CONFIG, dateColumn: dateCol || 'reporting_week' });
+        if (DEMO_METRIC_CONFIG.defaultGrain) {
+          const grainToFreq = { day: 'Daily', week: 'Weekly', month: 'Monthly', quarter: 'Quarterly', year: 'Yearly' };
+          setDataFrequency(grainToFreq[DEMO_METRIC_CONFIG.defaultGrain] || 'Monthly');
+        }
+        setDataSourceType('csv');
+        setLiveSchemaReady(true);
+        setLiveDataLoading(false);
+      })
+      .catch(err => {
+        logger.error('[Dashboard] Failed to load demo CSV:', err);
+        setLiveDataError(err.message);
+        setLiveDataLoading(false);
+      });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- mount only
+
+  // CSV file upload handler
+  const handleCsvUpload = React.useCallback((file) => {
+    setLiveDataLoading(true);
+    setLiveDataError(null);
+    Papa.parse(file, {
+      header: true,
+      dynamicTyping: true,
+      skipEmptyLines: true,
+      complete: (result) => {
+        csvRowsRef.current = result.data;
+        const columnMeta = inferColumnTypes(result.meta.fields, result.data.slice(0, 100));
+        setLiveColumnMeta(columnMeta);
+        const dateCol = detectDateColumn(columnMeta);
+        const classified = classifySchema(columnMeta, dateCol);
+        const dimCols = classified.dimensions.map(d => d.name);
+        setLiveFilterOptions(buildCsvFilterOptions(result.data, dimCols));
+        setDataSourceType('csv');
+        setLiveSchemaReady(true);
+        setLiveDataLoading(false);
+        // Open metrics editor for user to configure their metrics
+        setShowMetricsEditor(true);
+      },
+      error: (err) => {
+        setLiveDataError('CSV parse error: ' + err.message);
+        setLiveDataLoading(false);
+      },
+    });
+  }, []);
+
   // Ref to hold restoreStateSnapshot for use in early effects (the callback is defined later)
   const restoreStateSnapshotRef = React.useRef(null);
 
   // Dynamic filters for live mode (single state object)
   const [dynamicFilters, setDynamicFilters] = React.useState({});
 
-  const COLUMNS = isLiveMode ? buildLiveColumns(visibleLiveDimensions) : DEMO_COLUMNS;
+  const COLUMNS = buildLiveColumns(visibleLiveDimensions);
 
-  const DIMENSION_DEFINITIONS = isLiveMode ? buildLiveDimensions(visibleLiveDimensions) : DEMO_DIMENSION_DEFINITIONS;
+  const DIMENSION_DEFINITIONS = buildLiveDimensions(visibleLiveDimensions);
 
-  // Metric display labels — in live mode, use labels from metric config
-  const METRIC_LABELS = isLiveMode && liveMetricConfig ? {
+  // Metric display labels — from metric config
+  const METRIC_LABELS = liveMetricConfig ? {
     metric1: liveMetricConfig.volumeLabel,
     metric2: liveMetricConfig.revenueLabel,
     metric3: liveMetricConfig.derivedLabel,
   } : {
-    metric1: "Gross Volume",
-    metric2: "Net Revenue",
-    metric3: "Margin Rate",
+    metric1: "Metric 1",
+    metric2: "Metric 2",
+    metric3: "Metric 3",
   };
 
-  // Data source: live Supabase data when connected, synthetic data for demo mode
-  // In live mode: no raw rows needed (server-side aggregation).
-  // queryData is only used for demo mode synthetic data.
+  // Data source: In live/CSV mode, no raw rows needed (aggregation is server-side or client-side via csvDataSource).
+  // queryData remains as an empty-rows stub for backward compatibility with code that references cleanedQueryData.
   const queryData = React.useMemo(function() {
-    if (connectionParams) return { rows: [] }; // Live mode: empty rows, aggregates come from RPC
-    return generateSyntheticData();
-  }, [connectionParams]);
+    return { rows: [] };
+  }, []);
 
   /**
    * Extract metadata from queryData and create cleaned version.
@@ -1735,8 +1798,8 @@ export function render() {
 
   // Helper to check which columns exist in the data
   const availableColumns = React.useMemo(() => {
-    // Live mode: derive from schema + synthetic time grain columns
-    if (isLiveMode && liveColumnMeta) {
+    // Derive from schema + synthetic time grain columns
+    if (liveColumnMeta) {
       const cols = new Set(liveColumnMeta.map(c => c.name));
       // Add synthetic columns the dashboard uses
       cols.add('reporting_day');
@@ -1752,7 +1815,7 @@ export function render() {
       return new Set();
     const firstRow = cleanedQueryData.rows[0];
     return new Set(Object.keys(firstRow));
-  }, [isLiveMode, liveColumnMeta, cleanedQueryData.rows]);
+  }, [liveColumnMeta, cleanedQueryData.rows]);
 
   // Helper function to check if a column exists
   const columnExists = React.useCallback(
@@ -1955,71 +2018,20 @@ export function render() {
   // Helper function to get current filter state by key
   const getFilterState = React.useCallback(
     (key) => {
-      // Live mode: use dynamic filters object
-      if (isLiveMode) {
-        return dynamicFilters[key] || [];
-      }
-      const stateMap = {
-        productNameFilter,
-        pricingTypeFilter,
-        companySegmentFilter,
-        revenueRegionFilter,
-        revenueCountryFilter,
-        acquisitionChannelFilter,
-        channelFilter,
-        productGroupFilter,
-        productSubFilter,
-        isAiCompanyFilter,
-        channelTypeFilter,
-        customerConnectFilter,
-      };
-      return stateMap[key] || [];
+      return dynamicFilters[key] || [];
     },
-    [
-      isLiveMode,
-      dynamicFilters,
-      productNameFilter,
-      pricingTypeFilter,
-      companySegmentFilter,
-      revenueRegionFilter,
-      revenueCountryFilter,
-      acquisitionChannelFilter,
-      channelFilter,
-      productGroupFilter,
-      productSubFilter,
-      isAiCompanyFilter,
-      channelTypeFilter,
-      customerConnectFilter,
-    ]
+    [dynamicFilters]
   );
 
   // Helper function to get setState function by key (stable - setters never change)
   const getFilterSetState = React.useCallback((key) => {
-    // Live mode: return a setter that updates the dynamic filters object
-    if (isLiveMode) {
-      return (value) => {
-        setDynamicFilters(prev => ({
-          ...prev,
-          [key]: typeof value === 'function' ? value(prev[key] || []) : value,
-        }));
-      };
-    }
-    const setStateMap = {
-      productNameFilter: setProductNameFilter,
-      pricingTypeFilter: setPricingTypeFilter,
-      companySegmentFilter: setCompanySegmentFilter,
-      revenueRegionFilter: setRevenueRegionFilter,
-      revenueCountryFilter: setRevenueCountryFilter,
-      acquisitionChannelFilter: setAcquisitionChannelFilter,
-      channelFilter: setChannelFilter,
-      productGroupFilter: setProductGroupFilter,
-      productSubFilter: setProductSubFilter,
-      isAiCompanyFilter: setIsAiCompanyFilter,
-      channelTypeFilter: setChannelTypeFilter,
-      customerConnectFilter: setCustomerConnectFilter,
+    return (value) => {
+      setDynamicFilters(prev => ({
+        ...prev,
+        [key]: typeof value === 'function' ? value(prev[key] || []) : value,
+      }));
     };
-    return setStateMap[key];
-  }, [isLiveMode]); // setDynamicFilters is stable; demo setters are stable
+  }, []); // setDynamicFilters is stable
 
   // Derived FILTER_CONFIG for backwards compatibility - adds state and setState to static config
   const FILTER_CONFIG = React.useMemo(() => {
@@ -3618,11 +3630,39 @@ export function render() {
     }
   }, [dataFrequency]);
 
-  // ===== LIVE MODE: FETCH AGGREGATED DATA FROM RPC =====
+  // ===== LIVE MODE: FETCH AGGREGATED DATA FROM RPC (or client-side for CSV) =====
   // Fires whenever controls change in live mode (frequency, view, filters)
   const liveAggRequestRef = React.useRef(0);
   React.useEffect(() => {
-    if (!isLiveMode || !liveMetricConfig) return;
+    if (!liveSchemaReady || !liveMetricConfig) return;
+
+    // CSV: client-side aggregation (no RPC)
+    if (dataSourceType === 'csv' && csvRowsRef.current) {
+      const grain = frequencyToGrain[dataFrequency] || "month";
+      const dateCol = liveMetricConfig.dateColumn || 'reporting_week';
+      const viewConfig = view !== "Overall" ? VIEW_CONFIG[view] : null;
+      const dimColumn = viewConfig ? viewConfig.column : null;
+      // Build filters: strip dim_/filter wrapper to get raw column names
+      const pFilters = {};
+      Object.keys(dynamicFilters).forEach(fk => {
+        const vals = dynamicFilters[fk];
+        if (!vals || vals.length === 0) return;
+        pFilters[fk.replace(/^dim_/, '').replace(/_filter$/, '')] = vals;
+      });
+      const aggConfig = { metricConfig: liveMetricConfig, grain, dateColumn: dateCol, filters: pFilters };
+      const periodAggs = aggregateCsvPeriods(csvRowsRef.current, aggConfig);
+      setLivePeriodAggregates(periodAggs);
+      if (dimColumn) {
+        setLiveDimensionAggregates(aggregateCsvDimensions(csvRowsRef.current, dimColumn, aggConfig));
+      } else {
+        setLiveDimensionAggregates({});
+      }
+      setLiveRowCount(csvRowsRef.current.length);
+      setLiveDataTruncated(false);
+      setLiveAggLoading(false);
+      return; // skip Supabase RPC path below
+    }
+
     const requestId = ++liveAggRequestRef.current;
     setLiveAggLoading(true);
 
@@ -3703,14 +3743,37 @@ export function render() {
         logger.error('[Dashboard] Aggregation fetch error:', err);
         setLiveAggLoading(false);
       });
-  }, [isLiveMode, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX, liveBooleanColumns]);
+  }, [liveSchemaReady, dataSourceType, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX, liveBooleanColumns]);
 
   // Fetch dimension aggregates for visible dimensions when insights tab is open in live mode.
   // Uses only visibleDimensions (from Configure Metrics) and a concurrency limit of 3 to
   // avoid overwhelming Supabase with parallel requests.
   React.useEffect(() => {
-    if (!isLiveMode || !activeInsightsTab || !liveMetricConfig) return;
+    if (!liveSchemaReady || !activeInsightsTab || !liveMetricConfig) return;
     let cancelled = false;
+
+    // CSV: client-side all-dimension aggregation
+    if (dataSourceType === 'csv' && csvRowsRef.current) {
+      const grain = frequencyToGrain[dataFrequency] || "month";
+      const dateCol = liveMetricConfig.dateColumn || 'reporting_week';
+      const dimCols = visibleLiveDimensions.map(d => d.name);
+      if (dimCols.length === 0) return;
+      const pFilters = {};
+      Object.keys(dynamicFilters).forEach(fk => {
+        const vals = dynamicFilters[fk];
+        if (!vals || vals.length === 0) return;
+        pFilters[fk.replace(/^dim_/, '').replace(/_filter$/, '')] = vals;
+      });
+      const aggConfig = { metricConfig: liveMetricConfig, grain, dateColumn: dateCol, filters: pFilters };
+      const allDimAggs = aggregateAllDimensions(csvRowsRef.current, dimCols, aggConfig);
+      // Extract just the dimension data (without _categoryTotals) for insights
+      const merged = {};
+      Object.keys(allDimAggs).forEach(key => {
+        if (key !== '_categoryTotals') merged[key] = allDimAggs[key];
+      });
+      setLiveInsightsDimAggs(merged);
+      return;
+    }
 
     const grain = frequencyToGrain[dataFrequency] || "month";
     const dateCol = liveMetricConfig.dateColumn || liveDateColumn;
@@ -3770,7 +3833,7 @@ export function render() {
     processBatches();
 
     return () => { cancelled = true; };
-  }, [isLiveMode, activeInsightsTab, liveMetricConfig, dataFrequency, dynamicFilters,
+  }, [dataSourceType, activeInsightsTab, liveMetricConfig, dataFrequency, dynamicFilters,
       visibleLiveDimensions, cachedQuery, liveDateColumn, liveBooleanColumns]);
 
   const periodChangeLabel = React.useMemo(() => {
@@ -3795,88 +3858,26 @@ export function render() {
   // pricingTypeToGroup) with a single walk over cleanedQueryData.rows.
   // On 800K rows this saves ~12 redundant full scans.
   const dataExtracts = React.useMemo(() => {
-    // Live mode: derive from server-provided data
-    if (isLiveMode) {
-      // allDates from period aggregates
-      var liveAllDates = livePeriodAggregates ? Object.keys(livePeriodAggregates).sort() : [];
+    // Derive from server-provided data
+    // allDates from period aggregates
+    var liveAllDates = livePeriodAggregates ? Object.keys(livePeriodAggregates).sort() : [];
 
-      // filterOptionsMap from liveFilterOptions (fetched via distinct RPC)
-      var liveFoMap = {};
-      FILTER_CONFIG_STATIC.forEach(function(fc) {
-        // Extract column name from filterKey: "dim_column_name_filter" → "column_name"
-        var colName = fc.key.replace(/^dim_/, '').replace(/_filter$/, '');
-        var vals = liveFilterOptions[colName] || [];
-        liveFoMap[fc.key] = ["All"].concat(vals);
-      });
-
-      return {
-        allDates: liveAllDates,
-        filterOptionsMap: liveFoMap,
-        pricingTypes: ["All"],
-        pricingTypeToGroup: new Map(),
-      };
-    }
-
-    // Demo mode: scan rows as before
-    var rows = cleanedQueryData.rows;
-    var n = rows.length;
-    var dtCol = dateField;
-    var ptCol = COLUMNS.PRODUCT_NAME;
-    var ptgCol = COLUMNS.PRODUCT_GROUP_L1;
-
-    // Pre-build filter column descriptors for the inner loop
-    var filterCols = [];
-    for (var f = 0; f < FILTER_CONFIG_STATIC.length; f++) {
-      var fc = FILTER_CONFIG_STATIC[f];
-      filterCols.push({ key: fc.key, column: fc.column, values: new Set() });
-    }
-    var fcLen = filterCols.length;
-
-    var dateSet = new Set();
-    var ptToGroup = new Map();
-
-    for (var i = 0; i < n; i++) {
-      var row = rows[i];
-
-      // Collect unique dates
-      var d = row[dtCol];
-      if (d != null && d !== "") dateSet.add(d);
-
-      // Collect unique filter option values for every dimension
-      for (var j = 0; j < fcLen; j++) {
-        var val = row[filterCols[j].column];
-        if (val && val !== "Unknown") filterCols[j].values.add(val);
-      }
-
-      // Collect product_name → product_group mapping
-      var pm = row[ptCol];
-      var pmf = row[ptgCol];
-      if (pm && pmf) {
-        ptToGroup.set(pm, pmf);
-      }
-    }
-
-    // Build sorted allDates
-    var allDatesArr = Array.from(dateSet).sort();
-
-    // Build filterOptionsMap: { filterKey → ["All", ...uniqueValues] }
-    var foMap = {};
-    for (var fi = 0; fi < fcLen; fi++) {
-      foMap[filterCols[fi].key] = ["All"].concat(
-        Array.from(filterCols[fi].values)
-      );
-    }
-
-    // pricingTypes is a subset already in filterOptionsMap
-    var ptArr = foMap["pricingTypeFilter"] || ["All"];
+    // filterOptionsMap from liveFilterOptions (fetched via distinct RPC)
+    var liveFoMap = {};
+    FILTER_CONFIG_STATIC.forEach(function(fc) {
+      // Extract column name from filterKey: "dim_column_name_filter" → "column_name"
+      var colName = fc.key.replace(/^dim_/, '').replace(/_filter$/, '');
+      var vals = liveFilterOptions[colName] || [];
+      liveFoMap[fc.key] = ["All"].concat(vals);
+    });
 
     return {
-      allDates: allDatesArr,
-      filterOptionsMap: foMap,
-      pricingTypes: ptArr,
-      pricingTypeToGroup: ptToGroup,
+      allDates: liveAllDates,
+      filterOptionsMap: liveFoMap,
+      pricingTypes: ["All"],
+      pricingTypeToGroup: new Map(),
     };
-  }, [isLiveMode, livePeriodAggregates, liveFilterOptions, cleanedQueryData.rows, dateField, FILTER_CONFIG_STATIC]);
+  }, [livePeriodAggregates, liveFilterOptions, FILTER_CONFIG_STATIC]);
 
   // Destructure for downstream consumers (preserves all existing variable names)
   var allDates = dataExtracts.allDates;
@@ -3982,7 +3983,7 @@ export function render() {
     return {
       metrics: metricMap,
       views,
-      dataFrequencies: isLiveMode ? ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"] : ["Weekly", "Monthly", "Quarterly", "Yearly"],
+      dataFrequencies: ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"],
       dateRanges: DATE_RANGES,
       filters,
     };
@@ -4193,18 +4194,14 @@ export function render() {
   }, [buildFilterDescription]);
 
   const resetAllFilters = React.useCallback(() => {
-    if (isLiveMode) {
-      setDynamicFilters({});
-    } else {
-      FILTER_CONFIG.forEach(({ setState }) => setState([]));
-    }
+    setDynamicFilters({});
     setDateRange("YTD");
     setView("Overall");
     setActiveInsightsTab(null);
     setFilterSearchText("");
     setShowFilterSuggestions(false);
     setInsightContext(null);
-  }, [FILTER_CONFIG, isLiveMode]);
+  }, []);
 
   // Wrapper for setDataFrequency that clears insight context
   const handleDataFrequencyChange = React.useCallback((newFrequency) => {
@@ -4251,14 +4248,10 @@ export function render() {
     return grouped;
   }, [filteredData, dateField]);
 
-  // Period-level aggregation: delegates to extracted utility, binding COLUMNS
-  const buildPeriodAggregates = (data, dtField) => buildPeriodAggregatesUtil(data, dtField, COLUMNS);
-
-  // OPTIMIZATION (Opportunity 2): Compute base aggregates once, derive filtered version cheaply
-  // In live mode: use server-provided aggregates directly
+  // Base period aggregates: from server (Supabase) or client-side (CSV) via live* state
   const baseDataAggregatesByPeriod = React.useMemo(
-    () => isLiveMode ? (livePeriodAggregates || {}) : buildPeriodAggregates(baseFilteredData, dateField),
-    [isLiveMode, livePeriodAggregates, baseFilteredData, dateField]
+    () => livePeriodAggregates || {},
+    [livePeriodAggregates]
   );
 
   // sortedBaseDataPeriods: baseDataAggregatesByPeriod is now computed earlier (Opportunity 2)
@@ -4281,16 +4274,10 @@ export function render() {
     return result;
   }, [baseDataAggregatesByPeriod, filteredDatesSet]);
 
-  // ===== OPTIMIZATION: Shared dimension-level aggregation builder (DRY) =====
-  // Dimension-level aggregation: delegates to extracted utility, binding COLUMNS + DIMENSION_DEFINITIONS
-  const buildDimensionAggregates = (data, dtField) => buildDimensionAggregatesUtil(data, dtField, COLUMNS, DIMENSION_DEFINITIONS);
-
-  // OPTIMIZATION (Opportunity 2): Compute base dimension aggregates once on baseFilteredData (O(N×M)),
-  // then derive the date-filtered version cheaply (O(D×P×C)) instead of a second O(N×M) scan
-  // In live mode: use server-provided aggregates directly
+  // Base dimension aggregates: from server (Supabase) or client-side (CSV) via live* state
   const baseDimensionAggregates = React.useMemo(
-    () => isLiveMode ? (liveDimensionAggregates || { _categoryTotals: {} }) : buildDimensionAggregates(baseFilteredData, dateField),
-    [isLiveMode, liveDimensionAggregates, baseFilteredData, dateField]
+    () => liveDimensionAggregates || { _categoryTotals: {} },
+    [liveDimensionAggregates]
   );
 
   // dimensionAggregates: derived from baseDimensionAggregates by keeping only periods in filteredDatesSet
@@ -4409,7 +4396,7 @@ export function render() {
   // Resolve effective chart type for a metric: "stacked" | "grouped" | "line"
   // In live mode, reads from config with auto-detection. In demo mode, Margin Rate is always line.
   const resolveChartType = React.useCallback((metricName) => {
-    if (isLiveMode && liveMetricConfig) {
+    if (liveMetricConfig) {
       const prefix = metricName === 'metric1' ? 'volume' : metricName === 'metric2' ? 'revenue' : 'derived';
       const configuredType = liveMetricConfig[prefix + 'ChartType'] || 'auto';
       if (configuredType !== 'auto') return configuredType;
@@ -4417,24 +4404,21 @@ export function render() {
       const mode = liveMetricConfig[prefix + 'Mode'] || 'aggregation';
       return mode === 'formula' ? 'line' : 'stacked';
     }
-    // Demo mode: metric3 (derived) is line, others are stacked
     return metricName === 'metric3' ? 'line' : 'stacked';
-  }, [isLiveMode, liveMetricConfig]);
+  }, [liveMetricConfig]);
 
   // Check if a metric is computed via formula (ratio/derived) vs aggregation (sum/count)
   // Used to gate ratio-aware logic: market share, %Share traces, sorting, Rest Combined
   const isFormulaMetric = React.useCallback((metricName) => {
-    if (isLiveMode && liveMetricConfig) {
+    if (liveMetricConfig) {
       const prefix = metricName === 'metric1' ? 'volume' : metricName === 'metric2' ? 'revenue' : 'derived';
       return (liveMetricConfig[prefix + 'Mode'] || 'aggregation') === 'formula';
     }
-    // Demo mode: metric3 is the only formula metric
     return metricName === 'metric3';
-  }, [isLiveMode, liveMetricConfig]);
+  }, [liveMetricConfig]);
 
   const formatMetricValue = React.useCallback((value, metricName) => {
-    // Live mode: use metric config formatting with prefix/suffix
-    if (isLiveMode && liveMetricConfig) {
+    if (liveMetricConfig) {
       if (metricName === "metric1") {
         const formatted = numeral(value).format(liveMetricConfig.volumeFormat);
         return (liveMetricConfig.volumePrefix || "") + formatted + (liveMetricConfig.volumeSuffix || "");
@@ -4449,7 +4433,7 @@ export function render() {
         return (liveMetricConfig.derivedPrefix || "") + formatted + (liveMetricConfig.derivedSuffix || "");
       }
     }
-    // Demo mode: prefix/suffix baked in
+    // Fallback formatting
     switch (metricName) {
       case "metric1":
         return "$" + numeral(value).format("0.0a");
@@ -4460,7 +4444,7 @@ export function render() {
       default:
         return numeral(value).format("0.0a");
     }
-  }, [isLiveMode, liveMetricConfig]);
+  }, [liveMetricConfig]);
 
   // Format metric values (uses current metric)
   const formatMetric = React.useCallback(
@@ -4881,7 +4865,7 @@ export function render() {
   );
 
   const generateStructuredInsights = (tabType) => {
-    if (periods.length < 3 || (!isLiveMode && filteredData.length === 0)) {
+    if (periods.length < 3) {
       return {
         basicInsights: {
           decomposition: [], // 🆕 NEW
@@ -4915,34 +4899,18 @@ export function render() {
     // Exclude last period (developing data) from insights analysis
     const completePeriods = periods.slice(0, -1);
 
-    // Build completeFilteredData and completeDataByPeriod:
-    // - Demo mode: filter raw rows to complete periods
-    // - Live mode: synthesize one row per period from periodAggregates (no raw rows available)
-    let completeFilteredData, completeDataByPeriod;
-    if (isLiveMode) {
-      completeFilteredData = [];
-      completeDataByPeriod = {};
-      completePeriods.forEach((period) => {
-        const agg = periodAggregates[period];
-        if (!agg) return;
-        // Synthetic row with volume/revenue columns so calculateMetric() works unchanged
-        // Include pre-computed metric3 so insights don't re-derive it with the wrong formula
-        const syntheticRow = { [dateField]: period, [COLUMNS.METRIC1]: agg.metric1, [COLUMNS.METRIC2]: agg.metric2, __metric3: agg.metric3 };
-        completeFilteredData.push(syntheticRow);
-        completeDataByPeriod[period] = [syntheticRow];
-      });
-    } else {
-      completeFilteredData = filteredData.filter((row) =>
-        completePeriods.includes(row[dateField])
-      );
-      completeDataByPeriod = {};
-      for (let i = 0; i < completeFilteredData.length; i++) {
-        const row = completeFilteredData[i];
-        const period = row[dateField];
-        if (!completeDataByPeriod[period]) completeDataByPeriod[period] = [];
-        completeDataByPeriod[period].push(row);
-      }
-    }
+    // Synthesize one row per period from periodAggregates (no raw rows available)
+    let completeFilteredData = [];
+    let completeDataByPeriod = {};
+    completePeriods.forEach((period) => {
+      const agg = periodAggregates[period];
+      if (!agg) return;
+      // Synthetic row with volume/revenue columns so calculateMetric() works unchanged
+      // Include pre-computed metric3 so insights don't re-derive it with the wrong formula
+      const syntheticRow = { [dateField]: period, [COLUMNS.METRIC1]: agg.metric1, [COLUMNS.METRIC2]: agg.metric2, __metric3: agg.metric3 };
+      completeFilteredData.push(syntheticRow);
+      completeDataByPeriod[period] = [syntheticRow];
+    });
 
     // Pre-computation of aggregates per dimension×category×period.
     // - Demo mode: single-pass scan of raw rows
@@ -4955,57 +4923,28 @@ export function render() {
       precomputed[col] = {};
     });
 
-    if (isLiveMode) {
-      // Build precomputed from liveInsightsDimAggs (all dimensions, not just the selected one)
-      activeDimColumns.forEach((col) => {
-        const dimPeriods = liveInsightsDimAggs[col] || {};
-        Object.keys(dimPeriods).forEach((period) => {
-          if (!completePeriods.includes(period)) return;
-          const cats = dimPeriods[period];
-          Object.keys(cats).forEach((val) => {
-            if (!val || val === 'Unknown') return;
-            const catAgg = cats[val];
-            let cat = precomputed[col][val];
-            if (!cat) {
-              cat = { metric1: 0, metric2: 0, byPeriod: {} };
-              precomputed[col][val] = cat;
-            }
-            const vol = catAgg.metric1 || 0;
-            const rev = catAgg.metric2 || 0;
-            cat.metric1 += vol;
-            cat.metric2 += rev;
-            cat.byPeriod[period] = { metric1: vol, metric2: rev, metric3: catAgg.metric3 };
-          });
-        });
-      });
-    } else {
-      for (let i = 0; i < completeFilteredData.length; i++) {
-        const row = completeFilteredData[i];
-        const period = row[dateField];
-        const volume = row[COLUMNS.METRIC1] || 0;
-        const revenue =
-          row[COLUMNS.METRIC2] || 0;
-        for (let d = 0; d < activeDimColumns.length; d++) {
-          const col = activeDimColumns[d];
-          const val = row[col];
-          if (!val) continue;
+    // Build precomputed from liveInsightsDimAggs (all dimensions, not just the selected one)
+    activeDimColumns.forEach((col) => {
+      const dimPeriods = liveInsightsDimAggs[col] || {};
+      Object.keys(dimPeriods).forEach((period) => {
+        if (!completePeriods.includes(period)) return;
+        const cats = dimPeriods[period];
+        Object.keys(cats).forEach((val) => {
+          if (!val || val === 'Unknown') return;
+          const catAgg = cats[val];
           let cat = precomputed[col][val];
           if (!cat) {
             cat = { metric1: 0, metric2: 0, byPeriod: {} };
             precomputed[col][val] = cat;
           }
-          cat.metric1 += volume;
-          cat.metric2 += revenue;
-          let pAgg = cat.byPeriod[period];
-          if (!pAgg) {
-            pAgg = { metric1: 0, metric2: 0 };
-            cat.byPeriod[period] = pAgg;
-          }
-          pAgg.metric1 += volume;
-          pAgg.metric2 += revenue;
-        }
-      }
-    }
+          const vol = catAgg.metric1 || 0;
+          const rev = catAgg.metric2 || 0;
+          cat.metric1 += vol;
+          cat.metric2 += rev;
+          cat.byPeriod[period] = { metric1: vol, metric2: rev, metric3: catAgg.metric3 };
+        });
+      });
+    });
     // Compute metric from pre-aggregated volume/revenue (matches calculateMetricValue logic)
     const metricFromAgg = (m1, m2, m3) => {
       switch (metric) {
@@ -5804,8 +5743,9 @@ export function render() {
         },
       ];
 
-      // Cross-dimensional combos require raw rows (multi-column grouping) — skip in live mode
-      if (!isLiveMode) crossDimensionalCombos.forEach((combo) => {
+      // Cross-dimensional combos require raw rows (multi-column grouping) — not available in aggregated mode
+      // Dead code: crossDimensionalCombos is defined but never iterated
+      if (false) crossDimensionalCombos.forEach((combo) => {
         const hasVariation = combo.filters.some(
           (filter) => Array.isArray(filter) && filter.length === 0
         );
@@ -6248,7 +6188,7 @@ export function render() {
     };
 
     // In live mode, include dimension data fingerprint so cache invalidates when dim data arrives
-    const dimDataKey = isLiveMode ? Object.keys(liveInsightsDimAggs).sort().join(',') : '';
+    const dimDataKey = Object.keys(liveInsightsDimAggs).sort().join(',');
     const cacheKey = createInsightsCacheKey(
       metric,
       activeInsightsTab,
@@ -6308,7 +6248,6 @@ export function render() {
     productGroupFilter,
     productSubFilter,
     insightContext, // 🆕 CRITICAL: Must include insightContext so insights regenerate when drilling down
-    isLiveMode,
     periodAggregates,
     dimensionAggregates,
     liveInsightsDimAggs,
@@ -7238,7 +7177,7 @@ export function render() {
       // When server-side top-N bucketing is active (live mode with topX > 0),
       // categories are already bucketed into top-N + "Rest Combined" — use as-is.
       // Client-side re-slicing would create a DUPLICATE "Rest Combined" trace.
-      if (isLiveMode && topX > 0) {
+      if (topX > 0) {
         topAttributes = attributeValues;
         restAttributes = [];
       } else {
@@ -7291,11 +7230,11 @@ export function render() {
         const traceData = periods.map((period) => {
           // When server-side top-N is active, "Rest Combined" is a real category
           // in dimensionAggregates — read it directly instead of re-summing.
-          if (category !== "Rest Combined" || (isLiveMode && topX > 0)) {
+          if (category !== "Rest Combined" || (topX > 0)) {
             // Per-period top-N: category may not exist in every period (bucketed
             // into "Rest Combined" for that period). Return null (gap) instead of 0
             // so Plotly skips it in hover tooltips and doesn't draw a misleading bar.
-            if (isLiveMode && topX > 0) {
+            if (topX > 0) {
               const periodAgg = dimensionAggregates[attribute]?.[period];
               if (!periodAgg || !(category in periodAgg)) return null;
             }
@@ -7351,7 +7290,7 @@ export function render() {
             const totalM1 = periodTotalAgg ? periodTotalAgg.metric1 : 0;
 
             let categoryM1 = 0;
-            if (category === "Rest Combined" && !(isLiveMode && topX > 0)) {
+            if (category === "Rest Combined" && !(topX > 0)) {
               restAttributes.forEach((restAttr) => {
                 const catAgg = dimAgg[period] && dimAgg[period][restAttr];
                 if (catAgg) categoryM1 += catAgg.metric1;
@@ -7468,7 +7407,7 @@ export function render() {
             (currentPeriod) => {
               // Get current period value for this category (from cached baseDimensionAggregates)
               let currentCategoryValue;
-              if (category === "Rest Combined" && !(isLiveMode && topX > 0)) {
+              if (category === "Rest Combined" && !(topX > 0)) {
                 currentCategoryValue = 0;
                 restAttributes.forEach((restAttr) => {
                   currentCategoryValue += getDimMetric(
@@ -7514,7 +7453,7 @@ export function render() {
 
               // Get previous period value for this category (from cached baseDimensionAggregates)
               let previousCategoryValue;
-              if (category === "Rest Combined" && !(isLiveMode && topX > 0)) {
+              if (category === "Rest Combined" && !(topX > 0)) {
                 previousCategoryValue = 0;
                 restAttributes.forEach((restAttr) => {
                   previousCategoryValue += getDimMetric(
@@ -7644,7 +7583,7 @@ export function render() {
         },
         yaxis: {
           title: {
-            text: isLiveMode ? (METRIC_LABELS[metric] || metric) : (splitChartType === "line" ? "Basis Points" : "USD"),
+            text: METRIC_LABELS[metric] || metric,
             font: { size: 14, color: "#374151" },
           },
           tickfont: { color: "#6b7280" },
@@ -8008,7 +7947,7 @@ export function render() {
         },
         yaxis: {
           title: {
-            text: isLiveMode ? (METRIC_LABELS[metric] || metric) : (overallChartType === "line" ? "Basis Points" : "USD"),
+            text: METRIC_LABELS[metric] || metric,
             font: { size: 14, color: "#374151" },
           },
           tickfont: { color: "#6b7280" },
@@ -8512,7 +8451,7 @@ export function render() {
       }
 
       // Validate and apply dataFrequency
-      const validFreqs = isLiveMode ? ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"] : ["Weekly", "Monthly", "Quarterly", "Yearly"];
+      const validFreqs = ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"];
       if (response.dataFrequency && validFreqs.includes(response.dataFrequency)) {
         setDataFrequency(response.dataFrequency);
       }
@@ -8617,7 +8556,7 @@ export function render() {
 
   // Natural language example questions for Feeling Lucky — data-driven in live mode
   const LLM_EXAMPLE_QUESTIONS = React.useMemo(() => {
-    if (isLiveMode && liveMetricConfig) {
+    if (liveMetricConfig) {
       const mLabels = [METRIC_LABELS.metric1, METRIC_LABELS.metric2, METRIC_LABELS.metric3].filter(Boolean);
       const dimLabels = DIMENSION_DEFINITIONS.map(d => d.viewName || d.filterLabel);
       // Collect a few real category values from the data
@@ -8663,7 +8602,7 @@ export function render() {
       "How does revenue break down by customer segment?",
       "Show me quarterly margin rate trends",
     ];
-  }, [isLiveMode, liveMetricConfig, METRIC_LABELS, DIMENSION_DEFINITIONS, COLUMNS, dimensionCategoryTotals]);
+  }, [liveMetricConfig, METRIC_LABELS, DIMENSION_DEFINITIONS, COLUMNS, dimensionCategoryTotals]);
 
   // Clear query text when filters, metric, or view change (but not during state restoration or query execution)
   React.useEffect(() => {
@@ -9059,7 +8998,7 @@ export function render() {
           <span>Data truncated — results hit the row limit. Metrics may be incomplete.</span>
         </div>
       )}
-      {!isLiveMode && !liveDataLoading && !liveDataError && (
+      {dataSourceType === 'csv' && !connectionParams && !liveDataLoading && !liveDataError && (
         <div style={{
           display: "flex", alignItems: "center", gap: "8px",
           padding: "8px 16px",
@@ -9068,17 +9007,30 @@ export function render() {
           borderRadius: "8px", marginBottom: "12px", fontSize: "12px",
           color: isDarkMode ? "#fcd34d" : "#92400e",
         }}>
-          <span style={{ fontSize: "14px" }}>⚠️</span>
-          <span><strong>Demo only:</strong> Viewing synthetic data.</span>
-          <button
-            onClick={() => setShowConnectModal(true)}
-            style={{
-              marginLeft: "auto", padding: "4px 12px", borderRadius: "4px", fontSize: "11px", cursor: "pointer",
-              border: `1px solid ${isDarkMode ? "rgba(99, 102, 241, 0.5)" : "rgba(99, 102, 241, 0.5)"}`,
-              background: isDarkMode ? "rgba(99, 102, 241, 0.2)" : "rgba(99, 102, 241, 0.1)",
-              color: isDarkMode ? "#a5b4fc" : "#4338ca", fontWeight: 600, whiteSpace: "nowrap",
-            }}
-          >Connect to Database</button>
+          <span><strong>Demo Data</strong> — viewing sample CSV.</span>
+          <div style={{ marginLeft: "auto", display: "flex", gap: "6px" }}>
+            <label style={{
+              padding: "4px 12px", borderRadius: "4px", fontSize: "11px", cursor: "pointer",
+              border: `1px solid ${isDarkMode ? "rgba(16, 185, 129, 0.5)" : "rgba(16, 185, 129, 0.5)"}`,
+              background: isDarkMode ? "rgba(16, 185, 129, 0.2)" : "rgba(16, 185, 129, 0.1)",
+              color: isDarkMode ? "#6ee7b7" : "#065f46", fontWeight: 600, whiteSpace: "nowrap",
+            }}>
+              Upload CSV
+              <input type="file" accept=".csv,.tsv" hidden onChange={e => {
+                if (e.target.files[0]) handleCsvUpload(e.target.files[0]);
+                e.target.value = ''; // reset so same file can be re-uploaded
+              }} />
+            </label>
+            <button
+              onClick={() => setShowConnectModal(true)}
+              style={{
+                padding: "4px 12px", borderRadius: "4px", fontSize: "11px", cursor: "pointer",
+                border: `1px solid ${isDarkMode ? "rgba(99, 102, 241, 0.5)" : "rgba(99, 102, 241, 0.5)"}`,
+                background: isDarkMode ? "rgba(99, 102, 241, 0.2)" : "rgba(99, 102, 241, 0.1)",
+                color: isDarkMode ? "#a5b4fc" : "#4338ca", fontWeight: 600, whiteSpace: "nowrap",
+              }}
+            >Connect to Database</button>
+          </div>
         </div>
       )}
 
@@ -9128,7 +9080,7 @@ export function render() {
                     <div style={styles.queryTooltipArrow}></div>
                     <div style={styles.fontWeight600}>How to Use</div>
                     <div style={styles.textGray}>
-                      {isLiveMode && METRIC_LABELS
+                      {METRIC_LABELS
                         ? `Type a natural language question like "How is ${METRIC_LABELS.metric1 || 'the metric'} trending${DIMENSION_DEFINITIONS.length > 0 ? ` by ${DIMENSION_DEFINITIONS[0].viewName}` : ''}?" or click "Feeling Lucky" for examples.`
                         : 'Type a natural language question like "How is revenue trending in EMEA?" or click "Feeling Lucky" for examples. Press Enter or click "Ask" to query.'}
                     </div>
@@ -9146,7 +9098,7 @@ export function render() {
                     handleLLMQuery(queryText);
                   }
                 }}
-                placeholder={isLiveMode && METRIC_LABELS
+                placeholder={METRIC_LABELS
                   ? `Ask a question... e.g. How is ${METRIC_LABELS.metric1 || 'the metric'} trending${DIMENSION_DEFINITIONS.length > 0 ? ` by ${DIMENSION_DEFINITIONS[0].viewName}` : ''}?`
                   : "Ask a question... e.g. How is revenue trending in EMEA?"}
                 disabled={isLLMLoading}
@@ -9266,7 +9218,7 @@ export function render() {
         </div>
 
         <div style={styles.statBoxContainer} data-guide="metric-statboxes">
-          {(isLiveMode && liveMetricConfig && !liveMetricConfig.derivedAggType && liveMetricConfig.derivedMode !== 'formula'
+          {(liveMetricConfig && !liveMetricConfig.derivedAggType && liveMetricConfig.derivedMode !== 'formula'
             ? ["metric1", "metric2"]
             : ["metric1", "metric2", "metric3"]
           ).map((metricName) => {
@@ -9598,7 +9550,7 @@ export function render() {
               {/* Column 3 - Row 2: Date Aggregation */}
               <div style={styles.controlGroup}>
                 {renderButtonGroup(
-                  isLiveMode ? ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"] : ["Weekly", "Monthly", "Quarterly", "Yearly"],
+                  ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"],
                   dataFrequency,
                   handleDataFrequencyChange,
                   styles.dataFrequencyGroup,
@@ -10555,7 +10507,7 @@ export function render() {
             </div>
             <div style={styles.summaryItem}>
               <strong>Total Records:</strong>{" "}
-              {filteredData.length.toLocaleString()}
+              {(liveRowCount || filteredData.length).toLocaleString()}
             </div>
             <div style={styles.summaryItem}>
               <strong>Period Range:</strong>{" "}
