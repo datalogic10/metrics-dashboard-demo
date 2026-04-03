@@ -226,7 +226,7 @@ export function buildRpcMetrics(config) {
       addMetric(config[prefix + 'FormulaDenAggType'], config[prefix + 'FormulaDenColumn'], alias + '_den', config[prefix + 'FormulaDenPercentile']);
     } else {
       const aggType = config[prefix + 'AggType'];
-      if (prefix === 'derived' && !aggType) return; // Metric 3 can be disabled
+      if ((prefix === 'derived' || prefix === 'revenue') && !aggType) return; // Metric 2 & 3 can be disabled
       addMetric(aggType, config[prefix + 'Column'], alias, config[prefix + 'Percentile']);
     }
   };

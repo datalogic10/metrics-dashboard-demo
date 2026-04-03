@@ -1960,6 +1960,15 @@ export function render() {
     }
   }, [dataFrequency]);
 
+  // Fall back to metric1 if selected metric is disabled
+  React.useEffect(() => {
+    if (!liveMetricConfig) return;
+    const m2Enabled = !!liveMetricConfig.revenueAggType || liveMetricConfig.revenueMode === 'formula';
+    const m3Enabled = !!liveMetricConfig.derivedAggType || liveMetricConfig.derivedMode === 'formula';
+    if (metric === 'metric2' && !m2Enabled) setMetric('metric1');
+    if (metric === 'metric3' && !m3Enabled) setMetric(m2Enabled ? 'metric2' : 'metric1');
+  }, [liveMetricConfig, metric]);
+
   const [view, setView] = React.useState("Overall");
   const [topX, setTopX] = React.useState(3);
   const [categorySelectionMode, setCategorySelectionMode] =
@@ -2195,6 +2204,17 @@ export function render() {
 
   const renameTab = React.useCallback((tabId, newName) => {
     setTabs(prev => prev.map(t => t.id === tabId ? { ...t, name: newName } : t));
+  }, []);
+
+  const moveTab = React.useCallback((tabId, direction) => {
+    setTabs(prev => {
+      const idx = prev.findIndex(t => t.id === tabId);
+      const newIdx = idx + direction;
+      if (idx < 0 || newIdx < 0 || newIdx >= prev.length) return prev;
+      const updated = [...prev];
+      [updated[idx], updated[newIdx]] = [updated[newIdx], updated[idx]];
+      return updated;
+    });
   }, []);
 
   // Dynamic styles - only properties that change based on state (Optimization #3)
@@ -7569,7 +7589,7 @@ export function render() {
         xaxis: {
           type: "category", // Treat as categorical to avoid timezone date parsing issues
           title: {
-            text: dataFrequency.replace("ly", ""),
+            text: (liveMetricConfig && liveMetricConfig.dateColumn ? liveMetricConfig.dateColumn : '') + ' (' + ({ Daily: 'Day', Weekly: 'Week', Monthly: 'Month', Quarterly: 'Quarter', Yearly: 'Year' }[dataFrequency] || dataFrequency) + ')',
             font: { size: 14, color: "#374151" },
           },
           tickfont: { color: "#6b7280" },
@@ -7933,7 +7953,7 @@ export function render() {
         xaxis: {
           type: "category", // Treat as categorical to avoid timezone date parsing issues
           title: {
-            text: dataFrequency.replace("ly", ""),
+            text: (liveMetricConfig && liveMetricConfig.dateColumn ? liveMetricConfig.dateColumn : '') + ' (' + ({ Daily: 'Day', Weekly: 'Week', Monthly: 'Month', Quarterly: 'Quarter', Yearly: 'Year' }[dataFrequency] || dataFrequency) + ')',
             font: { size: 14, color: "#374151" },
           },
           tickfont: { color: "#6b7280" },
@@ -8760,6 +8780,22 @@ export function render() {
                     ({liveRowCount.toLocaleString()}{liveDataTruncated ? '!' : ''})
                   </span>
                 )}
+                {tabs.length > 1 && isActive && (isCreatorMode || !configId) && (
+                  <React.Fragment>
+                    {tabs.indexOf(tab) > 0 && <button
+                      onClick={e => { e.stopPropagation(); moveTab(tab.id, -1); }}
+                      style={{ background: 'none', border: 'none', color: isDarkMode ? '#6b7280' : '#9ca3af', cursor: 'pointer', fontSize: '10px', lineHeight: 1, padding: '0 1px', marginLeft: '4px', opacity: 0.6 }}
+                      onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.6}
+                      title="Move left"
+                    >&#9664;</button>}
+                    {tabs.indexOf(tab) < tabs.length - 1 && <button
+                      onClick={e => { e.stopPropagation(); moveTab(tab.id, 1); }}
+                      style={{ background: 'none', border: 'none', color: isDarkMode ? '#6b7280' : '#9ca3af', cursor: 'pointer', fontSize: '10px', lineHeight: 1, padding: '0 1px', opacity: 0.6 }}
+                      onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.6}
+                      title="Move right"
+                    >&#9654;</button>}
+                  </React.Fragment>
+                )}
                 {tabs.length > 1 && (isCreatorMode || !configId) && (
                   <button
                     onClick={e => { e.stopPropagation(); removeTab(tab.id); }}
@@ -9218,10 +9254,12 @@ export function render() {
         </div>
 
         <div style={styles.statBoxContainer} data-guide="metric-statboxes">
-          {(liveMetricConfig && !liveMetricConfig.derivedAggType && liveMetricConfig.derivedMode !== 'formula'
-            ? ["metric1", "metric2"]
-            : ["metric1", "metric2", "metric3"]
-          ).map((metricName) => {
+          {(() => {
+            const m = ["metric1"];
+            if (liveMetricConfig && (liveMetricConfig.revenueAggType || liveMetricConfig.revenueMode === 'formula')) m.push("metric2");
+            if (liveMetricConfig && (liveMetricConfig.derivedAggType || liveMetricConfig.derivedMode === 'formula')) m.push("metric3");
+            return m;
+          })().map((metricName) => {
             const metricStatData = allMetricsStatData[metricName];
             if (!metricStatData) return null;
             const displayLabel = METRIC_LABELS[metricName] || metricName;

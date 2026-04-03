@@ -1133,7 +1133,7 @@ var __app = (() => {
         addMetric(config[prefix + "FormulaDenAggType"], config[prefix + "FormulaDenColumn"], alias + "_den", config[prefix + "FormulaDenPercentile"]);
       } else {
         const aggType = config[prefix + "AggType"];
-        if (prefix === "derived" && !aggType) return;
+        if ((prefix === "derived" || prefix === "revenue") && !aggType) return;
         addMetric(aggType, config[prefix + "Column"], alias, config[prefix + "Percentile"]);
       }
     };
@@ -2183,7 +2183,7 @@ var __app = (() => {
       suggesting ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: { width: "14px", height: "14px", border: "2px solid currentColor", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite", display: "inline-block" } }), "Analyzing schema...") : "AI Suggest Metrics"
     ), [
       { prefix: "volume", title: "Metric 1", canDisable: false },
-      { prefix: "revenue", title: "Metric 2", canDisable: false },
+      { prefix: "revenue", title: "Metric 2", canDisable: true },
       { prefix: "derived", title: "Metric 3", canDisable: true }
     ].map(({ prefix, title, canDisable }) => {
       const aggKey = prefix + "AggType";
@@ -2418,7 +2418,7 @@ var __app = (() => {
     isDarkMode
   }) {
     displayLabel = displayLabel || metricName;
-    const periodLabel = dataFrequency === "Weekly" ? "Last week" : dataFrequency === "Monthly" ? "Last month" : dataFrequency === "Quarterly" ? "Last quarter" : dataFrequency === "Yearly" ? "Last year" : "Latest";
+    const periodLabel = dataFrequency === "Daily" ? "Last day" : dataFrequency === "Weekly" ? "Last week" : dataFrequency === "Monthly" ? "Last month" : dataFrequency === "Quarterly" ? "Last quarter" : dataFrequency === "Yearly" ? "Last year" : "Latest";
     const availableComparisons = dataFrequency === "Daily" ? ["YoY", "DoD"] : dataFrequency === "Weekly" ? ["52W", "WoW"] : dataFrequency === "Monthly" ? ["YoY", "MoM"] : dataFrequency === "Quarterly" ? ["YoY", "QoQ"] : ["YoY"];
     let changeValue, changePercentValue, comparisonLabel;
     const useYoY = activePeriodComparison === "YoY" || activePeriodComparison === "52W";
@@ -4180,6 +4180,13 @@ var __app = (() => {
         });
       }
     }, [dataFrequency]);
+    React.useEffect(() => {
+      if (!liveMetricConfig) return;
+      const m2Enabled = !!liveMetricConfig.revenueAggType || liveMetricConfig.revenueMode === "formula";
+      const m3Enabled = !!liveMetricConfig.derivedAggType || liveMetricConfig.derivedMode === "formula";
+      if (metric === "metric2" && !m2Enabled) setMetric("metric1");
+      if (metric === "metric3" && !m3Enabled) setMetric(m2Enabled ? "metric2" : "metric1");
+    }, [liveMetricConfig, metric]);
     const [view, setView] = React.useState("Overall");
     const [topX, setTopX] = React.useState(3);
     const [categorySelectionMode, setCategorySelectionMode] = React.useState("topX");
@@ -4417,6 +4424,16 @@ var __app = (() => {
     }, [activeTabId, tabs, restoreTabSnapshot]);
     const renameTab = React.useCallback((tabId, newName) => {
       setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, name: newName } : t));
+    }, []);
+    const moveTab = React.useCallback((tabId, direction) => {
+      setTabs((prev) => {
+        const idx = prev.findIndex((t) => t.id === tabId);
+        const newIdx = idx + direction;
+        if (idx < 0 || newIdx < 0 || newIdx >= prev.length) return prev;
+        const updated = [...prev];
+        [updated[idx], updated[newIdx]] = [updated[newIdx], updated[idx]];
+        return updated;
+      });
     }, []);
     const styles = React.useMemo(
       () => ({
@@ -8488,7 +8505,7 @@ var __app = (() => {
             type: "category",
             // Treat as categorical to avoid timezone date parsing issues
             title: {
-              text: dataFrequency.replace("ly", ""),
+              text: (liveMetricConfig && liveMetricConfig.dateColumn ? liveMetricConfig.dateColumn : "") + " (" + ({ Daily: "Day", Weekly: "Week", Monthly: "Month", Quarterly: "Quarter", Yearly: "Year" }[dataFrequency] || dataFrequency) + ")",
               font: { size: 14, color: "#374151" }
             },
             tickfont: { color: "#6b7280" },
@@ -8804,7 +8821,7 @@ var __app = (() => {
             type: "category",
             // Treat as categorical to avoid timezone date parsing issues
             title: {
-              text: dataFrequency.replace("ly", ""),
+              text: (liveMetricConfig && liveMetricConfig.dateColumn ? liveMetricConfig.dateColumn : "") + " (" + ({ Daily: "Day", Weekly: "Week", Monthly: "Month", Quarterly: "Quarter", Yearly: "Year" }[dataFrequency] || dataFrequency) + ")",
               font: { size: 14, color: "#374151" }
             },
             tickfont: { color: "#6b7280" },
@@ -9488,6 +9505,33 @@ var __app = (() => {
           }
         ) : /* @__PURE__ */ React.createElement("span", null, tab.name),
         isActive && liveRowCount > 0 && !liveDataLoading && /* @__PURE__ */ React.createElement("span", { style: { fontSize: "11px", color: isDarkMode ? "#6b7280" : "#9ca3af", marginLeft: "4px" } }, "(", liveRowCount.toLocaleString(), liveDataTruncated ? "!" : "", ")"),
+        tabs.length > 1 && isActive && (isCreatorMode || !configId) && /* @__PURE__ */ React.createElement(React.Fragment, null, tabs.indexOf(tab) > 0 && /* @__PURE__ */ React.createElement(
+          "button",
+          {
+            onClick: (e) => {
+              e.stopPropagation();
+              moveTab(tab.id, -1);
+            },
+            style: { background: "none", border: "none", color: isDarkMode ? "#6b7280" : "#9ca3af", cursor: "pointer", fontSize: "10px", lineHeight: 1, padding: "0 1px", marginLeft: "4px", opacity: 0.6 },
+            onMouseEnter: (e) => e.target.style.opacity = 1,
+            onMouseLeave: (e) => e.target.style.opacity = 0.6,
+            title: "Move left"
+          },
+          "\u25C0"
+        ), tabs.indexOf(tab) < tabs.length - 1 && /* @__PURE__ */ React.createElement(
+          "button",
+          {
+            onClick: (e) => {
+              e.stopPropagation();
+              moveTab(tab.id, 1);
+            },
+            style: { background: "none", border: "none", color: isDarkMode ? "#6b7280" : "#9ca3af", cursor: "pointer", fontSize: "10px", lineHeight: 1, padding: "0 1px", opacity: 0.6 },
+            onMouseEnter: (e) => e.target.style.opacity = 1,
+            onMouseLeave: (e) => e.target.style.opacity = 0.6,
+            title: "Move right"
+          },
+          "\u25B6"
+        )),
         tabs.length > 1 && (isCreatorMode || !configId) && /* @__PURE__ */ React.createElement(
           "button",
           {
@@ -9937,7 +9981,12 @@ var __app = (() => {
         title: showGuide ? "Stop Guide" : "Guide Me - Click to start tour"
       },
       showGuide ? "\u2715" : "Guide Me"
-    )), /* @__PURE__ */ React.createElement("div", { style: styles.statBoxContainer, "data-guide": "metric-statboxes" }, (liveMetricConfig && !liveMetricConfig.derivedAggType && liveMetricConfig.derivedMode !== "formula" ? ["metric1", "metric2"] : ["metric1", "metric2", "metric3"]).map((metricName) => {
+    )), /* @__PURE__ */ React.createElement("div", { style: styles.statBoxContainer, "data-guide": "metric-statboxes" }, (() => {
+      const m = ["metric1"];
+      if (liveMetricConfig && (liveMetricConfig.revenueAggType || liveMetricConfig.revenueMode === "formula")) m.push("metric2");
+      if (liveMetricConfig && (liveMetricConfig.derivedAggType || liveMetricConfig.derivedMode === "formula")) m.push("metric3");
+      return m;
+    })().map((metricName) => {
       const metricStatData = allMetricsStatData[metricName];
       if (!metricStatData) return null;
       const displayLabel = METRIC_LABELS[metricName] || metricName;

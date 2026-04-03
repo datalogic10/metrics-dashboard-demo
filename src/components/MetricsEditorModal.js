@@ -140,7 +140,7 @@ export function MetricsEditorModal({
         {/* Metric Slots — accordion: click header to expand/collapse */}
         {[
           { prefix: 'volume', title: 'Metric 1', canDisable: false },
-          { prefix: 'revenue', title: 'Metric 2', canDisable: false },
+          { prefix: 'revenue', title: 'Metric 2', canDisable: true },
           { prefix: 'derived', title: 'Metric 3', canDisable: true },
         ].map(({ prefix, title, canDisable }) => {
           const aggKey = prefix + 'AggType';

@@ -102,7 +102,8 @@ export function StatBox({
 }) {
   displayLabel = displayLabel || metricName;
   const periodLabel =
-    dataFrequency === "Weekly" ? "Last week"
+    dataFrequency === "Daily" ? "Last day"
+    : dataFrequency === "Weekly" ? "Last week"
     : dataFrequency === "Monthly" ? "Last month"
     : dataFrequency === "Quarterly" ? "Last quarter"
     : dataFrequency === "Yearly" ? "Last year"
