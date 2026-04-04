@@ -9301,7 +9301,13 @@ var __app = (() => {
     );
     const LLM_EXAMPLE_QUESTIONS = React.useMemo(() => {
       if (liveMetricConfig) {
-        const mLabels = [METRIC_LABELS.metric1, METRIC_LABELS.metric2, METRIC_LABELS.metric3].filter(Boolean);
+        const m2Enabled = !!liveMetricConfig.revenueAggType || liveMetricConfig.revenueMode === "formula";
+        const m3Enabled = !!liveMetricConfig.derivedAggType || liveMetricConfig.derivedMode === "formula";
+        const mLabels = [
+          METRIC_LABELS.metric1,
+          m2Enabled && METRIC_LABELS.metric2,
+          m3Enabled && METRIC_LABELS.metric3
+        ].filter(Boolean);
         const dimLabels = DIMENSION_DEFINITIONS.map((d) => d.viewName || d.filterLabel);
         const sampleCats = [];
         DIMENSION_DEFINITIONS.forEach((d) => {
