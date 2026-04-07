@@ -1396,16 +1396,11 @@ var __app = (() => {
       }
     });
     if (!isNested) {
-      if (snapshot.scenario1) compact.s1 = compressStateHelper(snapshot.scenario1, dimensionDefs, true);
-      if (snapshot.scenario2) compact.s2 = compressStateHelper(snapshot.scenario2, dimensionDefs, true);
-      if (snapshot.scenario3) compact.s3 = compressStateHelper(snapshot.scenario3, dimensionDefs, true);
-      if (snapshot.activeScenarios && (snapshot.activeScenarios.scenario1 || snapshot.activeScenarios.scenario2 || snapshot.activeScenarios.scenario3)) {
-        compact.as = snapshot.activeScenarios;
-      }
-      if (snapshot.scenarioLabels) compact.sl = snapshot.scenarioLabels;
-      if (snapshot.showScenarioPanel) compact.ssp = snapshot.showScenarioPanel ? 1 : 0;
       if (snapshot.traceVisibility && Object.keys(snapshot.traceVisibility).length > 0) {
         compact.tv = snapshot.traceVisibility;
+      }
+      if (snapshot.compareCards && snapshot.compareCards.length > 0) {
+        compact.cc = snapshot.compareCards;
       }
     } else {
       if (snapshot.visibleTraceNames && snapshot.visibleTraceNames.length > 0) {
@@ -1448,21 +1443,8 @@ var __app = (() => {
   }
   function expandState(compact, dimensionDefs) {
     const snapshot = expandStateHelper(compact, dimensionDefs);
-    if (compact.s1 !== void 0) snapshot.scenario1 = expandStateHelper(compact.s1, dimensionDefs);
-    if (compact.s2 !== void 0) snapshot.scenario2 = expandStateHelper(compact.s2, dimensionDefs);
-    if (compact.s3 !== void 0) snapshot.scenario3 = expandStateHelper(compact.s3, dimensionDefs);
-    if (compact.as !== void 0) {
-      snapshot.activeScenarios = compact.as;
-    } else {
-      snapshot.activeScenarios = { scenario1: false, scenario2: false, scenario3: false };
-    }
-    if (compact.sl !== void 0) {
-      snapshot.scenarioLabels = compact.sl;
-    } else {
-      snapshot.scenarioLabels = { scenario1: "Scenario 1", scenario2: "Scenario 2", scenario3: "Scenario 3" };
-    }
-    if (compact.ssp !== void 0) snapshot.showScenarioPanel = compact.ssp === 1;
     if (compact.tv !== void 0) snapshot.traceVisibility = compact.tv;
+    if (compact.cc !== void 0) snapshot.compareCards = compact.cc;
     if (compact.ic !== void 0) snapshot.insightContext = compact.ic;
     return snapshot;
   }
@@ -2337,7 +2319,7 @@ var __app = (() => {
     availableComparisons,
     activePeriodComparison,
     setActivePeriodComparison,
-    formatMetricValue,
+    formatMetricValue: formatMetricValue2,
     styles,
     theme,
     isDarkMode
@@ -2358,7 +2340,7 @@ var __app = (() => {
     return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: "4px", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: styles.changeContainer }, /* @__PURE__ */ React.createElement("span", { style: {
       ...styles.changeValue,
       color: isActive ? isPositive ? theme.successText : theme.dangerText : theme.textQuaternary
-    } }, trendIcon, isPositive ? "+" : "", formatMetricValue(change, metricName)), changePercent !== null && /* @__PURE__ */ React.createElement("span", { style: {
+    } }, trendIcon, isPositive ? "+" : "", formatMetricValue2(change, metricName)), changePercent !== null && /* @__PURE__ */ React.createElement("span", { style: {
       ...styles.changePercent,
       backgroundColor: isActive ? isPositivePercent ? isDarkMode ? "rgba(16, 185, 129, 0.2)" : "#d1fae5" : isDarkMode ? "rgba(239, 68, 68, 0.2)" : "#fee2e2" : theme.bgQuaternary,
       color: isActive ? isPositivePercent ? isDarkMode ? "#6ee7b7" : "#065f46" : isDarkMode ? "#fca5a5" : "#991b1b" : theme.textQuaternary,
@@ -2412,7 +2394,7 @@ var __app = (() => {
     setActivePeriodComparison,
     setMetric,
     setInsightContext,
-    formatMetricValue,
+    formatMetricValue: formatMetricValue2,
     styles,
     theme,
     isDarkMode
@@ -2456,7 +2438,7 @@ var __app = (() => {
         height: "4px",
         backgroundColor: accentColor
       } }),
-      /* @__PURE__ */ React.createElement("div", { style: styles.statBoxLeft }, /* @__PURE__ */ React.createElement("div", { style: { ...styles.statTitle, color: isActive ? accentColor : "#6b7280" } }, periodLabel, " ", displayLabel), /* @__PURE__ */ React.createElement("div", { style: { ...styles.statValue, color: isActive ? accentColor : "#9ca3af" } }, formatMetricValue(metricStatData.lastValue, metricName)), /* @__PURE__ */ React.createElement("div", { style: styles.statPeriod }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: "10px" } }, "\u{1F4C5}"), metricStatData.lastPeriod)),
+      /* @__PURE__ */ React.createElement("div", { style: styles.statBoxLeft }, /* @__PURE__ */ React.createElement("div", { style: { ...styles.statTitle, color: isActive ? accentColor : "#6b7280" } }, periodLabel, " ", displayLabel), /* @__PURE__ */ React.createElement("div", { style: { ...styles.statValue, color: isActive ? accentColor : "#9ca3af" } }, formatMetricValue2(metricStatData.lastValue, metricName)), /* @__PURE__ */ React.createElement("div", { style: styles.statPeriod }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: "10px" } }, "\u{1F4C5}"), metricStatData.lastPeriod)),
       /* @__PURE__ */ React.createElement("div", { style: styles.statBoxRight }, /* @__PURE__ */ React.createElement(
         ChangeDisplay,
         {
@@ -2468,13 +2450,535 @@ var __app = (() => {
           availableComparisons,
           activePeriodComparison,
           setActivePeriodComparison,
-          formatMetricValue,
+          formatMetricValue: formatMetricValue2,
           styles,
           theme,
           isDarkMode
         }
       ))
     );
+  }
+
+  // src/compareChartBuilder.js
+  function resolveChartType(metricName, metricConfig) {
+    if (metricConfig) {
+      const prefix = metricName === "metric1" ? "volume" : metricName === "metric2" ? "revenue" : "derived";
+      const configuredType = metricConfig[prefix + "ChartType"] || "auto";
+      if (configuredType !== "auto") return configuredType;
+      const mode = metricConfig[prefix + "Mode"] || "aggregation";
+      return mode === "formula" ? "line" : "stacked";
+    }
+    return metricName === "metric3" ? "line" : "stacked";
+  }
+  function isFormulaMetric(metricName, metricConfig) {
+    if (metricConfig) {
+      const prefix = metricName === "metric1" ? "volume" : metricName === "metric2" ? "revenue" : "derived";
+      return (metricConfig[prefix + "Mode"] || "aggregation") === "formula";
+    }
+    return metricName === "metric3";
+  }
+  function getMetricLabels(metricConfig) {
+    if (metricConfig) {
+      return {
+        metric1: metricConfig.volumeLabel || "Metric 1",
+        metric2: metricConfig.revenueLabel || "Metric 2",
+        metric3: metricConfig.derivedLabel || "Margin Rate"
+      };
+    }
+    return { metric1: "Metric 1", metric2: "Metric 2", metric3: "Metric 3" };
+  }
+  function formatMetricValue(value, metricName, metricConfig) {
+    if (typeof numeral === "undefined") return String(value);
+    if (metricConfig) {
+      if (metricName === "metric1") {
+        const formatted = numeral(value).format(metricConfig.volumeFormat);
+        return (metricConfig.volumePrefix || "") + formatted + (metricConfig.volumeSuffix || "");
+      }
+      if (metricName === "metric2") {
+        const formatted = numeral(value).format(metricConfig.revenueFormat);
+        return (metricConfig.revenuePrefix || "") + formatted + (metricConfig.revenueSuffix || "");
+      }
+      if (metricName === "metric3") {
+        const displayValue = metricConfig.derivedMode !== "formula" && metricConfig.derivedDivisor ? value / metricConfig.derivedDivisor : value;
+        const formatted = numeral(displayValue).format(metricConfig.derivedFormat);
+        return (metricConfig.derivedPrefix || "") + formatted + (metricConfig.derivedSuffix || "");
+      }
+    }
+    switch (metricName) {
+      case "metric1":
+        return "$" + numeral(value).format("0.0a");
+      case "metric2":
+        return "$" + numeral(value).format("0.0a");
+      case "metric3":
+        return numeral(value).format("0.0") + " bps";
+      default:
+        return numeral(value).format("0.0a");
+    }
+  }
+  function filterPeriodsByDateRange(allPeriods, dateRange) {
+    if (!dateRange || dateRange === "All") return allPeriods;
+    const now = /* @__PURE__ */ new Date();
+    const toDateStr = (d) => d.getFullYear() + "-" + (d.getMonth() + 1).toString().padStart(2, "0") + "-" + d.getDate().toString().padStart(2, "0");
+    const daysAgo = (days) => {
+      const d = new Date(now);
+      d.setDate(d.getDate() - days);
+      return toDateStr(d);
+    };
+    const monthsAgo = (months) => {
+      const d = new Date(now);
+      d.setMonth(d.getMonth() - months);
+      return toDateStr(d);
+    };
+    const yearStart = now.getFullYear() + "-01-01";
+    let cutoff;
+    switch (dateRange) {
+      case "7D":
+        cutoff = daysAgo(7);
+        break;
+      case "14D":
+        cutoff = daysAgo(14);
+        break;
+      case "30D":
+        cutoff = daysAgo(30);
+        break;
+      case "QTD":
+        cutoff = monthsAgo(3);
+        break;
+      case "YTD":
+        cutoff = yearStart;
+        break;
+      case "1Y":
+        cutoff = daysAgo(365);
+        break;
+      default:
+        return allPeriods;
+    }
+    const periodToDate = (p) => {
+      if (p.includes("W")) return p.replace("W", "-W");
+      if (p.length === 7) return p + "-01";
+      if (p.length === 4) return p + "-01-01";
+      return p;
+    };
+    return allPeriods.filter((p) => periodToDate(p) >= cutoff);
+  }
+  function filterAggregates(baseAggregates, periodsSet) {
+    const result = {};
+    for (const period in baseAggregates) {
+      if (periodsSet.has(period)) result[period] = baseAggregates[period];
+    }
+    return result;
+  }
+  function filterDimensionAggregates(baseDimAggs, periodsSet) {
+    const result = {};
+    const categoryTotals = {};
+    for (const col in baseDimAggs) {
+      if (col === "_categoryTotals") continue;
+      result[col] = {};
+      categoryTotals[col] = {};
+      for (const period in baseDimAggs[col]) {
+        if (!periodsSet.has(period)) continue;
+        result[col][period] = baseDimAggs[col][period];
+        for (const cat in baseDimAggs[col][period]) {
+          const agg = baseDimAggs[col][period][cat];
+          if (!categoryTotals[col][cat]) categoryTotals[col][cat] = { metric1: 0, metric2: 0 };
+          categoryTotals[col][cat].metric1 += agg.metric1 || 0;
+          categoryTotals[col][cat].metric2 += agg.metric2 || 0;
+        }
+      }
+    }
+    for (const col in categoryTotals) {
+      for (const cat in categoryTotals[col]) {
+        const t = categoryTotals[col][cat];
+        t.metric3 = t.metric1 > 0 ? 1e4 * t.metric2 / t.metric1 : 0;
+      }
+    }
+    result._categoryTotals = categoryTotals;
+    return result;
+  }
+  function buildCardTraces(card, dateRange) {
+    const {
+      metric,
+      view,
+      topX,
+      selectedCategories,
+      dataFrequency,
+      metricConfig,
+      viewConfig,
+      categoryColorMap: cardColorMap,
+      activeOverlays,
+      smaWindow,
+      periodAggregates: basePeriodAggs,
+      dimensionAggregates: baseDimAggs
+    } = card;
+    const allPeriods = Object.keys(basePeriodAggs).sort();
+    const periods = filterPeriodsByDateRange(allPeriods, dateRange);
+    const periodsSet = new Set(periods);
+    const periodAggs = filterAggregates(basePeriodAggs, periodsSet);
+    const dimAggs = filterDimensionAggregates(baseDimAggs, periodsSet);
+    const labels = getMetricLabels(metricConfig);
+    const chartType = resolveChartType(metric, metricConfig);
+    const isFormula = isFormulaMetric(metric, metricConfig);
+    const fmtValue = (v) => formatMetricValue(v, metric, metricConfig);
+    const traces = [];
+    if (view === "Overall") {
+      const barData = periods.map((p) => {
+        const agg = periodAggs[p];
+        return agg ? agg[metric] || 0 : 0;
+      });
+      if (chartType === "line") {
+        traces.push({
+          type: "scatter",
+          mode: "lines+markers",
+          x: periods,
+          y: barData,
+          name: labels[metric] || metric,
+          line: { width: 2.5 },
+          marker: { size: 5 },
+          customdata: barData.map(fmtValue),
+          hovertemplate: "%{customdata}<extra></extra>"
+        });
+      } else {
+        traces.push({
+          type: "bar",
+          x: periods,
+          y: barData,
+          name: labels[metric] || metric,
+          marker: { opacity: 0.85 },
+          text: barData.map(fmtValue),
+          textposition: "outside",
+          textfont: { size: 11 },
+          customdata: barData.map(fmtValue),
+          hovertemplate: "%{customdata}<extra></extra>"
+        });
+      }
+      if (activeOverlays) {
+        OVERLAY_CONFIG.forEach((overlay) => {
+          if (!activeOverlays[overlay.id]) return;
+          if (overlay.isForecast) return;
+          if (overlay.isSMA) {
+            const smaData = calculateSMA(barData, smaWindow || 3);
+            traces.push({
+              type: "scatter",
+              mode: "lines",
+              x: periods,
+              y: smaData,
+              name: `SMA(${smaWindow || 3})`,
+              yaxis: "y",
+              line: { color: overlay.color, width: 2, dash: "dot" },
+              customdata: smaData.map((v) => v !== null ? fmtValue(v) : "N/A"),
+              hovertemplate: `SMA(${smaWindow || 3}): %{customdata}<extra></extra>`,
+              connectgaps: false
+            });
+          } else {
+            if (overlay.minGrain && GRAIN_RANK[overlay.minGrain] < GRAIN_RANK[dataFrequency]) return;
+            const lookback = overlay.lookback?.[dataFrequency];
+            if (!lookback || periods.length <= lookback) return;
+            const changeData = periods.map((period, i) => {
+              const currentIndex = allPeriods.indexOf(period);
+              if (currentIndex === -1) return null;
+              return calculatePeriodChange(currentIndex, barData[i], lookback, allPeriods, basePeriodAggs, metric);
+            });
+            traces.push({
+              type: "scatter",
+              mode: "lines+markers",
+              x: periods,
+              y: changeData.map(capYoYForDisplay),
+              name: overlay.label + " Change %",
+              yaxis: "y2",
+              line: { color: overlay.color, width: 2.5 },
+              marker: { size: 3, color: overlay.color },
+              customdata: changeData.map(formatYoYValue),
+              hovertemplate: overlay.label + " Change: %{customdata}<extra></extra>",
+              connectgaps: false
+            });
+          }
+        });
+      }
+    } else if (viewConfig) {
+      const attribute = viewConfig.column;
+      const catTotals = (dimAggs._categoryTotals || {})[attribute] || {};
+      const attributeValues = Object.keys(catTotals);
+      const sorted = attributeValues.map((v) => ({
+        attrValue: v,
+        total: isFormula ? catTotals[v]?.metric2 || 0 : catTotals[v]?.[metric] || catTotals[v]?.metric1 || 0
+      })).sort((a, b) => b.total - a.total);
+      let topAttributes, restAttributes;
+      if (topX > 0) {
+        topAttributes = attributeValues;
+        restAttributes = [];
+      } else {
+        const topXCats = sorted.slice(0, topX).map((i) => i.attrValue);
+        const manualCats = (selectedCategories || []).filter((c) => attributeValues.includes(c));
+        topAttributes = [.../* @__PURE__ */ new Set([...topXCats, ...manualCats])];
+        restAttributes = attributeValues.filter((v) => !topAttributes.includes(v));
+      }
+      const allCategories = [...topAttributes];
+      if (restAttributes.length > 0) allCategories.push("Rest Combined");
+      const periodTotals = periods.map((p) => {
+        const agg = periodAggs[p];
+        return agg ? agg[metric] || agg.metric1 || 0 : 0;
+      });
+      const dimColorMap = (cardColorMap || {})[attribute] || {};
+      allCategories.forEach((category, index) => {
+        const traceData = periods.map((period) => {
+          if (category !== "Rest Combined" || topX > 0) {
+            if (topX > 0) {
+              const pAgg = dimAggs[attribute]?.[period];
+              if (!pAgg || !(category in pAgg)) return null;
+            }
+            return getDimAggMetric(dimAggs, attribute, period, category, metric);
+          }
+          if (isFormula) {
+            let m1 = 0, m2 = 0;
+            restAttributes.forEach((ra) => {
+              const ca = dimAggs[attribute]?.[period]?.[ra];
+              if (ca) {
+                m1 += ca.metric1 || 0;
+                m2 += ca.metric2 || 0;
+              }
+            });
+            return m1 > 0 ? 1e4 * m2 / m1 : 0;
+          }
+          return restAttributes.reduce((sum, ra) => sum + getDimAggMetric(dimAggs, attribute, period, ra, metric), 0);
+        });
+        const sharePercentages = traceData.map((value, i) => {
+          if (isFormula) {
+            const totalM1 = periodAggs[periods[i]]?.metric1 || 0;
+            let catM1 = 0;
+            if (category === "Rest Combined" && !(topX > 0)) {
+              restAttributes.forEach((ra) => {
+                catM1 += dimAggs[attribute]?.[periods[i]]?.[ra]?.metric1 || 0;
+              });
+            } else {
+              catM1 = dimAggs[attribute]?.[periods[i]]?.[category]?.metric1 || 0;
+            }
+            return totalM1 > 0 ? catM1 / totalM1 * 100 : 0;
+          }
+          return value !== null && periodTotals[i] > 0 ? value / periodTotals[i] * 100 : 0;
+        });
+        const categoryColor = dimColorMap[category] || getCategoryColor(category, index);
+        if (chartType === "line") {
+          traces.push({
+            type: "scatter",
+            mode: "lines+markers",
+            name: `${category} - ${labels[metric] || metric}`,
+            x: periods,
+            y: traceData,
+            visible: true,
+            line: { color: categoryColor, width: 2.5 },
+            marker: { size: 3, color: categoryColor },
+            customdata: traceData.map(fmtValue),
+            hovertemplate: category + "<br>%{customdata}<extra></extra>"
+          });
+        } else {
+          traces.push({
+            type: "bar",
+            name: `${category} - ${labels[metric] || metric}`,
+            x: periods,
+            y: traceData,
+            visible: true,
+            marker: { color: categoryColor, line: { color: "rgba(255,255,255,0.3)", width: 0.5 }, opacity: 0.85 },
+            text: traceData.map((v, i) => {
+              if (v === 0 || v === null) return "";
+              const pct = !isFormula ? sharePercentages[i] : 0;
+              return fmtValue(v) + (pct > 0 ? "<br>" + pct.toFixed(1) + "%" : "");
+            }),
+            textposition: "inside",
+            textfont: { size: 9 },
+            insidetextanchor: "middle",
+            customdata: traceData.map(fmtValue),
+            hovertemplate: category + "<br>%{customdata}<extra></extra>"
+          });
+          if (!isFormula) {
+            traces.push({
+              type: "scatter",
+              mode: "lines+markers",
+              name: `${category} - %Share`,
+              x: periods,
+              y: sharePercentages,
+              visible: "legendonly",
+              line: { color: categoryColor, width: 2, dash: "dot" },
+              marker: { size: 3, color: categoryColor },
+              yaxis: "y2",
+              customdata: sharePercentages.map((s) => s != null ? s.toFixed(1) + "%" : ""),
+              hovertemplate: `${category} - %Share<br>%{customdata}<extra></extra>`
+            });
+          }
+          const yoyData = periods.slice(0, -1).map((currentPeriod) => {
+            let currentVal = category === "Rest Combined" && !(topX > 0) ? restAttributes.reduce((s, ra) => s + getDimAggMetric(baseDimAggs, attribute, currentPeriod, ra, metric), 0) : getDimAggMetric(baseDimAggs, attribute, currentPeriod, category, metric);
+            const currentYear = parseInt(currentPeriod.substring(0, 4));
+            const prevPeriod = dataFrequency === "Weekly" ? (() => {
+              const idx = allPeriods.indexOf(currentPeriod);
+              return idx >= 52 ? allPeriods[idx - 52] : null;
+            })() : currentPeriod.replace(currentYear.toString(), (currentYear - 1).toString());
+            if (!prevPeriod || !baseDimAggs[attribute]?.[prevPeriod]) return null;
+            let prevVal = category === "Rest Combined" && !(topX > 0) ? restAttributes.reduce((s, ra) => s + getDimAggMetric(baseDimAggs, attribute, prevPeriod, ra, metric), 0) : getDimAggMetric(baseDimAggs, attribute, prevPeriod, category, metric);
+            return calculatePercentageChange(currentVal, prevVal);
+          });
+          yoyData.push(null);
+          traces.push({
+            type: "scatter",
+            mode: "lines+markers",
+            name: `${category} - %Growth YoY`,
+            x: periods,
+            y: yoyData.map(capYoYForDisplay),
+            visible: "legendonly",
+            line: { color: categoryColor, width: 2 },
+            marker: { size: 3, color: categoryColor },
+            yaxis: "y2",
+            customdata: yoyData.map(formatYoYValue),
+            hovertemplate: `${category} - %Growth YoY<br>%{customdata}<extra></extra>`
+          });
+        }
+      });
+      if (chartType === "line") {
+        const refData = periods.map((p) => periodAggs[p]?.[metric] || 0);
+        traces.push({
+          type: "scatter",
+          mode: "lines+markers",
+          x: periods,
+          y: refData,
+          name: "Overall Average",
+          line: { color: "#6b7280", width: 2, dash: "dash" },
+          marker: { size: 3, color: "#6b7280" },
+          customdata: refData.map(fmtValue),
+          hovertemplate: "Overall Average: %{customdata}<extra></extra>"
+        });
+      }
+    }
+    return {
+      traces,
+      periods,
+      chartType,
+      hasY2: traces.some((t) => t.yaxis === "y2"),
+      yAxisTitle: labels[metric] || metric
+    };
+  }
+  var COMPARE_CARD_COLORS = ["#3b82f6", "#10b981", "#f59e0b"];
+  function hexToRgb(hex) {
+    return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+  }
+  function makeShade(baseRgb, index, total) {
+    const factor = total <= 1 ? 0 : index / (total + 1);
+    return `rgb(${Math.round(baseRgb[0] + (255 - baseRgb[0]) * factor * 0.6)},${Math.round(baseRgb[1] + (255 - baseRgb[1]) * factor * 0.6)},${Math.round(baseRgb[2] + (255 - baseRgb[2]) * factor * 0.6)})`;
+  }
+  function buildComparisonChart(cards, compareDateRange, isDarkMode) {
+    const isSideBySide = cards.length === 3;
+    const cardResults = cards.map((card) => buildCardTraces(card, compareDateRange));
+    let traces = [];
+    const layout = {
+      font: { family: "'Inter', 'Segoe UI', sans-serif", size: 12, color: isDarkMode ? "#e2e8f0" : "#374151" },
+      plot_bgcolor: isDarkMode ? "#0f172a" : "#ffffff",
+      paper_bgcolor: isDarkMode ? "#1e293b" : "#ffffff",
+      legend: { bgcolor: "transparent", bordercolor: "transparent", font: { color: isDarkMode ? "#94a3b8" : "#6b7280", size: 11 }, orientation: "h", y: -0.2 },
+      height: isSideBySide ? 500 : 550,
+      margin: { l: 80, r: 80, t: 60, b: 120 },
+      showlegend: true
+    };
+    if (isSideBySide) {
+      const domains = [[0, 0.3], [0.35, 0.65], [0.7, 1]];
+      layout.annotations = [];
+      layout.barmode = "group";
+      cardResults.forEach((result, i) => {
+        const xKey = i === 0 ? "xaxis" : `xaxis${i + 1}`;
+        const yKey = i === 0 ? "yaxis" : `yaxis${i + 1}`;
+        layout[xKey] = { domain: domains[i], type: "category", tickangle: -45, tickfont: { size: 10, color: isDarkMode ? "#94a3b8" : "#6b7280" } };
+        layout[yKey] = { title: { text: result.yAxisTitle, font: { size: 11 } }, tickfont: { size: 10, color: isDarkMode ? "#94a3b8" : "#6b7280" }, gridcolor: isDarkMode ? "#334155" : "#f1f5f9" };
+        if (result.hasY2) {
+          const y2Key = `yaxis${i * 2 + 2}`;
+          layout[y2Key] = { title: { text: "% Share / %Growth YoY", font: { size: 10 } }, tickfont: { size: 9 }, overlaying: i === 0 ? "y" : `y${i + 1}`, side: "right", showgrid: false };
+        }
+        layout.annotations.push({
+          text: `<b>${cards[i].label}</b>`,
+          xref: "paper",
+          yref: "paper",
+          x: (domains[i][0] + domains[i][1]) / 2,
+          y: 1.05,
+          showarrow: false,
+          font: { size: 12, color: COMPARE_CARD_COLORS[i] }
+        });
+        result.traces.forEach((trace) => {
+          const xRef = i === 0 ? "x" : `x${i + 1}`;
+          const yRef = trace.yaxis === "y2" ? `y${i * 2 + 2}` : i === 0 ? "y" : `y${i + 1}`;
+          const prefixedName = `[${cards[i].label}] ${trace.name}`;
+          traces.push({
+            ...trace,
+            xaxis: xRef,
+            yaxis: yRef,
+            name: prefixedName,
+            showlegend: true,
+            visible: true,
+            hovertemplate: prefixedName + "<br>%{customdata}<extra></extra>"
+          });
+        });
+      });
+    } else {
+      const allPeriods = [.../* @__PURE__ */ new Set([...cardResults[0].periods, ...cardResults[1].periods])].sort();
+      const anyHasY2 = cardResults.some((r) => r.hasY2);
+      layout.xaxis = { type: "category", tickangle: -45, tickfont: { size: 10, color: isDarkMode ? "#94a3b8" : "#6b7280" } };
+      layout.yaxis = {
+        title: { text: [...new Set(cardResults.map((r) => r.yAxisTitle))].join(" / "), font: { size: 11 } },
+        tickfont: { size: 10, color: isDarkMode ? "#94a3b8" : "#6b7280" },
+        gridcolor: isDarkMode ? "#334155" : "#f1f5f9"
+      };
+      if (anyHasY2) {
+        layout.yaxis2 = {
+          title: { text: "% Share / %Growth YoY", font: { size: 11 } },
+          tickfont: { size: 10 },
+          overlaying: "y",
+          side: "right",
+          gridcolor: "transparent",
+          zeroline: true,
+          zerolinecolor: "rgba(0,0,0,0.05)",
+          zerolinewidth: 1
+        };
+      }
+      layout.barmode = "group";
+      cardResults.forEach((result, cardIdx) => {
+        const groupSuffix = `card${cardIdx}`;
+        const baseRgb = hexToRgb(COMPARE_CARD_COLORS[cardIdx]);
+        const traceCount = result.traces.length;
+        let visibleIdx = 0;
+        result.traces.forEach((trace) => {
+          const mappedY = allPeriods.map((p) => {
+            const idx = result.periods.indexOf(p);
+            return idx >= 0 && trace.y ? trace.y[idx] : null;
+          });
+          const mappedText = allPeriods.map((p) => {
+            const idx = result.periods.indexOf(p);
+            return idx >= 0 && trace.text ? trace.text[idx] : "";
+          });
+          const mappedCustomdata = allPeriods.map((p) => {
+            const idx = result.periods.indexOf(p);
+            return idx >= 0 && trace.customdata ? trace.customdata[idx] : "";
+          });
+          const shadeColor = makeShade(baseRgb, visibleIdx, traceCount);
+          visibleIdx++;
+          const cardLabel = cards[cardIdx].label;
+          const prefixedName = `[${cardLabel}] ${trace.name}`;
+          traces.push({
+            ...trace,
+            x: allPeriods,
+            y: mappedY,
+            text: Array.isArray(trace.text) ? mappedText : trace.text,
+            customdata: mappedCustomdata,
+            name: prefixedName,
+            showlegend: true,
+            visible: true,
+            // Show all traces (including y2) in comparison
+            hovertemplate: prefixedName + "<br>%{customdata}<extra></extra>",
+            marker: { ...trace.marker || {}, color: shadeColor, opacity: 0.85 },
+            line: {
+              ...trace.line || {},
+              color: shadeColor,
+              ...cardIdx > 0 && trace.type === "scatter" ? { dash: "dash" } : {}
+            },
+            ...trace.type === "bar" ? { offsetgroup: groupSuffix, legendgroup: groupSuffix } : {}
+          });
+        });
+      });
+    }
+    return { traces, layout };
   }
 
   // Analyzer_Demo.js
@@ -3509,52 +4013,6 @@ var __app = (() => {
           color: theme.textSecondary,
           backgroundColor: "transparent"
         },
-        savedViewsHeader: {
-          fontSize: "11px",
-          fontWeight: "600",
-          color: "#6b7280",
-          marginBottom: "8px",
-          textTransform: "uppercase",
-          letterSpacing: "0.5px"
-        },
-        savedScenarioCard: {
-          padding: "8px",
-          backgroundColor: "#f9fafb",
-          borderRadius: "6px",
-          border: "1px solid #e5e7eb"
-        },
-        savedScenarioRow: {
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-          marginBottom: "6px"
-        },
-        savedScenarioLabel: {
-          flex: 1,
-          fontSize: "12px",
-          fontWeight: "500",
-          color: "#374151"
-        },
-        savedScenarioDeleteBtn: {
-          padding: "2px 8px",
-          backgroundColor: "#ef4444",
-          color: "white",
-          border: "none",
-          borderRadius: "4px",
-          fontSize: "10px",
-          fontWeight: "500",
-          cursor: "pointer"
-        },
-        allSlotsFilled: {
-          fontSize: "11px",
-          color: "#6b7280",
-          fontStyle: "italic",
-          textAlign: "center",
-          padding: "8px",
-          backgroundColor: "#f9fafb",
-          borderRadius: "4px",
-          marginTop: "12px"
-        },
         categoryLabelText: { fontSize: "13px", color: "#374151" },
         noCategoriesFound: {
           padding: "12px",
@@ -4145,8 +4603,8 @@ var __app = (() => {
       },
       {
         id: "comparison",
-        title: "Scenario Comparison",
-        description: "Compare up to 3 scenarios side-by-side. Click chart icon to open comparison panel.",
+        title: "Compare Views",
+        description: "Add up to 3 views to the compare dock bar, then overlay them on a single chart.",
         targetSelector: '[data-guide="comparison"]'
       },
       {
@@ -4756,20 +5214,9 @@ var __app = (() => {
     const filterTimeRef = React.useRef(0);
     const renderStartTime = performance.now();
     const hasCheckedInitialLoadRef = React.useRef(false);
-    const [scenario1, setScenario1] = React.useState(null);
-    const [scenario2, setScenario2] = React.useState(null);
-    const [scenario3, setScenario3] = React.useState(null);
-    const [activeScenarios, setActiveScenarios] = React.useState({
-      scenario1: false,
-      scenario2: false,
-      scenario3: false
-    });
-    const [scenarioLabels, setScenarioLabels] = React.useState({
-      scenario1: "Scenario 1",
-      scenario2: "Scenario 2",
-      scenario3: "Scenario 3"
-    });
-    const [showScenarioPanel, setShowScenarioPanel] = React.useState(false);
+    const [compareCards, setCompareCards] = React.useState([]);
+    const [showCompareView, setShowCompareView] = React.useState(false);
+    const [compareDateRange, setCompareDateRange] = React.useState("All");
     const [traceVisibility, setTraceVisibility] = React.useState({});
     const chartRef = React.useRef(null);
     const [showGuide, setShowGuide] = React.useState(false);
@@ -4800,8 +5247,8 @@ var __app = (() => {
         },
         {
           icon: "\u{1F4CA}",
-          title: "Compare Scenarios",
-          text: 'Use the "\u{1F4CA}" button to capture and compare up to 3 different scenarios. Currently in Beta version.'
+          title: "Compare Views",
+          text: 'Use the "\u{1F4CA} Compare" button to add views to a dock bar at the bottom. Compare up to 3 views across different tabs.'
         },
         {
           icon: "\u{1F3AF}",
@@ -4844,13 +5291,8 @@ var __app = (() => {
         showAllShareTraces,
         showAllGrowthTraces,
         showAllDollarTraces,
-        // Scenario comparison state
-        scenario1,
-        scenario2,
-        scenario3,
-        activeScenarios: { ...activeScenarios },
-        scenarioLabels: { ...scenarioLabels },
-        showScenarioPanel,
+        // Compare cards state
+        compareCards,
         // Legend visibility state
         traceVisibility: { ...traceVisibility },
         // 🆕 Investigation context state
@@ -4872,12 +5314,7 @@ var __app = (() => {
       showAllShareTraces,
       showAllGrowthTraces,
       showAllDollarTraces,
-      scenario1,
-      scenario2,
-      scenario3,
-      activeScenarios,
-      scenarioLabels,
-      showScenarioPanel,
+      compareCards,
       traceVisibility,
       insightContext,
       FILTER_CONFIG
@@ -4911,23 +5348,8 @@ var __app = (() => {
         if (snapshot.categorySelectionMode) {
           setCategorySelectionMode(snapshot.categorySelectionMode);
         }
-        if (snapshot.scenario1 !== void 0) {
-          setScenario1(snapshot.scenario1);
-        }
-        if (snapshot.scenario2 !== void 0) {
-          setScenario2(snapshot.scenario2);
-        }
-        if (snapshot.scenario3 !== void 0) {
-          setScenario3(snapshot.scenario3);
-        }
-        if (snapshot.activeScenarios !== void 0) {
-          setActiveScenarios({ ...snapshot.activeScenarios });
-        }
-        if (snapshot.scenarioLabels !== void 0) {
-          setScenarioLabels({ ...snapshot.scenarioLabels });
-        }
-        if (snapshot.showScenarioPanel !== void 0) {
-          setShowScenarioPanel(snapshot.showScenarioPanel);
+        if (snapshot.compareCards !== void 0) {
+          setCompareCards(snapshot.compareCards);
         }
         if (snapshot.traceVisibility !== void 0) {
           setTraceVisibility({ ...snapshot.traceVisibility });
@@ -4959,30 +5381,6 @@ var __app = (() => {
         restoreStateSnapshot(previousState);
       }
     }, [history, restoreStateSnapshot]);
-    const clearScenario = React.useCallback((index) => {
-      if (index === 1) {
-        setScenario1(null);
-        setActiveScenarios((prev) => ({ ...prev, scenario1: false }));
-      } else if (index === 2) {
-        setScenario2(null);
-        setActiveScenarios((prev) => ({ ...prev, scenario2: false }));
-      } else if (index === 3) {
-        setScenario3(null);
-        setActiveScenarios((prev) => ({ ...prev, scenario3: false }));
-      }
-    }, []);
-    const toggleScenario = React.useCallback((index) => {
-      setActiveScenarios((prev) => {
-        const key = `scenario${index}`;
-        return { ...prev, [key]: !prev[key] };
-      });
-    }, []);
-    const updateScenarioLabel = React.useCallback((index, label) => {
-      setScenarioLabels((prev) => {
-        const key = `scenario${index}`;
-        return { ...prev, [key]: label };
-      });
-    }, []);
     const scrollToElementForGuide = React.useCallback((element) => {
       if (!element) return;
       setTimeout(() => {
@@ -6210,7 +6608,7 @@ var __app = (() => {
       (rows) => calculateMetricValue(rows, metric),
       [metric, calculateMetricValue]
     );
-    const resolveChartType = React.useCallback((metricName) => {
+    const resolveChartType2 = React.useCallback((metricName) => {
       if (liveMetricConfig) {
         const prefix = metricName === "metric1" ? "volume" : metricName === "metric2" ? "revenue" : "derived";
         const configuredType = liveMetricConfig[prefix + "ChartType"] || "auto";
@@ -6220,14 +6618,14 @@ var __app = (() => {
       }
       return metricName === "metric3" ? "line" : "stacked";
     }, [liveMetricConfig]);
-    const isFormulaMetric = React.useCallback((metricName) => {
+    const isFormulaMetric2 = React.useCallback((metricName) => {
       if (liveMetricConfig) {
         const prefix = metricName === "metric1" ? "volume" : metricName === "metric2" ? "revenue" : "derived";
         return (liveMetricConfig[prefix + "Mode"] || "aggregation") === "formula";
       }
       return metricName === "metric3";
     }, [liveMetricConfig]);
-    const formatMetricValue = React.useCallback((value, metricName) => {
+    const formatMetricValue2 = React.useCallback((value, metricName) => {
       if (liveMetricConfig) {
         if (metricName === "metric1") {
           const formatted = numeral(value).format(liveMetricConfig.volumeFormat);
@@ -6255,8 +6653,8 @@ var __app = (() => {
       }
     }, [liveMetricConfig]);
     const formatMetric = React.useCallback(
-      (value) => formatMetricValue(value, metric),
-      [metric, formatMetricValue]
+      (value) => formatMetricValue2(value, metric),
+      [metric, formatMetricValue2]
     );
     const calculatePercentageChange2 = React.useCallback(
       (currentValue, previousValue) => calculatePercentageChange(currentValue, previousValue),
@@ -6354,7 +6752,7 @@ var __app = (() => {
           const useSimpleMode = marketAvgGrowth == null;
           const excessVsMarket = marketAvgGrowth != null ? categoryGrowth - marketAvgGrowth : null;
           let baseShare, excessContribution, pctOfExcess;
-          if (isFormulaMetric(metric)) {
+          if (isFormulaMetric2(metric)) {
             const categoryFirstRev = getDimAggMetric(
               dimensionAggregates,
               column,
@@ -6938,7 +7336,7 @@ var __app = (() => {
       };
       const detectMarketShareShifts = () => {
         if (completePeriods.length < 2) return [];
-        if (isFormulaMetric(metric)) return [];
+        if (isFormulaMetric2(metric)) return [];
         const insights = DIMENSION_DEFINITIONS.flatMap((dim) => {
           const column = COLUMNS[dim.columnKey];
           if (!columnExists(column)) return [];
@@ -7077,7 +7475,7 @@ var __app = (() => {
         if (sorted.length === 0) return;
         const [topValue, topMetricValue] = sorted[0];
         let marketShare, displayValue;
-        if (isFormulaMetric(metric)) {
+        if (isFormulaMetric2(metric)) {
           const catData = dimData[topValue];
           displayValue = topMetricValue;
           marketShare = totalRevShare > 0 ? catData.metric2 / totalRevShare * 100 : 0;
@@ -7087,8 +7485,8 @@ var __app = (() => {
         }
         const minThreshold = INSIGHT_THRESHOLDS.minMarketShareThreshold;
         const isNear100Percent = marketShare >= 99.5;
-        if ((isFormulaMetric(metric) || marketShare > minThreshold) && !isNear100Percent) {
-          const shareText = isFormulaMetric(metric) ? formatMetric(displayValue) : `${marketShare.toFixed(1)}% share (${formatMetric(
+        if ((isFormulaMetric2(metric) || marketShare > minThreshold) && !isNear100Percent) {
+          const shareText = isFormulaMetric2(metric) ? formatMetric(displayValue) : `${marketShare.toFixed(1)}% share (${formatMetric(
             displayValue
           )})`;
           const priority = calculateBasePriority(marketShare, "market_share");
@@ -7686,419 +8084,6 @@ var __app = (() => {
     const statData = React.useMemo(() => {
       return allMetricsStatData[metric] || null;
     }, [allMetricsStatData, metric]);
-    const calculateScenarioChartData = React.useCallback(
-      (scenarioSnapshot, scenarioIndex, scenarioLabel) => {
-        if (!scenarioSnapshot) return [];
-        const scenarioMetric = scenarioSnapshot.metric || "metric2";
-        const scenarioView = scenarioSnapshot.view || "Overall";
-        const scenarioDateRange = scenarioSnapshot.dateRange || "YTD";
-        const scenarioDataFrequency = scenarioSnapshot.dataFrequency || "Monthly";
-        const scenarioTopX = scenarioSnapshot.topX || 3;
-        const scenarioSelectedCategories = scenarioSnapshot.selectedCategories || [];
-        const scenarioShowAllShareTraces = scenarioSnapshot.showAllShareTraces || false;
-        const scenarioShowAllGrowthTraces = scenarioSnapshot.showAllGrowthTraces || false;
-        const scenarioShowAllDollarTraces = scenarioSnapshot.showAllDollarTraces !== void 0 ? scenarioSnapshot.showAllDollarTraces : true;
-        const visibleTraceNames = scenarioSnapshot.visibleTraceNames || null;
-        const getScenarioDateField = (freq) => {
-          switch (freq) {
-            case "Weekly":
-              return COLUMNS.REPORTING_WEEK;
-            case "Monthly":
-              return COLUMNS.REPORTING_MONTH;
-            case "Quarterly":
-              return COLUMNS.REPORTING_QUARTER;
-            case "Yearly":
-              return COLUMNS.REPORTING_YEAR;
-            default:
-              return COLUMNS.REPORTING_MONTH;
-          }
-        };
-        const scenarioDateField = getScenarioDateField(scenarioDataFrequency);
-        const scenarioFilteredData = cleanedQueryData.rows.filter((row) => {
-          return FILTER_CONFIG_STATIC.every(({ column, key }) => {
-            const scenarioFilterState = scenarioSnapshot[key] || [];
-            return filterMatches(scenarioFilterState, row[column]);
-          });
-        });
-        const allScenarioDates = Array.from(
-          new Set(scenarioFilteredData.map((row) => row[scenarioDateField]))
-        ).sort();
-        let scenarioFilteredDates = allScenarioDates;
-        if (scenarioDateRange !== "All") {
-          const now = /* @__PURE__ */ new Date();
-          let yearStart = now.getFullYear() + "-01-01";
-          let oneYearAgo = now.getFullYear() - 1 + "-" + (now.getMonth() + 1).toString().padStart(2, "0") + "-" + now.getDate().toString().padStart(2, "0");
-          let threeMonthsAgo = new Date(now);
-          threeMonthsAgo.setMonth(now.getMonth() - 3);
-          let oneQuarterAgo = threeMonthsAgo.getFullYear() + "-" + (threeMonthsAgo.getMonth() + 1).toString().padStart(2, "0") + "-" + threeMonthsAgo.getDate().toString().padStart(2, "0");
-          switch (scenarioDateRange) {
-            case "1Y":
-              scenarioFilteredDates = allScenarioDates.filter(
-                (date) => date >= oneYearAgo
-              );
-              break;
-            case "YTD":
-              scenarioFilteredDates = allScenarioDates.filter(
-                (date) => date >= yearStart
-              );
-              break;
-            case "QTD":
-              scenarioFilteredDates = allScenarioDates.filter(
-                (date) => date >= oneQuarterAgo
-              );
-              break;
-            default:
-              scenarioFilteredDates = allScenarioDates;
-          }
-        }
-        const scenarioDataByPeriod = {};
-        scenarioFilteredData.filter((row) => scenarioFilteredDates.includes(row[scenarioDateField])).forEach((row) => {
-          const period = row[scenarioDateField];
-          if (!scenarioDataByPeriod[period]) {
-            scenarioDataByPeriod[period] = [];
-          }
-          scenarioDataByPeriod[period].push(row);
-        });
-        const scenarioPeriods = Object.keys(scenarioDataByPeriod).sort();
-        if (scenarioPeriods.length === 0) return [];
-        const scenarioColors = {
-          1: "#ef4444",
-          // Red
-          2: "#10b981",
-          // Green
-          3: "#8b5cf6"
-          // Purple
-        };
-        const scenarioColor = scenarioColors[scenarioIndex] || "#6b7280";
-        const scenarioDashPatterns = {
-          1: "solid",
-          2: "dash",
-          3: "dot"
-        };
-        const scenarioDash = scenarioDashPatterns[scenarioIndex] || "dash";
-        const calculateScenarioMetric = (rows) => {
-          return calculateMetricValue(rows, scenarioMetric);
-        };
-        const formatScenarioMetric = (value) => {
-          return formatMetricValue(value, scenarioMetric);
-        };
-        const scenarioTraces = [];
-        if (scenarioView === "Overall") {
-          const barData = scenarioPeriods.map((period) => {
-            const periodRows = scenarioDataByPeriod[period] || [];
-            return calculateScenarioMetric(periodRows);
-          });
-          const periodsForYoY = scenarioPeriods.slice(0, -1);
-          const yoyDataForPeriods = periodsForYoY.map((period) => {
-            const periodRows = scenarioDataByPeriod[period] || [];
-            const currentValue = calculateScenarioMetric(periodRows);
-            let previousValue = null;
-            if (scenarioDataFrequency === "Weekly") {
-              const allScenarioPeriods = Array.from(
-                new Set(scenarioFilteredData.map((row) => row[scenarioDateField]))
-              ).sort();
-              const currentIndex = allScenarioPeriods.indexOf(period);
-              if (currentIndex >= 52) {
-                const periodAgo = allScenarioPeriods[currentIndex - 52];
-                const previousRows = scenarioFilteredData.filter(
-                  (row) => row[scenarioDateField] === periodAgo
-                );
-                if (previousRows.length > 0) {
-                  previousValue = calculateScenarioMetric(previousRows);
-                }
-              }
-            } else {
-              const currentYear = parseInt(period.substring(0, 4));
-              const previousYear = currentYear - 1;
-              const previousPeriod = period.replace(
-                currentYear.toString(),
-                previousYear.toString()
-              );
-              const previousRows = scenarioFilteredData.filter(
-                (row) => row[scenarioDateField] === previousPeriod
-              );
-              if (previousRows.length > 0) {
-                previousValue = calculateScenarioMetric(previousRows);
-              }
-            }
-            return calculatePercentageChange2(currentValue, previousValue);
-          });
-          const yoyData = [...yoyDataForPeriods, null];
-          scenarioTraces.push({
-            type: "bar",
-            x: scenarioPeriods,
-            y: barData,
-            name: `[${scenarioLabel}] ${scenarioMetric}`,
-            marker: {
-              color: scenarioColor,
-              line: { color: "rgba(255,255,255,0.3)", width: 0.5 },
-              opacity: 0.6
-            },
-            customdata: barData.map((value) => formatMetricValue(value, scenarioMetric)),
-            hovertemplate: `[${scenarioLabel}] ${scenarioMetric}<br>%{customdata}<extra></extra>`,
-            visible: "legendonly"
-            // Hidden by default, user can show via legend
-          });
-          const scenarioYoYLabel = scenarioDataFrequency === "Weekly" ? "52W" : "YoY";
-          scenarioTraces.push({
-            type: "scatter",
-            mode: "lines+markers",
-            x: scenarioPeriods,
-            y: yoyData.map(capYoYForDisplay2),
-            name: `[${scenarioLabel}] ${scenarioYoYLabel} Change %`,
-            yaxis: "y2",
-            line: {
-              color: scenarioColor,
-              width: 2.5,
-              dash: scenarioDash
-            },
-            marker: {
-              size: 3,
-              color: scenarioColor,
-              symbol: scenarioIndex === 1 ? "circle" : scenarioIndex === 2 ? "square" : "diamond"
-            },
-            customdata: yoyData.map(formatYoYValue2),
-            hovertemplate: `[${scenarioLabel}] ${scenarioYoYLabel} Change: %{customdata}<extra></extra>`,
-            connectgaps: false,
-            visible: "legendonly"
-          });
-        } else {
-          const config = VIEW_CONFIG[scenarioView];
-          if (config) {
-            const attribute = config.column;
-            const attributeValues = Array.from(
-              new Set(
-                scenarioFilteredData.filter(
-                  (row) => scenarioFilteredDates.includes(row[scenarioDateField])
-                ).map((row) => row[attribute]).filter((val) => val && val !== "Unknown")
-              )
-            );
-            const attributeTotals = attributeValues.map((attrValue) => {
-              const attrRows = scenarioFilteredData.filter(
-                (row) => scenarioFilteredDates.includes(row[scenarioDateField]) && row[attribute] === attrValue
-              );
-              let total;
-              if (isFormulaMetric(scenarioMetric)) {
-                total = attrRows.reduce(
-                  (sum, row) => sum + (row[COLUMNS.METRIC2] || 0),
-                  0
-                );
-              } else {
-                total = calculateScenarioMetric(attrRows);
-              }
-              return { attrValue, total };
-            });
-            const sortedAttributes = attributeTotals.sort(
-              (a, b) => b.total - a.total
-            );
-            const topXCategories = sortedAttributes.slice(0, scenarioTopX).map((item) => item.attrValue);
-            const manualCategories = scenarioSelectedCategories.filter(
-              (cat) => attributeValues.includes(cat)
-            );
-            const combinedCategories = Array.from(
-              /* @__PURE__ */ new Set([...topXCategories, ...manualCategories])
-            );
-            const restAttributes = attributeValues.filter(
-              (val) => !combinedCategories.includes(val)
-            );
-            const allCategories = [...combinedCategories];
-            if (restAttributes.length > 0) {
-              allCategories.push("Rest Combined");
-            }
-            allCategories.forEach((category, index) => {
-              const traceData = scenarioPeriods.map((period) => {
-                const periodRows = scenarioDataByPeriod[period] || [];
-                if (category === "Rest Combined") {
-                  const periodRestRows = periodRows.filter(
-                    (row) => restAttributes.includes(row[attribute])
-                  );
-                  return calculateScenarioMetric(periodRestRows);
-                } else {
-                  const periodAttrRows = periodRows.filter(
-                    (row) => row[attribute] === category
-                  );
-                  return calculateScenarioMetric(periodAttrRows);
-                }
-              });
-              const categoryColor = getCategoryColor(category, index);
-              const blendedColor = scenarioColor;
-              if (resolveChartType(scenarioMetric) === "line") {
-                scenarioTraces.push({
-                  type: "scatter",
-                  mode: "lines+markers",
-                  name: `[${scenarioLabel}] ${category} - ${scenarioMetric}`,
-                  x: scenarioPeriods,
-                  y: traceData,
-                  visible: "legendonly",
-                  line: {
-                    color: blendedColor,
-                    width: 2,
-                    dash: scenarioDash
-                  },
-                  marker: {
-                    size: 3,
-                    color: blendedColor,
-                    symbol: scenarioIndex === 1 ? "circle" : scenarioIndex === 2 ? "square" : "diamond"
-                  },
-                  customdata: traceData.map((value) => formatMetricValue(value, scenarioMetric)),
-                  hovertemplate: `[${scenarioLabel}] ${category}<br>%{customdata}<extra></extra>`
-                });
-              } else {
-                const periodTotals = scenarioPeriods.map((period) => {
-                  const periodRows = scenarioDataByPeriod[period] || [];
-                  return calculateScenarioMetric(periodRows);
-                });
-                const shares = traceData.map((value, periodIndex) => {
-                  const totalForPeriod = periodTotals[periodIndex];
-                  return totalForPeriod > 0 ? value / totalForPeriod * 100 : 0;
-                });
-                if (scenarioShowAllDollarTraces) {
-                  scenarioTraces.push({
-                    type: "bar",
-                    name: `[${scenarioLabel}] ${category} - ${scenarioMetric}`,
-                    x: scenarioPeriods,
-                    y: traceData,
-                    visible: "legendonly",
-                    marker: {
-                      color: blendedColor,
-                      line: { color: "rgba(255,255,255,0.3)", width: 0.5 },
-                      opacity: 0.5
-                    },
-                    customdata: traceData.map((value) => formatMetricValue(value, scenarioMetric)),
-                    hovertemplate: `[${scenarioLabel}] ${category}<br>%{customdata}<extra></extra>`
-                  });
-                }
-                if (scenarioShowAllShareTraces) {
-                  scenarioTraces.push({
-                    type: "scatter",
-                    mode: "lines+markers",
-                    name: `[${scenarioLabel}] ${category} - %Share`,
-                    x: scenarioPeriods,
-                    y: shares,
-                    visible: "legendonly",
-                    line: {
-                      color: blendedColor,
-                      width: 2,
-                      dash: scenarioDash
-                    },
-                    marker: {
-                      size: 3,
-                      color: blendedColor,
-                      symbol: scenarioIndex === 1 ? "circle" : scenarioIndex === 2 ? "square" : "diamond"
-                    },
-                    yaxis: "y2",
-                    customdata: shares.map((share) => share != null ? `${share.toFixed(1)}%` : ""),
-                    hovertemplate: `[${scenarioLabel}] ${category} - %Share<br>%{customdata}<extra></extra>`
-                  });
-                }
-                if (scenarioShowAllGrowthTraces) {
-                  const shareGrowthRates = shares.map(
-                    (currentShare, periodIndex) => {
-                      const currentPeriod = scenarioPeriods[periodIndex];
-                      let previousPeriod;
-                      if (scenarioDataFrequency === "Weekly") {
-                        const allPeriods = Array.from(
-                          new Set(
-                            scenarioFilteredData.map(
-                              (row) => row[scenarioDateField]
-                            )
-                          )
-                        ).sort();
-                        const currentIndex = allPeriods.indexOf(currentPeriod);
-                        if (currentIndex === -1 || currentIndex < 52) return null;
-                        previousPeriod = allPeriods[currentIndex - 52];
-                      } else {
-                        const currentYear = parseInt(
-                          currentPeriod.substring(0, 4)
-                        );
-                        const previousYear = currentYear - 1;
-                        previousPeriod = currentPeriod.replace(
-                          currentYear.toString(),
-                          previousYear.toString()
-                        );
-                      }
-                      const previousPeriodRows = scenarioFilteredData.filter(
-                        (row) => row[scenarioDateField] === previousPeriod
-                      );
-                      if (previousPeriodRows.length === 0) return null;
-                      let previousCategoryValue;
-                      if (category === "Rest Combined") {
-                        const previousRestRows = previousPeriodRows.filter(
-                          (row) => restAttributes.includes(row[attribute])
-                        );
-                        previousCategoryValue = calculateScenarioMetric(previousRestRows);
-                      } else {
-                        const previousCategoryRows = previousPeriodRows.filter(
-                          (row) => row[attribute] === category
-                        );
-                        previousCategoryValue = calculateScenarioMetric(previousCategoryRows);
-                      }
-                      const previousPeriodTotal = calculateScenarioMetric(previousPeriodRows);
-                      if (previousPeriodTotal === 0 || previousPeriodTotal === null)
-                        return null;
-                      const previousShare = previousPeriodTotal > 0 ? previousCategoryValue / previousPeriodTotal * 100 : 0;
-                      if (previousShare === 0 || previousShare === null)
-                        return null;
-                      if (currentShare === 0 || currentShare === null)
-                        return null;
-                      return calculatePercentageChange2(
-                        currentShare,
-                        previousShare
-                      );
-                    }
-                  );
-                  scenarioTraces.push({
-                    type: "scatter",
-                    mode: "lines+markers",
-                    name: `[${scenarioLabel}] ${category} - %Share Growth`,
-                    x: scenarioPeriods,
-                    y: shareGrowthRates.map(capYoYForDisplay2),
-                    visible: "legendonly",
-                    line: {
-                      color: blendedColor,
-                      width: 2,
-                      dash: scenarioDash
-                    },
-                    marker: {
-                      size: 3,
-                      color: blendedColor,
-                      symbol: scenarioIndex === 1 ? "circle" : scenarioIndex === 2 ? "square" : "diamond"
-                    },
-                    yaxis: "y2",
-                    customdata: shareGrowthRates.map(formatYoYValue2),
-                    hovertemplate: `[${scenarioLabel}] ${category} - %Share Growth<br>%{customdata}<extra></extra>`
-                  });
-                }
-              }
-            });
-          }
-        }
-        if (visibleTraceNames && visibleTraceNames.length > 0) {
-          const getBaseTraceName = (scenarioTraceName) => {
-            const match = scenarioTraceName.match(/^\[.*?\]\s*(.+)$/);
-            return match ? match[1] : scenarioTraceName;
-          };
-          const filteredTraces = scenarioTraces.filter((trace) => {
-            const baseName = getBaseTraceName(trace.name);
-            return visibleTraceNames.includes(baseName);
-          });
-          return filteredTraces;
-        }
-        return scenarioTraces;
-      },
-      [
-        cleanedQueryData.rows,
-        FILTER_CONFIG,
-        filterMatches,
-        calculateMetricValue,
-        formatMetricValue,
-        VIEW_CONFIG,
-        getCategoryColor,
-        calculatePercentageChange2,
-        formatYoYValue2,
-        capYoYForDisplay2
-      ]
-    );
     const getHighlightPeriods = React.useCallback(
       (insight) => {
         if (!insight || !insight.metadata) return [];
@@ -8193,7 +8178,7 @@ var __app = (() => {
             metric1: 0,
             metric2: 0
           };
-          const total = isFormulaMetric(metric) ? totals.metric2 : totals[metric] || totals.metric1;
+          const total = isFormulaMetric2(metric) ? totals.metric2 : totals[metric] || totals.metric1;
           return { attrValue, total };
         });
         const sortedAttributes = attributeTotals.sort(
@@ -8243,7 +8228,7 @@ var __app = (() => {
                 metric
               );
             }
-            if (isFormulaMetric(metric)) {
+            if (isFormulaMetric2(metric)) {
               let m1Sum = 0, m2Sum = 0;
               const dimAgg2 = dimensionAggregates[attribute];
               restAttributes.forEach((restAttr) => {
@@ -8271,7 +8256,7 @@ var __app = (() => {
             const totalForPeriod = periodTotals[periodIndex];
             const periodTotalAgg = periodAggregates[period];
             let percentage;
-            if (isFormulaMetric(metric)) {
+            if (isFormulaMetric2(metric)) {
               const totalM1 = periodTotalAgg ? periodTotalAgg.metric1 : 0;
               let categoryM1 = 0;
               if (category === "Rest Combined" && !(topX > 0)) {
@@ -8287,7 +8272,7 @@ var __app = (() => {
             } else {
               percentage = value !== null && totalForPeriod > 0 ? value / totalForPeriod * 100 : 0;
             }
-            if (!isFormulaMetric(metric)) {
+            if (!isFormulaMetric2(metric)) {
               if (!sharePercentages[category]) {
                 sharePercentages[category] = [];
               }
@@ -8298,7 +8283,7 @@ var __app = (() => {
           });
           const dimColorMap = categoryColorMap[attribute] || {};
           const categoryColor = dimColorMap[category] || getCategoryColor(category, index);
-          const chartType = resolveChartType(metric);
+          const chartType = resolveChartType2(metric);
           if (chartType === "line") {
             chartData2.push({
               type: "scatter",
@@ -8315,7 +8300,7 @@ var __app = (() => {
                 size: 3,
                 color: categoryColor
               },
-              customdata: traceData.map((value) => formatMetricValue(value, metric)),
+              customdata: traceData.map((value) => formatMetricValue2(value, metric)),
               hovertemplate: category + "<br>%{customdata}<extra></extra>"
             });
           } else {
@@ -8339,7 +8324,7 @@ var __app = (() => {
                 family: "'Inter', 'Segoe UI', sans-serif"
               },
               insidetextanchor: "middle",
-              customdata: traceData.map((value) => formatMetricValue(value, metric)),
+              customdata: traceData.map((value) => formatMetricValue2(value, metric)),
               hovertemplate: category + "<br>%{customdata}<extra></extra>"
             });
           }
@@ -8457,7 +8442,7 @@ var __app = (() => {
             });
           }
         });
-        const splitChartType = resolveChartType(metric);
+        const splitChartType = resolveChartType2(metric);
         const referenceLineData = splitChartType === "line" ? periods.map((period) => {
           const agg = periodAggregates[period];
           if (!agg) return 0;
@@ -8479,7 +8464,7 @@ var __app = (() => {
               size: 3,
               color: "#6b7280"
             },
-            customdata: referenceLineData.map((value) => formatMetricValue(value, metric)),
+            customdata: referenceLineData.map((value) => formatMetricValue2(value, metric)),
             hovertemplate: "Overall Average: %{customdata}<extra></extra>"
           });
         }
@@ -8569,9 +8554,9 @@ var __app = (() => {
             overlaying: "y",
             side: "right",
             showgrid: false,
-            zeroline: showAllShareTraces || showAllGrowthTraces,
-            zerolinewidth: 2,
-            zerolinecolor: "#d1d5db"
+            zeroline: true,
+            zerolinewidth: 1,
+            zerolinecolor: "rgba(0,0,0,0.05)"
           };
         }
         return { chartData: chartData2, chartLayout: chartLayout2 };
@@ -8634,23 +8619,6 @@ var __app = (() => {
       ).map((trace) => trace.name);
       return visibleTraceNames;
     }, [view, metric, dataFrequency, prepareChartDataByAttribute, VIEW_CONFIG, activeOverlays, smaWindow, forecastHorizon, METRIC_LABELS]);
-    const setScenario = React.useCallback(
-      (index) => {
-        const snapshot = captureStateSnapshot();
-        snapshot.visibleTraceNames = getVisibleTraceNames();
-        if (index === 1) {
-          setScenario1(snapshot);
-          setActiveScenarios((prev) => ({ ...prev, scenario1: true }));
-        } else if (index === 2) {
-          setScenario2(snapshot);
-          setActiveScenarios((prev) => ({ ...prev, scenario2: true }));
-        } else if (index === 3) {
-          setScenario3(snapshot);
-          setActiveScenarios((prev) => ({ ...prev, scenario3: true }));
-        }
-      },
-      [captureStateSnapshot, getVisibleTraceNames]
-    );
     const { chartData, chartLayout } = React.useMemo(() => {
       let chartData2 = [];
       let chartLayout2 = {};
@@ -8674,7 +8642,7 @@ var __app = (() => {
               name: `SMA(${smaWindow})`,
               yaxis: "y",
               line: { color: overlay.color, width: 2, dash: "dot" },
-              customdata: smaData.map((v) => v !== null ? formatMetricValue(v, metric) : "N/A"),
+              customdata: smaData.map((v) => v !== null ? formatMetricValue2(v, metric) : "N/A"),
               hovertemplate: `SMA(${smaWindow}): %{customdata}<extra></extra>`,
               connectgaps: false
             });
@@ -8739,7 +8707,7 @@ var __app = (() => {
               yaxis: "y",
               line: { color: overlay.color, width: 2.5, dash: "dash" },
               connectgaps: false,
-              customdata: forecastY.map((v) => v !== null ? formatMetricValue(v, metric) : "N/A"),
+              customdata: forecastY.map((v) => v !== null ? formatMetricValue2(v, metric) : "N/A"),
               hovertemplate: `${overlay.label}: %{customdata}<extra></extra>`
             });
             overlayTraces.push({
@@ -8783,7 +8751,7 @@ var __app = (() => {
           }
           return MODERN_COLOR_PALETTE[0];
         });
-        const overallChartType = resolveChartType(metric);
+        const overallChartType = resolveChartType2(metric);
         const mainTrace = overallChartType === "line" ? {
           type: "scatter",
           mode: "lines+markers",
@@ -8795,7 +8763,7 @@ var __app = (() => {
           text: textAnnotations,
           textposition: "top center",
           textfont: { color: theme.textPrimary, size: 11 },
-          customdata: barData.map((value) => formatMetricValue(value, metric)),
+          customdata: barData.map((value) => formatMetricValue2(value, metric)),
           hovertemplate: "%{customdata}<extra></extra>"
         } : {
           type: "bar",
@@ -8810,7 +8778,7 @@ var __app = (() => {
           text: textAnnotations,
           textposition: "outside",
           textfont: { color: theme.textPrimary, size: 11 },
-          customdata: barData.map((value) => formatMetricValue(value, metric)),
+          customdata: barData.map((value) => formatMetricValue2(value, metric)),
           hovertemplate: "%{customdata}<extra></extra>"
         };
         chartData2 = [mainTrace, ...overlayTraces];
@@ -8876,8 +8844,8 @@ var __app = (() => {
             side: "right",
             overlaying: "y",
             zeroline: true,
-            zerolinewidth: 2,
-            zerolinecolor: "#d1d5db",
+            zerolinewidth: 1,
+            zerolinecolor: "rgba(0,0,0,0.05)",
             showspikes: false
           } : { visible: false, overlaying: "y" },
           hovermode: "x unified"
@@ -8889,30 +8857,6 @@ var __app = (() => {
           chartData2 = result.chartData;
           chartLayout2 = result.chartLayout;
         }
-      }
-      if (activeScenarios.scenario1 && scenario1) {
-        const scenario1Traces = calculateScenarioChartData(
-          scenario1,
-          1,
-          scenarioLabels.scenario1
-        );
-        chartData2 = [...chartData2, ...scenario1Traces];
-      }
-      if (activeScenarios.scenario2 && scenario2) {
-        const scenario2Traces = calculateScenarioChartData(
-          scenario2,
-          2,
-          scenarioLabels.scenario2
-        );
-        chartData2 = [...chartData2, ...scenario2Traces];
-      }
-      if (activeScenarios.scenario3 && scenario3) {
-        const scenario3Traces = calculateScenarioChartData(
-          scenario3,
-          3,
-          scenarioLabels.scenario3
-        );
-        chartData2 = [...chartData2, ...scenario3Traces];
       }
       const modernLayout = {
         ...chartLayout2,
@@ -8998,12 +8942,6 @@ var __app = (() => {
       prepareChartDataByAttribute,
       getSimpleChartTitle,
       formatPeriodDate2,
-      activeScenarios,
-      scenario1,
-      scenario2,
-      scenario3,
-      scenarioLabels,
-      calculateScenarioChartData,
       capYoYForDisplay2,
       formatYoYValue2,
       isDarkMode,
@@ -9014,7 +8952,7 @@ var __app = (() => {
       forecastHorizon,
       sortedBaseDataPeriods,
       baseDataAggregatesByPeriod,
-      formatMetricValue,
+      formatMetricValue2,
       METRIC_LABELS
     ]);
     const highlightedChartData = React.useMemo(() => {
@@ -9028,6 +8966,75 @@ var __app = (() => {
       getHighlightPeriods,
       applyHighlightingToChartData
     ]);
+    const addCompareCard = React.useCallback(() => {
+      if (compareCards.length >= 3) return;
+      const tabName = activeTab ? activeTab.name : "Tab";
+      const labels = getMetricLabels(liveMetricConfig);
+      const label = tabName + (view !== "Overall" ? " by " + view : "");
+      const card = {
+        id: "cmp_" + Date.now(),
+        label,
+        tabId: activeTabId,
+        tabName,
+        // Config (what to render)
+        metric,
+        metricLabel: labels[metric] || metric,
+        view,
+        dateRange,
+        dataFrequency,
+        topX,
+        selectedCategories: [...selectedCategories],
+        categorySelectionMode,
+        metricConfig: liveMetricConfig,
+        viewConfig: view !== "Overall" ? VIEW_CONFIG[view] : null,
+        categoryColorMap: { ...categoryColorMap },
+        activeOverlays: { ...activeOverlays },
+        smaWindow,
+        // Base data (unfiltered — comparison date range filters on-the-fly)
+        periodAggregates: baseDataAggregatesByPeriod,
+        dimensionAggregates: baseDimensionAggregates
+      };
+      setCompareCards((prev) => [...prev, card]);
+    }, [
+      compareCards,
+      metric,
+      view,
+      dateRange,
+      dataFrequency,
+      topX,
+      selectedCategories,
+      categorySelectionMode,
+      liveMetricConfig,
+      VIEW_CONFIG,
+      categoryColorMap,
+      baseDataAggregatesByPeriod,
+      baseDimensionAggregates,
+      activeTabId,
+      activeTab
+    ]);
+    const removeCompareCard = React.useCallback((id) => {
+      setCompareCards((prev) => prev.filter((c) => c.id !== id));
+      setShowCompareView((prev) => {
+        const remaining = compareCards.filter((c) => c.id !== id);
+        return remaining.length >= 2 ? prev : false;
+      });
+    }, [compareCards]);
+    const updateCompareCardLabel = React.useCallback((id, newLabel) => {
+      setCompareCards((prev) => prev.map((c) => c.id === id ? { ...c, label: newLabel } : c));
+    }, []);
+    const [editingCompareCardId, setEditingCompareCardId] = React.useState(null);
+    const clearAllCompareCards = React.useCallback(() => {
+      setCompareCards([]);
+      setShowCompareView(false);
+    }, []);
+    React.useEffect(() => {
+      if (!showCompareView) return;
+      const handler = (e) => {
+        if (e.key === "Escape") setShowCompareView(false);
+      };
+      window.addEventListener("keydown", handler);
+      return () => window.removeEventListener("keydown", handler);
+    }, [showCompareView]);
     const finalChartData = React.useMemo(() => {
       if (Object.keys(traceVisibility).length === 0) return highlightedChartData;
       return highlightedChartData.map((trace) => {
@@ -9388,47 +9395,7 @@ var __app = (() => {
       },
       []
     );
-    const getNextEmptyScenario = React.useCallback(() => {
-      if (!scenario1)
-        return { index: 1, color: "#ef4444", label: scenarioLabels.scenario1 };
-      if (!scenario2)
-        return { index: 2, color: "#10b981", label: scenarioLabels.scenario2 };
-      if (!scenario3)
-        return { index: 3, color: "#8b5cf6", label: scenarioLabels.scenario3 };
-      return null;
-    }, [scenario1, scenario2, scenario3, scenarioLabels]);
-    const getSavedScenarios = React.useCallback(() => {
-      const saved = [];
-      if (scenario1) {
-        saved.push({
-          index: 1,
-          color: "#ef4444",
-          scenario: scenario1,
-          isActive: activeScenarios.scenario1,
-          label: scenarioLabels.scenario1
-        });
-      }
-      if (scenario2) {
-        saved.push({
-          index: 2,
-          color: "#10b981",
-          scenario: scenario2,
-          isActive: activeScenarios.scenario2,
-          label: scenarioLabels.scenario2
-        });
-      }
-      if (scenario3) {
-        saved.push({
-          index: 3,
-          color: "#8b5cf6",
-          scenario: scenario3,
-          isActive: activeScenarios.scenario3,
-          label: scenarioLabels.scenario3
-        });
-      }
-      return saved;
-    }, [scenario1, scenario2, scenario3, activeScenarios, scenarioLabels]);
-    return /* @__PURE__ */ React.createElement("div", { style: styles.container }, /* @__PURE__ */ React.createElement("style", null, `
+    return /* @__PURE__ */ React.createElement("div", { style: { ...styles.container, ...compareCards.length > 0 ? { paddingBottom: "90px" } : {} } }, /* @__PURE__ */ React.createElement("style", null, `
           @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
@@ -10013,7 +9980,7 @@ var __app = (() => {
           setActivePeriodComparison,
           setMetric,
           setInsightContext,
-          formatMetricValue,
+          formatMetricValue: formatMetricValue2,
           styles,
           theme,
           isDarkMode
@@ -10083,12 +10050,29 @@ var __app = (() => {
         {
           style: {
             ...styles.buttonGroupBtn,
-            ...showScenarioPanel ? styles.buttonGroupBtnActive : {}
+            ...compareCards.length > 0 ? styles.buttonGroupBtnActive : {},
+            position: "relative"
           },
-          onClick: () => setShowScenarioPanel(!showScenarioPanel),
-          title: "Scenario Comparison",
+          onClick: addCompareCard,
+          title: compareCards.length >= 3 ? "Maximum 3 compare cards" : "Add current view to compare dock",
+          disabled: compareCards.length >= 3,
           "data-guide": "comparison"
         },
+        compareCards.length > 0 && /* @__PURE__ */ React.createElement("span", { style: {
+          position: "absolute",
+          top: "-6px",
+          right: "-6px",
+          backgroundColor: "#3b82f6",
+          color: "white",
+          borderRadius: "50%",
+          width: "16px",
+          height: "16px",
+          fontSize: "10px",
+          fontWeight: "700",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center"
+        } }, compareCards.length),
         "\u{1F4CA} Compare"
       ), /* @__PURE__ */ React.createElement(
         "button",
@@ -10501,189 +10485,7 @@ var __app = (() => {
         "data-guide": "undo-button"
       },
       "\u23EA"
-    ), showScenarioPanel && (() => {
-      const nextScenario = getNextEmptyScenario();
-      const savedScenarios = getSavedScenarios();
-      return /* @__PURE__ */ React.createElement(
-        "div",
-        {
-          style: {
-            position: "absolute",
-            top: "12px",
-            left: "50px",
-            backgroundColor: "white",
-            border: "1px solid #d1d5db",
-            borderRadius: "8px",
-            padding: "12px",
-            fontSize: "12px",
-            zIndex: 10,
-            boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
-            minWidth: "280px",
-            maxWidth: "320px"
-          }
-        },
-        /* @__PURE__ */ React.createElement(
-          "div",
-          {
-            style: {
-              fontSize: "13px",
-              fontWeight: "600",
-              color: "#374151",
-              marginBottom: "12px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between"
-            }
-          },
-          /* @__PURE__ */ React.createElement("span", null, "Compare Views"),
-          /* @__PURE__ */ React.createElement(
-            "button",
-            {
-              onClick: () => setShowScenarioPanel(false),
-              style: {
-                background: "none",
-                border: "none",
-                fontSize: "18px",
-                color: "#6b7280",
-                cursor: "pointer",
-                padding: "0",
-                width: "24px",
-                height: "24px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                borderRadius: "4px"
-              },
-              title: "Close Scenario Panel"
-            },
-            "\xD7"
-          )
-        ),
-        nextScenario && /* @__PURE__ */ React.createElement(
-          "div",
-          {
-            style: {
-              marginBottom: savedScenarios.length > 0 ? "16px" : "0"
-            }
-          },
-          /* @__PURE__ */ React.createElement(
-            "div",
-            {
-              style: {
-                fontSize: "11px",
-                fontWeight: "600",
-                color: "#6b7280",
-                marginBottom: "8px",
-                textTransform: "uppercase",
-                letterSpacing: "0.5px"
-              }
-            },
-            "Capture View"
-          ),
-          /* @__PURE__ */ React.createElement(
-            "div",
-            {
-              style: {
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                marginBottom: "8px"
-              }
-            },
-            /* @__PURE__ */ React.createElement(
-              "div",
-              {
-                style: {
-                  width: "16px",
-                  height: "16px",
-                  backgroundColor: nextScenario.color,
-                  borderRadius: "4px",
-                  border: "1px solid #9ca3af"
-                }
-              }
-            ),
-            /* @__PURE__ */ React.createElement(
-              "input",
-              {
-                type: "text",
-                value: nextScenario.label,
-                onChange: (e) => updateScenarioLabel(
-                  nextScenario.index,
-                  e.target.value
-                ),
-                placeholder: `Scenario ${nextScenario.index}`,
-                style: {
-                  flex: 1,
-                  padding: "6px 8px",
-                  border: "1px solid #d1d5db",
-                  borderRadius: "4px",
-                  fontSize: "12px"
-                }
-              }
-            )
-          ),
-          /* @__PURE__ */ React.createElement(
-            "button",
-            {
-              onClick: () => setScenario(nextScenario.index),
-              style: {
-                width: "100%",
-                padding: "8px 12px",
-                backgroundColor: nextScenario.color,
-                color: "white",
-                border: "none",
-                borderRadius: "4px",
-                fontSize: "12px",
-                fontWeight: "500",
-                cursor: "pointer"
-              }
-            },
-            "\u2795 Add to Compare"
-          )
-        ),
-        savedScenarios.length > 0 && /* @__PURE__ */ React.createElement(
-          "div",
-          {
-            style: {
-              paddingTop: savedScenarios.length > 0 && nextScenario ? "16px" : "0",
-              borderTop: savedScenarios.length > 0 && nextScenario ? "1px solid #e5e7eb" : "none"
-            }
-          },
-          /* @__PURE__ */ React.createElement("div", { style: styles.savedViewsHeader }, "Saved Views (", savedScenarios.length, ")"),
-          savedScenarios.map((saved, idx) => /* @__PURE__ */ React.createElement(
-            "div",
-            {
-              key: saved.index,
-              style: {
-                ...styles.savedScenarioCard,
-                marginBottom: idx === savedScenarios.length - 1 ? "0" : "10px"
-              }
-            },
-            /* @__PURE__ */ React.createElement("div", { style: styles.savedScenarioRow }, /* @__PURE__ */ React.createElement(
-              "input",
-              {
-                type: "checkbox",
-                checked: saved.isActive,
-                onChange: () => toggleScenario(saved.index),
-                style: {
-                  cursor: "pointer",
-                  accentColor: saved.color
-                }
-              }
-            ), /* @__PURE__ */ React.createElement("span", { style: styles.savedScenarioLabel }, saved.label), /* @__PURE__ */ React.createElement(
-              "button",
-              {
-                onClick: () => clearScenario(saved.index),
-                style: styles.savedScenarioDeleteBtn,
-                title: "Remove this scenario"
-              },
-              "Clear"
-            ))
-          ))
-        ),
-        !nextScenario && savedScenarios.length === 3 && /* @__PURE__ */ React.createElement("div", { style: styles.allSlotsFilled }, "Maximum 3 scenarios reached. Clear one to add more.")
-      );
-    })(), view !== "Overall" && /* @__PURE__ */ React.createElement("div", { style: { position: "relative" }, "data-topx-control": true }, /* @__PURE__ */ React.createElement(
+    ), view !== "Overall" && /* @__PURE__ */ React.createElement("div", { style: { position: "relative" }, "data-topx-control": true }, /* @__PURE__ */ React.createElement(
       "button",
       {
         style: styles.topXControl,
@@ -10815,7 +10617,7 @@ var __app = (() => {
         ),
         /* @__PURE__ */ React.createElement("span", { style: styles.categoryLabelText }, formatFilterName2(category))
       );
-    }) : /* @__PURE__ */ React.createElement("div", { style: styles.noCategoriesFound }, 'No categories found matching "', categorySearchText, '"')))))), view !== "Overall" && resolveChartType(metric) !== "line" && /* @__PURE__ */ React.createElement(
+    }) : /* @__PURE__ */ React.createElement("div", { style: styles.noCategoriesFound }, 'No categories found matching "', categorySearchText, '"')))))), view !== "Overall" && resolveChartType2(metric) !== "line" && /* @__PURE__ */ React.createElement(
       "div",
       {
         style: {
@@ -11457,6 +11259,236 @@ var __app = (() => {
           guideStep < GUIDE_STEPS.length - 1 ? "Next \u2192" : "Finish"
         ))
       ));
+    })(), compareCards.length > 0 && /* @__PURE__ */ React.createElement("div", { style: {
+      position: "fixed",
+      bottom: 0,
+      left: 0,
+      right: 0,
+      height: "72px",
+      backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
+      borderTop: `2px solid ${isDarkMode ? "#334155" : "#e2e8f0"}`,
+      display: "flex",
+      alignItems: "center",
+      padding: "0 20px",
+      gap: "12px",
+      zIndex: 50,
+      boxShadow: "0 -4px 12px rgba(0,0,0,0.1)"
+    } }, compareCards.map((card, idx) => /* @__PURE__ */ React.createElement("div", { key: card.id, style: {
+      display: "flex",
+      alignItems: "center",
+      gap: "10px",
+      padding: "8px 12px",
+      backgroundColor: isDarkMode ? "#0f172a" : "#f8fafc",
+      borderLeft: `4px solid ${COMPARE_CARD_COLORS[idx]}`,
+      borderRadius: "6px",
+      border: `1px solid ${isDarkMode ? "#334155" : "#e2e8f0"}`,
+      borderLeftWidth: "4px",
+      borderLeftColor: COMPARE_CARD_COLORS[idx],
+      minWidth: "180px",
+      maxWidth: "280px"
+    } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, editingCompareCardId === card.id ? /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        autoFocus: true,
+        defaultValue: card.label,
+        onBlur: (e) => {
+          updateCompareCardLabel(card.id, e.target.value || card.label);
+          setEditingCompareCardId(null);
+        },
+        onKeyDown: (e) => {
+          if (e.key === "Enter") {
+            updateCompareCardLabel(card.id, e.target.value || card.label);
+            setEditingCompareCardId(null);
+          }
+          if (e.key === "Escape") setEditingCompareCardId(null);
+        },
+        style: {
+          fontSize: "13px",
+          fontWeight: "600",
+          width: "100%",
+          color: isDarkMode ? "#f1f5f9" : "#1e293b",
+          background: isDarkMode ? "#1e293b" : "#ffffff",
+          border: `1px solid ${COMPARE_CARD_COLORS[idx]}`,
+          borderRadius: "3px",
+          padding: "1px 4px",
+          outline: "none"
+        }
+      }
+    ) : /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        onDoubleClick: () => setEditingCompareCardId(card.id),
+        title: "Double-click to rename",
+        style: {
+          fontSize: "13px",
+          fontWeight: "600",
+          color: isDarkMode ? "#f1f5f9" : "#1e293b",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          cursor: "text"
+        }
+      },
+      card.label
+    ), /* @__PURE__ */ React.createElement("div", { style: {
+      fontSize: "11px",
+      color: isDarkMode ? "#94a3b8" : "#64748b",
+      whiteSpace: "nowrap",
+      overflow: "hidden",
+      textOverflow: "ellipsis"
+    } }, card.tabName, " | ", card.metricLabel, " | ", card.view, " | ", card.dateRange)), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: () => removeCompareCard(card.id),
+        style: {
+          background: "none",
+          border: "none",
+          fontSize: "16px",
+          color: isDarkMode ? "#94a3b8" : "#94a3b8",
+          cursor: "pointer",
+          padding: "2px",
+          lineHeight: 1
+        },
+        title: "Remove from comparison"
+      },
+      "x"
+    ))), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }), compareCards.length < 3 && /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: addCompareCard,
+        style: {
+          padding: "8px 16px",
+          backgroundColor: isDarkMode ? "#1e40af" : "#3b82f6",
+          color: "white",
+          border: "none",
+          borderRadius: "6px",
+          fontSize: "12px",
+          fontWeight: "600",
+          cursor: "pointer"
+        }
+      },
+      "+ Add Current View"
+    ), compareCards.length >= 2 && /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: () => {
+          setCompareDateRange("All");
+          setShowCompareView(true);
+        },
+        style: {
+          padding: "8px 16px",
+          backgroundColor: isDarkMode ? "#065f46" : "#10b981",
+          color: "white",
+          border: "none",
+          borderRadius: "6px",
+          fontSize: "12px",
+          fontWeight: "600",
+          cursor: "pointer"
+        }
+      },
+      "Compare"
+    ), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: clearAllCompareCards,
+        style: {
+          padding: "8px 12px",
+          backgroundColor: "transparent",
+          color: isDarkMode ? "#94a3b8" : "#64748b",
+          border: `1px solid ${isDarkMode ? "#475569" : "#cbd5e1"}`,
+          borderRadius: "6px",
+          fontSize: "12px",
+          cursor: "pointer"
+        }
+      },
+      "Clear All"
+    )), showCompareView && compareCards.length >= 2 && (() => {
+      const cards = compareCards;
+      const { traces: comparisonTraces, layout: comparisonLayout } = buildComparisonChart(cards, compareDateRange, isDarkMode);
+      return /* @__PURE__ */ React.createElement(
+        "div",
+        {
+          style: {
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: isDarkMode ? "rgba(0,0,0,0.85)" : "rgba(0,0,0,0.6)",
+            zIndex: 100,
+            display: "flex",
+            flexDirection: "column"
+          },
+          onClick: (e) => {
+            if (e.target === e.currentTarget) setShowCompareView(false);
+          }
+        },
+        /* @__PURE__ */ React.createElement("div", { style: {
+          flex: 1,
+          margin: "20px",
+          backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
+          borderRadius: "12px",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden"
+        } }, /* @__PURE__ */ React.createElement("div", { style: {
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "16px 24px",
+          borderBottom: `1px solid ${isDarkMode ? "#334155" : "#e2e8f0"}`
+        } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "12px" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: "16px", fontWeight: "700", color: isDarkMode ? "#f1f5f9" : "#1e293b" } }, "Comparison View"), cards.map((card, i) => /* @__PURE__ */ React.createElement("span", { key: card.id, style: {
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "6px",
+          padding: "4px 10px",
+          borderRadius: "16px",
+          backgroundColor: COMPARE_CARD_COLORS[i] + "20",
+          fontSize: "12px",
+          fontWeight: "500",
+          color: COMPARE_CARD_COLORS[i]
+        } }, /* @__PURE__ */ React.createElement("span", { style: { width: 8, height: 8, borderRadius: "50%", backgroundColor: COMPARE_CARD_COLORS[i] } }), card.label))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "4px" } }, DATE_RANGES.map((range) => /* @__PURE__ */ React.createElement(
+          "button",
+          {
+            key: range,
+            onClick: () => setCompareDateRange(range),
+            style: {
+              padding: "4px 10px",
+              fontSize: "11px",
+              fontWeight: compareDateRange === range ? "700" : "500",
+              color: compareDateRange === range ? "#ffffff" : isDarkMode ? "#94a3b8" : "#64748b",
+              backgroundColor: compareDateRange === range ? "#3b82f6" : isDarkMode ? "#334155" : "#f1f5f9",
+              border: `1px solid ${compareDateRange === range ? "#3b82f6" : isDarkMode ? "#475569" : "#e2e8f0"}`,
+              borderRadius: "4px",
+              cursor: "pointer"
+            }
+          },
+          range
+        ))), /* @__PURE__ */ React.createElement(
+          "button",
+          {
+            onClick: () => setShowCompareView(false),
+            style: {
+              background: "none",
+              border: "none",
+              fontSize: "24px",
+              color: isDarkMode ? "#94a3b8" : "#6b7280",
+              cursor: "pointer",
+              padding: "4px"
+            },
+            title: "Close comparison (Esc)"
+          },
+          "x"
+        )), /* @__PURE__ */ React.createElement("div", { style: { flex: 1, padding: "16px 24px" } }, /* @__PURE__ */ React.createElement(
+          PlotlyChart,
+          {
+            data: comparisonTraces,
+            layout: comparisonLayout,
+            config: { responsive: true, displayModeBar: true, displaylogo: false },
+            style: { width: "100%", height: "100%" }
+          }
+        )))
+      );
     })(), showMetricsEditor && metricsEditorDraft && /* @__PURE__ */ React.createElement(
       MetricsEditorModal,
       {

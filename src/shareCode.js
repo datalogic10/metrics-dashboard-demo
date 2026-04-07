@@ -88,16 +88,11 @@ function compressStateHelper(snapshot, dimensionDefs, isNested = false) {
   });
 
   if (!isNested) {
-    if (snapshot.scenario1) compact.s1 = compressStateHelper(snapshot.scenario1, dimensionDefs, true);
-    if (snapshot.scenario2) compact.s2 = compressStateHelper(snapshot.scenario2, dimensionDefs, true);
-    if (snapshot.scenario3) compact.s3 = compressStateHelper(snapshot.scenario3, dimensionDefs, true);
-    if (snapshot.activeScenarios && (snapshot.activeScenarios.scenario1 || snapshot.activeScenarios.scenario2 || snapshot.activeScenarios.scenario3)) {
-      compact.as = snapshot.activeScenarios;
-    }
-    if (snapshot.scenarioLabels) compact.sl = snapshot.scenarioLabels;
-    if (snapshot.showScenarioPanel) compact.ssp = snapshot.showScenarioPanel ? 1 : 0;
     if (snapshot.traceVisibility && Object.keys(snapshot.traceVisibility).length > 0) {
       compact.tv = snapshot.traceVisibility;
+    }
+    if (snapshot.compareCards && snapshot.compareCards.length > 0) {
+      compact.cc = snapshot.compareCards;
     }
   } else {
     if (snapshot.visibleTraceNames && snapshot.visibleTraceNames.length > 0) {
@@ -147,21 +142,8 @@ function expandStateHelper(compact, dimensionDefs) {
 export function expandState(compact, dimensionDefs) {
   const snapshot = expandStateHelper(compact, dimensionDefs);
 
-  if (compact.s1 !== undefined) snapshot.scenario1 = expandStateHelper(compact.s1, dimensionDefs);
-  if (compact.s2 !== undefined) snapshot.scenario2 = expandStateHelper(compact.s2, dimensionDefs);
-  if (compact.s3 !== undefined) snapshot.scenario3 = expandStateHelper(compact.s3, dimensionDefs);
-  if (compact.as !== undefined) {
-    snapshot.activeScenarios = compact.as;
-  } else {
-    snapshot.activeScenarios = { scenario1: false, scenario2: false, scenario3: false };
-  }
-  if (compact.sl !== undefined) {
-    snapshot.scenarioLabels = compact.sl;
-  } else {
-    snapshot.scenarioLabels = { scenario1: "Scenario 1", scenario2: "Scenario 2", scenario3: "Scenario 3" };
-  }
-  if (compact.ssp !== undefined) snapshot.showScenarioPanel = compact.ssp === 1;
   if (compact.tv !== undefined) snapshot.traceVisibility = compact.tv;
+  if (compact.cc !== undefined) snapshot.compareCards = compact.cc;
   if (compact.ic !== undefined) snapshot.insightContext = compact.ic;
 
   return snapshot;

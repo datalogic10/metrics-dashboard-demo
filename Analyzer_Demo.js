@@ -48,6 +48,7 @@ import {
 import { InsightContextBanner } from './src/components/InsightContextBanner.js';
 import { MetricsEditorModal } from './src/components/MetricsEditorModal.js';
 import { StatBox } from './src/components/StatBox.js';
+import { buildComparisonChart, COMPARE_CARD_COLORS, getMetricLabels } from './src/compareChartBuilder.js';
 
 export function render() {
 
@@ -1116,52 +1117,6 @@ export function render() {
         color: theme.textSecondary,
         backgroundColor: "transparent",
       },
-      savedViewsHeader: {
-        fontSize: "11px",
-        fontWeight: "600",
-        color: "#6b7280",
-        marginBottom: "8px",
-        textTransform: "uppercase",
-        letterSpacing: "0.5px",
-      },
-      savedScenarioCard: {
-        padding: "8px",
-        backgroundColor: "#f9fafb",
-        borderRadius: "6px",
-        border: "1px solid #e5e7eb",
-      },
-      savedScenarioRow: {
-        display: "flex",
-        alignItems: "center",
-        gap: "8px",
-        marginBottom: "6px",
-      },
-      savedScenarioLabel: {
-        flex: 1,
-        fontSize: "12px",
-        fontWeight: "500",
-        color: "#374151",
-      },
-      savedScenarioDeleteBtn: {
-        padding: "2px 8px",
-        backgroundColor: "#ef4444",
-        color: "white",
-        border: "none",
-        borderRadius: "4px",
-        fontSize: "10px",
-        fontWeight: "500",
-        cursor: "pointer",
-      },
-      allSlotsFilled: {
-        fontSize: "11px",
-        color: "#6b7280",
-        fontStyle: "italic",
-        textAlign: "center",
-        padding: "8px",
-        backgroundColor: "#f9fafb",
-        borderRadius: "4px",
-        marginTop: "12px",
-      },
       categoryLabelText: { fontSize: "13px", color: "#374151" },
       noCategoriesFound: {
         padding: "12px",
@@ -1920,9 +1875,9 @@ export function render() {
     },
     {
       id: "comparison",
-      title: "Scenario Comparison",
+      title: "Compare Views",
       description:
-        "Compare up to 3 scenarios side-by-side. Click chart icon to open comparison panel.",
+        "Add up to 3 views to the compare dock bar, then overlay them on a single chart.",
       targetSelector: '[data-guide="comparison"]',
     },
     {
@@ -2568,20 +2523,10 @@ export function render() {
 
   const hasCheckedInitialLoadRef = React.useRef(false);
 
-  const [scenario1, setScenario1] = React.useState(null);
-  const [scenario2, setScenario2] = React.useState(null);
-  const [scenario3, setScenario3] = React.useState(null);
-  const [activeScenarios, setActiveScenarios] = React.useState({
-    scenario1: false,
-    scenario2: false,
-    scenario3: false,
-  });
-  const [scenarioLabels, setScenarioLabels] = React.useState({
-    scenario1: "Scenario 1",
-    scenario2: "Scenario 2",
-    scenario3: "Scenario 3",
-  });
-  const [showScenarioPanel, setShowScenarioPanel] = React.useState(false);
+  // Compare dock bar state
+  const [compareCards, setCompareCards] = React.useState([]);
+  const [showCompareView, setShowCompareView] = React.useState(false);
+  const [compareDateRange, setCompareDateRange] = React.useState("All");
 
   // Legend visibility state - tracks which traces are visible/hidden after user interactions
   const [traceVisibility, setTraceVisibility] = React.useState({});
@@ -2618,8 +2563,8 @@ export function render() {
       },
       {
         icon: "📊",
-        title: "Compare Scenarios",
-        text: 'Use the "📊" button to capture and compare up to 3 different scenarios. Currently in Beta version.',
+        title: "Compare Views",
+        text: 'Use the "📊 Compare" button to add views to a dock bar at the bottom. Compare up to 3 views across different tabs.',
       },
       {
         icon: "🎯",
@@ -2669,13 +2614,8 @@ export function render() {
       showAllShareTraces,
       showAllGrowthTraces,
       showAllDollarTraces,
-      // Scenario comparison state
-      scenario1,
-      scenario2,
-      scenario3,
-      activeScenarios: { ...activeScenarios },
-      scenarioLabels: { ...scenarioLabels },
-      showScenarioPanel,
+      // Compare cards state
+      compareCards,
       // Legend visibility state
       traceVisibility: { ...traceVisibility },
       // 🆕 Investigation context state
@@ -2697,12 +2637,7 @@ export function render() {
     showAllShareTraces,
     showAllGrowthTraces,
     showAllDollarTraces,
-    scenario1,
-    scenario2,
-    scenario3,
-    activeScenarios,
-    scenarioLabels,
-    showScenarioPanel,
+    compareCards,
     traceVisibility,
     insightContext,
     FILTER_CONFIG,
@@ -2737,24 +2672,9 @@ export function render() {
       if (snapshot.categorySelectionMode) {
         setCategorySelectionMode(snapshot.categorySelectionMode);
       }
-      // Restore scenario comparison state
-      if (snapshot.scenario1 !== undefined) {
-        setScenario1(snapshot.scenario1);
-      }
-      if (snapshot.scenario2 !== undefined) {
-        setScenario2(snapshot.scenario2);
-      }
-      if (snapshot.scenario3 !== undefined) {
-        setScenario3(snapshot.scenario3);
-      }
-      if (snapshot.activeScenarios !== undefined) {
-        setActiveScenarios({ ...snapshot.activeScenarios });
-      }
-      if (snapshot.scenarioLabels !== undefined) {
-        setScenarioLabels({ ...snapshot.scenarioLabels });
-      }
-      if (snapshot.showScenarioPanel !== undefined) {
-        setShowScenarioPanel(snapshot.showScenarioPanel);
+      // Restore compare cards state
+      if (snapshot.compareCards !== undefined) {
+        setCompareCards(snapshot.compareCards);
       }
       // Restore legend visibility state
       if (snapshot.traceVisibility !== undefined) {
@@ -2786,33 +2706,6 @@ export function render() {
       restoreStateSnapshot(previousState);
     }
   }, [history, restoreStateSnapshot]);
-
-  const clearScenario = React.useCallback((index) => {
-    if (index === 1) {
-      setScenario1(null);
-      setActiveScenarios((prev) => ({ ...prev, scenario1: false }));
-    } else if (index === 2) {
-      setScenario2(null);
-      setActiveScenarios((prev) => ({ ...prev, scenario2: false }));
-    } else if (index === 3) {
-      setScenario3(null);
-      setActiveScenarios((prev) => ({ ...prev, scenario3: false }));
-    }
-  }, []);
-
-  const toggleScenario = React.useCallback((index) => {
-    setActiveScenarios((prev) => {
-      const key = `scenario${index}`;
-      return { ...prev, [key]: !prev[key] };
-    });
-  }, []);
-
-  const updateScenarioLabel = React.useCallback((index, label) => {
-    setScenarioLabels((prev) => {
-      const key = `scenario${index}`;
-      return { ...prev, [key]: label };
-    });
-  }, []);
 
   const scrollToElementForGuide = React.useCallback((element) => {
     if (!element) return;
@@ -6483,540 +6376,8 @@ export function render() {
     return allMetricsStatData[metric] || null;
   }, [allMetricsStatData, metric]);
 
-  const calculateScenarioChartData = React.useCallback(
-    (scenarioSnapshot, scenarioIndex, scenarioLabel) => {
-      if (!scenarioSnapshot) return [];
 
-      // Get scenario configuration
-      const scenarioMetric = scenarioSnapshot.metric || "metric2";
-      const scenarioView = scenarioSnapshot.view || "Overall";
-      const scenarioDateRange = scenarioSnapshot.dateRange || "YTD";
-      const scenarioDataFrequency = scenarioSnapshot.dataFrequency || "Monthly";
-      const scenarioTopX = scenarioSnapshot.topX || 3;
-      const scenarioSelectedCategories =
-        scenarioSnapshot.selectedCategories || [];
-      const scenarioShowAllShareTraces =
-        scenarioSnapshot.showAllShareTraces || false;
-      const scenarioShowAllGrowthTraces =
-        scenarioSnapshot.showAllGrowthTraces || false;
-      const scenarioShowAllDollarTraces =
-        scenarioSnapshot.showAllDollarTraces !== undefined
-          ? scenarioSnapshot.showAllDollarTraces
-          : true;
-      const visibleTraceNames = scenarioSnapshot.visibleTraceNames || null;
 
-      // Get scenario date field
-      const getScenarioDateField = (freq) => {
-        switch (freq) {
-          case "Weekly":
-            return COLUMNS.REPORTING_WEEK;
-          case "Monthly":
-            return COLUMNS.REPORTING_MONTH;
-          case "Quarterly":
-            return COLUMNS.REPORTING_QUARTER;
-          case "Yearly":
-            return COLUMNS.REPORTING_YEAR;
-          default:
-            return COLUMNS.REPORTING_MONTH;
-        }
-      };
-      const scenarioDateField = getScenarioDateField(scenarioDataFrequency);
-
-      // Filter data based on scenario filters
-      const scenarioFilteredData = cleanedQueryData.rows.filter((row) => {
-        // Check all filters using FILTER_CONFIG_STATIC (only need column and key)
-        return FILTER_CONFIG_STATIC.every(({ column, key }) => {
-          const scenarioFilterState = scenarioSnapshot[key] || [];
-          return filterMatches(scenarioFilterState, row[column]);
-        });
-      });
-
-      // Get scenario date range filtered data
-      const allScenarioDates = Array.from(
-        new Set(scenarioFilteredData.map((row) => row[scenarioDateField]))
-      ).sort();
-
-      let scenarioFilteredDates = allScenarioDates;
-      if (scenarioDateRange !== "All") {
-        const now = new Date();
-        let yearStart = now.getFullYear() + "-01-01";
-        let oneYearAgo =
-          now.getFullYear() -
-          1 +
-          "-" +
-          (now.getMonth() + 1).toString().padStart(2, "0") +
-          "-" +
-          now.getDate().toString().padStart(2, "0");
-        let threeMonthsAgo = new Date(now);
-        threeMonthsAgo.setMonth(now.getMonth() - 3);
-        let oneQuarterAgo =
-          threeMonthsAgo.getFullYear() +
-          "-" +
-          (threeMonthsAgo.getMonth() + 1).toString().padStart(2, "0") +
-          "-" +
-          threeMonthsAgo.getDate().toString().padStart(2, "0");
-
-        switch (scenarioDateRange) {
-          case "1Y":
-            scenarioFilteredDates = allScenarioDates.filter(
-              (date) => date >= oneYearAgo
-            );
-            break;
-          case "YTD":
-            scenarioFilteredDates = allScenarioDates.filter(
-              (date) => date >= yearStart
-            );
-            break;
-          case "QTD":
-            scenarioFilteredDates = allScenarioDates.filter(
-              (date) => date >= oneQuarterAgo
-            );
-            break;
-          default:
-            scenarioFilteredDates = allScenarioDates;
-        }
-      }
-
-      const scenarioDataByPeriod = {};
-      scenarioFilteredData
-        .filter((row) => scenarioFilteredDates.includes(row[scenarioDateField]))
-        .forEach((row) => {
-          const period = row[scenarioDateField];
-          if (!scenarioDataByPeriod[period]) {
-            scenarioDataByPeriod[period] = [];
-          }
-          scenarioDataByPeriod[period].push(row);
-        });
-
-      const scenarioPeriods = Object.keys(scenarioDataByPeriod).sort();
-
-      if (scenarioPeriods.length === 0) return [];
-
-      // Scenario color palette
-      const scenarioColors = {
-        1: "#ef4444", // Red
-        2: "#10b981", // Green
-        3: "#8b5cf6", // Purple
-      };
-      const scenarioColor = scenarioColors[scenarioIndex] || "#6b7280";
-      const scenarioDashPatterns = {
-        1: "solid",
-        2: "dash",
-        3: "dot",
-      };
-      const scenarioDash = scenarioDashPatterns[scenarioIndex] || "dash";
-
-      // Calculate metric for scenario
-      const calculateScenarioMetric = (rows) => {
-        return calculateMetricValue(rows, scenarioMetric);
-      };
-
-      // Format metric for scenario
-      const formatScenarioMetric = (value) => {
-        return formatMetricValue(value, scenarioMetric);
-      };
-
-      const scenarioTraces = [];
-
-      if (scenarioView === "Overall") {
-        // Default view (Overall): single bar chart with YoY line
-        const barData = scenarioPeriods.map((period) => {
-          const periodRows = scenarioDataByPeriod[period] || [];
-          return calculateScenarioMetric(periodRows);
-        });
-
-        // Calculate YoY for scenario
-        const periodsForYoY = scenarioPeriods.slice(0, -1);
-        const yoyDataForPeriods = periodsForYoY.map((period) => {
-          const periodRows = scenarioDataByPeriod[period] || [];
-          const currentValue = calculateScenarioMetric(periodRows);
-
-          // Calculate YoY using scenario data
-          let previousValue = null;
-          if (scenarioDataFrequency === "Weekly") {
-            const allScenarioPeriods = Array.from(
-              new Set(scenarioFilteredData.map((row) => row[scenarioDateField]))
-            ).sort();
-            const currentIndex = allScenarioPeriods.indexOf(period);
-            if (currentIndex >= 52) {
-              const periodAgo = allScenarioPeriods[currentIndex - 52];
-              const previousRows = scenarioFilteredData.filter(
-                (row) => row[scenarioDateField] === periodAgo
-              );
-              if (previousRows.length > 0) {
-                previousValue = calculateScenarioMetric(previousRows);
-              }
-            }
-          } else {
-            const currentYear = parseInt(period.substring(0, 4));
-            const previousYear = currentYear - 1;
-            const previousPeriod = period.replace(
-              currentYear.toString(),
-              previousYear.toString()
-            );
-            const previousRows = scenarioFilteredData.filter(
-              (row) => row[scenarioDateField] === previousPeriod
-            );
-            if (previousRows.length > 0) {
-              previousValue = calculateScenarioMetric(previousRows);
-            }
-          }
-
-          return calculatePercentageChange(currentValue, previousValue);
-        });
-        const yoyData = [...yoyDataForPeriods, null];
-
-        // Add bar trace
-        scenarioTraces.push({
-          type: "bar",
-          x: scenarioPeriods,
-          y: barData,
-          name: `[${scenarioLabel}] ${scenarioMetric}`,
-          marker: {
-            color: scenarioColor,
-            line: { color: "rgba(255,255,255,0.3)", width: 0.5 },
-            opacity: 0.6,
-          },
-          customdata: barData.map((value) => formatMetricValue(value, scenarioMetric)),
-          hovertemplate: `[${scenarioLabel}] ${scenarioMetric}<br>%{customdata}<extra></extra>`,
-          visible: "legendonly", // Hidden by default, user can show via legend
-        });
-
-        // Add YoY line trace
-        const scenarioYoYLabel =
-          scenarioDataFrequency === "Weekly" ? "52W" : "YoY";
-        scenarioTraces.push({
-          type: "scatter",
-          mode: "lines+markers",
-          x: scenarioPeriods,
-          y: yoyData.map(capYoYForDisplay),
-          name: `[${scenarioLabel}] ${scenarioYoYLabel} Change %`,
-          yaxis: "y2",
-          line: {
-            color: scenarioColor,
-            width: 2.5,
-            dash: scenarioDash,
-          },
-          marker: {
-            size: 3,
-            color: scenarioColor,
-            symbol:
-              scenarioIndex === 1
-                ? "circle"
-                : scenarioIndex === 2
-                ? "square"
-                : "diamond",
-          },
-          customdata: yoyData.map(formatYoYValue),
-          hovertemplate: `[${scenarioLabel}] ${scenarioYoYLabel} Change: %{customdata}<extra></extra>`,
-          connectgaps: false,
-          visible: "legendonly",
-        });
-      } else {
-        // Attribute view: similar to prepareChartDataByAttribute
-        const config = VIEW_CONFIG[scenarioView];
-        if (config) {
-          const attribute = config.column;
-          const attributeValues = Array.from(
-            new Set(
-              scenarioFilteredData
-                .filter((row) =>
-                  scenarioFilteredDates.includes(row[scenarioDateField])
-                )
-                .map((row) => row[attribute])
-                .filter((val) => val && val !== "Unknown")
-            )
-          );
-
-          // Calculate totals for sorting
-          const attributeTotals = attributeValues.map((attrValue) => {
-            const attrRows = scenarioFilteredData.filter(
-              (row) =>
-                scenarioFilteredDates.includes(row[scenarioDateField]) &&
-                row[attribute] === attrValue
-            );
-            let total;
-            if (isFormulaMetric(scenarioMetric)) {
-              total = attrRows.reduce(
-                (sum, row) =>
-                  sum +
-                  (row[COLUMNS.METRIC2] || 0),
-                0
-              );
-            } else {
-              total = calculateScenarioMetric(attrRows);
-            }
-            return { attrValue, total };
-          });
-
-          const sortedAttributes = attributeTotals.sort(
-            (a, b) => b.total - a.total
-          );
-          const topXCategories = sortedAttributes
-            .slice(0, scenarioTopX)
-            .map((item) => item.attrValue);
-          const manualCategories = scenarioSelectedCategories.filter((cat) =>
-            attributeValues.includes(cat)
-          );
-          const combinedCategories = Array.from(
-            new Set([...topXCategories, ...manualCategories])
-          );
-          const restAttributes = attributeValues.filter(
-            (val) => !combinedCategories.includes(val)
-          );
-
-          const allCategories = [...combinedCategories];
-          if (restAttributes.length > 0) {
-            allCategories.push("Rest Combined");
-          }
-
-          // Create traces for each category
-          allCategories.forEach((category, index) => {
-            const traceData = scenarioPeriods.map((period) => {
-              const periodRows = scenarioDataByPeriod[period] || [];
-              if (category === "Rest Combined") {
-                const periodRestRows = periodRows.filter((row) =>
-                  restAttributes.includes(row[attribute])
-                );
-                return calculateScenarioMetric(periodRestRows);
-              } else {
-                const periodAttrRows = periodRows.filter(
-                  (row) => row[attribute] === category
-                );
-                return calculateScenarioMetric(periodAttrRows);
-              }
-            });
-
-            const categoryColor = getCategoryColor(category, index);
-            const blendedColor = scenarioColor; // Use scenario color instead
-
-            if (resolveChartType(scenarioMetric) === "line") {
-              scenarioTraces.push({
-                type: "scatter",
-                mode: "lines+markers",
-                name: `[${scenarioLabel}] ${category} - ${scenarioMetric}`,
-                x: scenarioPeriods,
-                y: traceData,
-                visible: "legendonly",
-                line: {
-                  color: blendedColor,
-                  width: 2,
-                  dash: scenarioDash,
-                },
-                marker: {
-                  size: 3,
-                  color: blendedColor,
-                  symbol:
-                    scenarioIndex === 1
-                      ? "circle"
-                      : scenarioIndex === 2
-                      ? "square"
-                      : "diamond",
-                },
-                customdata: traceData.map((value) => formatMetricValue(value, scenarioMetric)),
-                hovertemplate: `[${scenarioLabel}] ${category}<br>%{customdata}<extra></extra>`,
-              });
-            } else {
-              // Calculate share percentages
-              const periodTotals = scenarioPeriods.map((period) => {
-                const periodRows = scenarioDataByPeriod[period] || [];
-                return calculateScenarioMetric(periodRows);
-              });
-
-              const shares = traceData.map((value, periodIndex) => {
-                const totalForPeriod = periodTotals[periodIndex];
-                return totalForPeriod > 0 ? (value / totalForPeriod) * 100 : 0;
-              });
-
-              // Dollar trace
-              if (scenarioShowAllDollarTraces) {
-                scenarioTraces.push({
-                  type: "bar",
-                  name: `[${scenarioLabel}] ${category} - ${scenarioMetric}`,
-                  x: scenarioPeriods,
-                  y: traceData,
-                  visible: "legendonly",
-                  marker: {
-                    color: blendedColor,
-                    line: { color: "rgba(255,255,255,0.3)", width: 0.5 },
-                    opacity: 0.5,
-                  },
-                  customdata: traceData.map((value) => formatMetricValue(value, scenarioMetric)),
-                  hovertemplate: `[${scenarioLabel}] ${category}<br>%{customdata}<extra></extra>`,
-                });
-              }
-
-              // %Share trace
-              if (scenarioShowAllShareTraces) {
-                scenarioTraces.push({
-                  type: "scatter",
-                  mode: "lines+markers",
-                  name: `[${scenarioLabel}] ${category} - %Share`,
-                  x: scenarioPeriods,
-                  y: shares,
-                  visible: "legendonly",
-                  line: {
-                    color: blendedColor,
-                    width: 2,
-                    dash: scenarioDash,
-                  },
-                  marker: {
-                    size: 3,
-                    color: blendedColor,
-                    symbol:
-                      scenarioIndex === 1
-                        ? "circle"
-                        : scenarioIndex === 2
-                        ? "square"
-                        : "diamond",
-                  },
-                  yaxis: "y2",
-                  customdata: shares.map((share) => share != null ? `${share.toFixed(1)}%` : ''),
-                  hovertemplate: `[${scenarioLabel}] ${category} - %Share<br>%{customdata}<extra></extra>`,
-                });
-              }
-
-              // %Share Growth trace (YoY)
-              if (scenarioShowAllGrowthTraces) {
-                const shareGrowthRates = shares.map(
-                  (currentShare, periodIndex) => {
-                    const currentPeriod = scenarioPeriods[periodIndex];
-                    let previousPeriod;
-                    if (scenarioDataFrequency === "Weekly") {
-                      const allPeriods = Array.from(
-                        new Set(
-                          scenarioFilteredData.map(
-                            (row) => row[scenarioDateField]
-                          )
-                        )
-                      ).sort();
-                      const currentIndex = allPeriods.indexOf(currentPeriod);
-                      if (currentIndex === -1 || currentIndex < 52) return null;
-                      previousPeriod = allPeriods[currentIndex - 52];
-                    } else {
-                      const currentYear = parseInt(
-                        currentPeriod.substring(0, 4)
-                      );
-                      const previousYear = currentYear - 1;
-                      previousPeriod = currentPeriod.replace(
-                        currentYear.toString(),
-                        previousYear.toString()
-                      );
-                    }
-
-                    const previousPeriodRows = scenarioFilteredData.filter(
-                      (row) => row[scenarioDateField] === previousPeriod
-                    );
-                    if (previousPeriodRows.length === 0) return null;
-
-                    let previousCategoryValue;
-                    if (category === "Rest Combined") {
-                      const previousRestRows = previousPeriodRows.filter(
-                        (row) => restAttributes.includes(row[attribute])
-                      );
-                      previousCategoryValue =
-                        calculateScenarioMetric(previousRestRows);
-                    } else {
-                      const previousCategoryRows = previousPeriodRows.filter(
-                        (row) => row[attribute] === category
-                      );
-                      previousCategoryValue =
-                        calculateScenarioMetric(previousCategoryRows);
-                    }
-
-                    const previousPeriodTotal =
-                      calculateScenarioMetric(previousPeriodRows);
-                    if (
-                      previousPeriodTotal === 0 ||
-                      previousPeriodTotal === null
-                    )
-                      return null;
-
-                    const previousShare =
-                      previousPeriodTotal > 0
-                        ? (previousCategoryValue / previousPeriodTotal) * 100
-                        : 0;
-                    if (previousShare === 0 || previousShare === null)
-                      return null;
-                    if (currentShare === 0 || currentShare === null)
-                      return null;
-
-                    // Use proper percentage change calculation to handle edge cases
-                    return calculatePercentageChange(
-                      currentShare,
-                      previousShare
-                    );
-                  }
-                );
-
-                scenarioTraces.push({
-                  type: "scatter",
-                  mode: "lines+markers",
-                  name: `[${scenarioLabel}] ${category} - %Share Growth`,
-                  x: scenarioPeriods,
-                  y: shareGrowthRates.map(capYoYForDisplay),
-                  visible: "legendonly",
-                  line: {
-                    color: blendedColor,
-                    width: 2,
-                    dash: scenarioDash,
-                  },
-                  marker: {
-                    size: 3,
-                    color: blendedColor,
-                    symbol:
-                      scenarioIndex === 1
-                        ? "circle"
-                        : scenarioIndex === 2
-                        ? "square"
-                        : "diamond",
-                  },
-                  yaxis: "y2",
-                  customdata: shareGrowthRates.map(formatYoYValue),
-                  hovertemplate: `[${scenarioLabel}] ${category} - %Share Growth<br>%{customdata}<extra></extra>`,
-                });
-              }
-            }
-          });
-        }
-      }
-
-      // Filter traces to only include those that were visible when scenario was saved
-      if (visibleTraceNames && visibleTraceNames.length > 0) {
-        // Helper function to extract base trace name from scenario trace name
-        // Example: "[Scenario 1] Category - Metric" -> "Category - Metric"
-        const getBaseTraceName = (scenarioTraceName) => {
-          // Remove scenario label prefix like "[Scenario 1] " or "[Scenario 2] "
-          const match = scenarioTraceName.match(/^\[.*?\]\s*(.+)$/);
-          return match ? match[1] : scenarioTraceName;
-        };
-
-        // Filter traces to only include those whose base name matches a visible trace name
-        const filteredTraces = scenarioTraces.filter((trace) => {
-          const baseName = getBaseTraceName(trace.name);
-          return visibleTraceNames.includes(baseName);
-        });
-
-        return filteredTraces;
-      }
-
-      return scenarioTraces;
-    },
-    [
-      cleanedQueryData.rows,
-      FILTER_CONFIG,
-      filterMatches,
-      calculateMetricValue,
-      formatMetricValue,
-      VIEW_CONFIG,
-      getCategoryColor,
-      calculatePercentageChange,
-      formatYoYValue,
-      capYoYForDisplay,
-    ]
-  );
-
-  // Helper function to extract periods to highlight from an insight
   const getHighlightPeriods = React.useCallback(
     (insight) => {
       if (!insight || !insight.metadata) return [];
@@ -7167,6 +6528,7 @@ export function render() {
     },
     [formatPeriodDate]
   );
+
 
   const prepareChartDataByAttribute = React.useCallback(
     (attribute, attributeName) => {
@@ -7666,9 +7028,9 @@ export function render() {
           overlaying: "y",
           side: "right",
           showgrid: false,
-          zeroline: showAllShareTraces || showAllGrowthTraces,
-          zerolinewidth: 2,
-          zerolinecolor: "#d1d5db",
+          zeroline: true,
+          zerolinewidth: 1,
+          zerolinecolor: "rgba(0,0,0,0.05)",
         };
       }
 
@@ -7711,7 +7073,7 @@ export function render() {
     ]
   );
 
-  // Helper function to get current chart data without scenarios and extract visible trace names
+  // Helper function to get current chart data and extract visible trace names
   const getVisibleTraceNames = React.useCallback(() => {
     let chartData = [];
     if (view === "Overall") {
@@ -7737,24 +7099,6 @@ export function render() {
 
     return visibleTraceNames;
   }, [view, metric, dataFrequency, prepareChartDataByAttribute, VIEW_CONFIG, activeOverlays, smaWindow, forecastHorizon, METRIC_LABELS]);
-
-  const setScenario = React.useCallback(
-    (index) => {
-      const snapshot = captureStateSnapshot();
-      snapshot.visibleTraceNames = getVisibleTraceNames();
-      if (index === 1) {
-        setScenario1(snapshot);
-        setActiveScenarios((prev) => ({ ...prev, scenario1: true }));
-      } else if (index === 2) {
-        setScenario2(snapshot);
-        setActiveScenarios((prev) => ({ ...prev, scenario2: true }));
-      } else if (index === 3) {
-        setScenario3(snapshot);
-        setActiveScenarios((prev) => ({ ...prev, scenario3: true }));
-      }
-    },
-    [captureStateSnapshot, getVisibleTraceNames]
-  );
 
   // Prepare chart data based on view
   const { chartData, chartLayout } = React.useMemo(() => {
@@ -8009,8 +7353,8 @@ export function render() {
           side: "right",
           overlaying: "y",
           zeroline: true,
-          zerolinewidth: 2,
-          zerolinecolor: "#d1d5db",
+          zerolinewidth: 1,
+          zerolinecolor: "rgba(0,0,0,0.05)",
           showspikes: false,
         } : { visible: false, overlaying: "y" },
         hovermode: "x unified",
@@ -8022,31 +7366,6 @@ export function render() {
         chartData = result.chartData;
         chartLayout = result.chartLayout;
       }
-    }
-
-    if (activeScenarios.scenario1 && scenario1) {
-      const scenario1Traces = calculateScenarioChartData(
-        scenario1,
-        1,
-        scenarioLabels.scenario1
-      );
-      chartData = [...chartData, ...scenario1Traces];
-    }
-    if (activeScenarios.scenario2 && scenario2) {
-      const scenario2Traces = calculateScenarioChartData(
-        scenario2,
-        2,
-        scenarioLabels.scenario2
-      );
-      chartData = [...chartData, ...scenario2Traces];
-    }
-    if (activeScenarios.scenario3 && scenario3) {
-      const scenario3Traces = calculateScenarioChartData(
-        scenario3,
-        3,
-        scenarioLabels.scenario3
-      );
-      chartData = [...chartData, ...scenario3Traces];
     }
 
     // Modern layout configuration
@@ -8151,12 +7470,6 @@ export function render() {
     prepareChartDataByAttribute,
     getSimpleChartTitle,
     formatPeriodDate,
-    activeScenarios,
-    scenario1,
-    scenario2,
-    scenario3,
-    scenarioLabels,
-    calculateScenarioChartData,
     capYoYForDisplay,
     formatYoYValue,
     isDarkMode,
@@ -8185,6 +7498,68 @@ export function render() {
     getHighlightPeriods,
     applyHighlightingToChartData,
   ]);
+
+  // Compare dock bar handlers — capture config + base data (not traces)
+  // Traces are rebuilt on-the-fly by compareChartBuilder using the same logic as the main chart
+  const addCompareCard = React.useCallback(() => {
+    if (compareCards.length >= 3) return;
+    const tabName = activeTab ? activeTab.name : 'Tab';
+    const labels = getMetricLabels(liveMetricConfig);
+    const label = tabName + (view !== 'Overall' ? ' by ' + view : '');
+    const card = {
+      id: 'cmp_' + Date.now(),
+      label,
+      tabId: activeTabId,
+      tabName: tabName,
+      // Config (what to render)
+      metric,
+      metricLabel: labels[metric] || metric,
+      view,
+      dateRange,
+      dataFrequency,
+      topX,
+      selectedCategories: [...selectedCategories],
+      categorySelectionMode,
+      metricConfig: liveMetricConfig,
+      viewConfig: view !== 'Overall' ? VIEW_CONFIG[view] : null,
+      categoryColorMap: { ...categoryColorMap },
+      activeOverlays: { ...activeOverlays },
+      smaWindow,
+      // Base data (unfiltered — comparison date range filters on-the-fly)
+      periodAggregates: baseDataAggregatesByPeriod,
+      dimensionAggregates: baseDimensionAggregates,
+    };
+    setCompareCards(prev => [...prev, card]);
+  }, [compareCards, metric, view, dateRange, dataFrequency, topX, selectedCategories, categorySelectionMode,
+      liveMetricConfig, VIEW_CONFIG, categoryColorMap, baseDataAggregatesByPeriod, baseDimensionAggregates,
+      activeTabId, activeTab]);
+
+  const removeCompareCard = React.useCallback((id) => {
+    setCompareCards(prev => prev.filter(c => c.id !== id));
+    setShowCompareView(prev => {
+      const remaining = compareCards.filter(c => c.id !== id);
+      return remaining.length >= 2 ? prev : false;
+    });
+  }, [compareCards]);
+
+  const updateCompareCardLabel = React.useCallback((id, newLabel) => {
+    setCompareCards(prev => prev.map(c => c.id === id ? { ...c, label: newLabel } : c));
+  }, []);
+
+  const [editingCompareCardId, setEditingCompareCardId] = React.useState(null);
+
+  const clearAllCompareCards = React.useCallback(() => {
+    setCompareCards([]);
+    setShowCompareView(false);
+  }, []);
+
+  // Escape key to close comparison overlay
+  React.useEffect(() => {
+    if (!showCompareView) return;
+    const handler = (e) => { if (e.key === 'Escape') setShowCompareView(false); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [showCompareView]);
 
   // Apply legend visibility state to chart data
   const finalChartData = React.useMemo(() => {
@@ -8678,54 +8053,10 @@ export function render() {
     []
   );
 
-  // Get the next empty scenario slot for progressive disclosure
-  const getNextEmptyScenario = React.useCallback(() => {
-    if (!scenario1)
-      return { index: 1, color: "#ef4444", label: scenarioLabels.scenario1 };
-    if (!scenario2)
-      return { index: 2, color: "#10b981", label: scenarioLabels.scenario2 };
-    if (!scenario3)
-      return { index: 3, color: "#8b5cf6", label: scenarioLabels.scenario3 };
-    return null; // All slots filled
-  }, [scenario1, scenario2, scenario3, scenarioLabels]);
-
-  // Get all saved scenarios
-  const getSavedScenarios = React.useCallback(() => {
-    const saved = [];
-    if (scenario1) {
-      saved.push({
-        index: 1,
-        color: "#ef4444",
-        scenario: scenario1,
-        isActive: activeScenarios.scenario1,
-        label: scenarioLabels.scenario1,
-      });
-    }
-    if (scenario2) {
-      saved.push({
-        index: 2,
-        color: "#10b981",
-        scenario: scenario2,
-        isActive: activeScenarios.scenario2,
-        label: scenarioLabels.scenario2,
-      });
-    }
-    if (scenario3) {
-      saved.push({
-        index: 3,
-        color: "#8b5cf6",
-        scenario: scenario3,
-        isActive: activeScenarios.scenario3,
-        label: scenarioLabels.scenario3,
-      });
-    }
-    return saved;
-  }, [scenario1, scenario2, scenario3, activeScenarios, scenarioLabels]);
-
   // StatBox rendering delegated to extracted component (src/components/StatBox.js)
 
   return (
-    <div style={styles.container}>
+    <div style={{ ...styles.container, ...(compareCards.length > 0 ? { paddingBottom: '90px' } : {}) }}>
       {/* Add keyframes animation for loading spinner */}
       <style>{`
           @keyframes spin {
@@ -9380,12 +8711,23 @@ export function render() {
                   <button
                     style={{
                       ...styles.buttonGroupBtn,
-                      ...(showScenarioPanel ? styles.buttonGroupBtnActive : {}),
+                      ...(compareCards.length > 0 ? styles.buttonGroupBtnActive : {}),
+                      position: "relative",
                     }}
-                    onClick={() => setShowScenarioPanel(!showScenarioPanel)}
-                    title="Scenario Comparison"
+                    onClick={addCompareCard}
+                    title={compareCards.length >= 3 ? "Maximum 3 compare cards" : "Add current view to compare dock"}
+                    disabled={compareCards.length >= 3}
                     data-guide="comparison"
                   >
+                    {compareCards.length > 0 && (
+                      <span style={{
+                        position: "absolute", top: "-6px", right: "-6px",
+                        backgroundColor: "#3b82f6", color: "white",
+                        borderRadius: "50%", width: "16px", height: "16px",
+                        fontSize: "10px", fontWeight: "700",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}>{compareCards.length}</span>
+                    )}
                     📊 Compare
                   </button>
                   <button
@@ -9969,200 +9311,6 @@ export function render() {
           >
             ⏪
           </button>
-
-          {/* Scenario Comparison Control Panel */}
-          {showScenarioPanel &&
-            (() => {
-              const nextScenario = getNextEmptyScenario();
-              const savedScenarios = getSavedScenarios();
-
-              return (
-                <div
-                  style={{
-                    position: "absolute",
-                    top: "12px",
-                    left: "50px",
-                    backgroundColor: "white",
-                    border: "1px solid #d1d5db",
-                    borderRadius: "8px",
-                    padding: "12px",
-                    fontSize: "12px",
-                    zIndex: 10,
-                    boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
-                    minWidth: "280px",
-                    maxWidth: "320px",
-                  }}
-                >
-                  {/* Header */}
-                  <div
-                    style={{
-                      fontSize: "13px",
-                      fontWeight: "600",
-                      color: "#374151",
-                      marginBottom: "12px",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                    }}
-                  >
-                    <span>Compare Views</span>
-                    <button
-                      onClick={() => setShowScenarioPanel(false)}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        fontSize: "18px",
-                        color: "#6b7280",
-                        cursor: "pointer",
-                        padding: "0",
-                        width: "24px",
-                        height: "24px",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        borderRadius: "4px",
-                      }}
-                      title="Close Scenario Panel"
-                    >
-                      ×
-                    </button>
-                  </div>
-
-                  {/* Add New Scenario Section - Only show if slots available */}
-                  {nextScenario && (
-                    <div
-                      style={{
-                        marginBottom: savedScenarios.length > 0 ? "16px" : "0",
-                      }}
-                    >
-                      <div
-                        style={{
-                          fontSize: "11px",
-                          fontWeight: "600",
-                          color: "#6b7280",
-                          marginBottom: "8px",
-                          textTransform: "uppercase",
-                          letterSpacing: "0.5px",
-                        }}
-                      >
-                        Capture View
-                      </div>
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "8px",
-                          marginBottom: "8px",
-                        }}
-                      >
-                        <div
-                          style={{
-                            width: "16px",
-                            height: "16px",
-                            backgroundColor: nextScenario.color,
-                            borderRadius: "4px",
-                            border: "1px solid #9ca3af",
-                          }}
-                        ></div>
-                        <input
-                          type="text"
-                          value={nextScenario.label}
-                          onChange={(e) =>
-                            updateScenarioLabel(
-                              nextScenario.index,
-                              e.target.value
-                            )
-                          }
-                          placeholder={`Scenario ${nextScenario.index}`}
-                          style={{
-                            flex: 1,
-                            padding: "6px 8px",
-                            border: "1px solid #d1d5db",
-                            borderRadius: "4px",
-                            fontSize: "12px",
-                          }}
-                        />
-                      </div>
-                      <button
-                        onClick={() => setScenario(nextScenario.index)}
-                        style={{
-                          width: "100%",
-                          padding: "8px 12px",
-                          backgroundColor: nextScenario.color,
-                          color: "white",
-                          border: "none",
-                          borderRadius: "4px",
-                          fontSize: "12px",
-                          fontWeight: "500",
-                          cursor: "pointer",
-                        }}
-                      >
-                        ➕ Add to Compare
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Saved Scenarios Section */}
-                  {savedScenarios.length > 0 && (
-                    <div
-                      style={{
-                        paddingTop:
-                          savedScenarios.length > 0 && nextScenario
-                            ? "16px"
-                            : "0",
-                        borderTop:
-                          savedScenarios.length > 0 && nextScenario
-                            ? "1px solid #e5e7eb"
-                            : "none",
-                      }}
-                    >
-                      <div style={styles.savedViewsHeader}>
-                        Saved Views ({savedScenarios.length})
-                      </div>
-                      {savedScenarios.map((saved, idx) => (
-                        <div
-                          key={saved.index}
-                          style={{
-                            ...styles.savedScenarioCard,
-                            marginBottom:
-                              idx === savedScenarios.length - 1 ? "0" : "10px",
-                          }}
-                        >
-                          <div style={styles.savedScenarioRow}>
-                            <input
-                              type="checkbox"
-                              checked={saved.isActive}
-                              onChange={() => toggleScenario(saved.index)}
-                              style={{
-                                cursor: "pointer",
-                                accentColor: saved.color,
-                              }}
-                            />
-                            <span style={styles.savedScenarioLabel}>
-                              {saved.label}
-                            </span>
-                            <button
-                              onClick={() => clearScenario(saved.index)}
-                              style={styles.savedScenarioDeleteBtn}
-                              title="Remove this scenario"
-                            >
-                              Clear
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* All slots filled message */}
-                  {!nextScenario && savedScenarios.length === 3 && (
-                    <div style={styles.allSlotsFilled}>
-                      Maximum 3 scenarios reached. Clear one to add more.
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
 
           {/* Top X Control - Only show when not empty view */}
           {view !== "Overall" && (
@@ -11066,6 +10214,231 @@ export function render() {
             </>
           );
         })()}
+
+      {/* Compare Dock Bar */}
+      {compareCards.length > 0 && (
+        <div style={{
+          position: "fixed",
+          bottom: 0,
+          left: 0,
+          right: 0,
+          height: "72px",
+          backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
+          borderTop: `2px solid ${isDarkMode ? '#334155' : '#e2e8f0'}`,
+          display: "flex",
+          alignItems: "center",
+          padding: "0 20px",
+          gap: "12px",
+          zIndex: 50,
+          boxShadow: "0 -4px 12px rgba(0,0,0,0.1)",
+        }}>
+          {compareCards.map((card, idx) => (
+            <div key={card.id} style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "10px",
+              padding: "8px 12px",
+              backgroundColor: isDarkMode ? "#0f172a" : "#f8fafc",
+              borderLeft: `4px solid ${COMPARE_CARD_COLORS[idx]}`,
+              borderRadius: "6px",
+              border: `1px solid ${isDarkMode ? '#334155' : '#e2e8f0'}`,
+              borderLeftWidth: "4px",
+              borderLeftColor: COMPARE_CARD_COLORS[idx],
+              minWidth: "180px",
+              maxWidth: "280px",
+            }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                {editingCompareCardId === card.id ? (
+                  <input
+                    autoFocus
+                    defaultValue={card.label}
+                    onBlur={(e) => { updateCompareCardLabel(card.id, e.target.value || card.label); setEditingCompareCardId(null); }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') { updateCompareCardLabel(card.id, e.target.value || card.label); setEditingCompareCardId(null); }
+                      if (e.key === 'Escape') setEditingCompareCardId(null);
+                    }}
+                    style={{
+                      fontSize: "13px", fontWeight: "600", width: "100%",
+                      color: isDarkMode ? "#f1f5f9" : "#1e293b",
+                      background: isDarkMode ? "#1e293b" : "#ffffff",
+                      border: `1px solid ${COMPARE_CARD_COLORS[idx]}`,
+                      borderRadius: "3px", padding: "1px 4px", outline: "none",
+                    }}
+                  />
+                ) : (
+                  <div
+                    onDoubleClick={() => setEditingCompareCardId(card.id)}
+                    title="Double-click to rename"
+                    style={{
+                      fontSize: "13px",
+                      fontWeight: "600",
+                      color: isDarkMode ? "#f1f5f9" : "#1e293b",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      cursor: "text",
+                    }}>{card.label}</div>
+                )}
+                <div style={{
+                  fontSize: "11px",
+                  color: isDarkMode ? "#94a3b8" : "#64748b",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}>{card.tabName} | {card.metricLabel} | {card.view} | {card.dateRange}</div>
+              </div>
+              <button
+                onClick={() => removeCompareCard(card.id)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  fontSize: "16px",
+                  color: isDarkMode ? "#94a3b8" : "#94a3b8",
+                  cursor: "pointer",
+                  padding: "2px",
+                  lineHeight: 1,
+                }}
+                title="Remove from comparison"
+              >x</button>
+            </div>
+          ))}
+          <div style={{ flex: 1 }} />
+          {compareCards.length < 3 && (
+            <button
+              onClick={addCompareCard}
+              style={{
+                padding: "8px 16px",
+                backgroundColor: isDarkMode ? "#1e40af" : "#3b82f6",
+                color: "white",
+                border: "none",
+                borderRadius: "6px",
+                fontSize: "12px",
+                fontWeight: "600",
+                cursor: "pointer",
+              }}
+            >+ Add Current View</button>
+          )}
+          {compareCards.length >= 2 && (
+            <button
+              onClick={() => { setCompareDateRange("All"); setShowCompareView(true); }}
+              style={{
+                padding: "8px 16px",
+                backgroundColor: isDarkMode ? "#065f46" : "#10b981",
+                color: "white",
+                border: "none",
+                borderRadius: "6px",
+                fontSize: "12px",
+                fontWeight: "600",
+                cursor: "pointer",
+              }}
+            >Compare</button>
+          )}
+          <button
+            onClick={clearAllCompareCards}
+            style={{
+              padding: "8px 12px",
+              backgroundColor: "transparent",
+              color: isDarkMode ? "#94a3b8" : "#64748b",
+              border: `1px solid ${isDarkMode ? '#475569' : '#cbd5e1'}`,
+              borderRadius: "6px",
+              fontSize: "12px",
+              cursor: "pointer",
+            }}
+          >Clear All</button>
+        </div>
+      )}
+
+      {/* Compare Overlay */}
+      {showCompareView && compareCards.length >= 2 && (() => {
+        const cards = compareCards;
+        const { traces: comparisonTraces, layout: comparisonLayout } = buildComparisonChart(cards, compareDateRange, isDarkMode);
+
+        return (
+          <div style={{
+            position: "fixed",
+            top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: isDarkMode ? "rgba(0,0,0,0.85)" : "rgba(0,0,0,0.6)",
+            zIndex: 100,
+            display: "flex",
+            flexDirection: "column",
+          }}
+            onClick={(e) => { if (e.target === e.currentTarget) setShowCompareView(false); }}
+          >
+            <div style={{
+              flex: 1,
+              margin: "20px",
+              backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
+              borderRadius: "12px",
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+            }}>
+              {/* Header */}
+              <div style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "16px 24px",
+                borderBottom: `1px solid ${isDarkMode ? '#334155' : '#e2e8f0'}`,
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  <span style={{ fontSize: "16px", fontWeight: "700", color: isDarkMode ? "#f1f5f9" : "#1e293b" }}>
+                    Comparison View
+                  </span>
+                  {cards.map((card, i) => (
+                    <span key={card.id} style={{
+                      display: "inline-flex", alignItems: "center", gap: "6px",
+                      padding: "4px 10px", borderRadius: "16px",
+                      backgroundColor: COMPARE_CARD_COLORS[i] + '20',
+                      fontSize: "12px", fontWeight: "500",
+                      color: COMPARE_CARD_COLORS[i],
+                    }}>
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: COMPARE_CARD_COLORS[i] }} />
+                      {card.label}
+                    </span>
+                  ))}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                  {DATE_RANGES.map(range => (
+                    <button
+                      key={range}
+                      onClick={() => setCompareDateRange(range)}
+                      style={{
+                        padding: "4px 10px",
+                        fontSize: "11px",
+                        fontWeight: compareDateRange === range ? "700" : "500",
+                        color: compareDateRange === range ? "#ffffff" : (isDarkMode ? "#94a3b8" : "#64748b"),
+                        backgroundColor: compareDateRange === range ? "#3b82f6" : (isDarkMode ? "#334155" : "#f1f5f9"),
+                        border: `1px solid ${compareDateRange === range ? '#3b82f6' : (isDarkMode ? '#475569' : '#e2e8f0')}`,
+                        borderRadius: "4px",
+                        cursor: "pointer",
+                      }}
+                    >{range}</button>
+                  ))}
+                </div>
+                <button
+                  onClick={() => setShowCompareView(false)}
+                  style={{
+                    background: "none", border: "none",
+                    fontSize: "24px", color: isDarkMode ? "#94a3b8" : "#6b7280",
+                    cursor: "pointer", padding: "4px",
+                  }}
+                  title="Close comparison (Esc)"
+                >x</button>
+              </div>
+              {/* Chart */}
+              <div style={{ flex: 1, padding: "16px 24px" }}>
+                <PlotlyChart
+                  data={comparisonTraces}
+                  layout={comparisonLayout}
+                  config={{ responsive: true, displayModeBar: true, displaylogo: false }}
+                  style={{ width: "100%", height: "100%" }}
+                />
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Metrics Editor Modal */}
       {showMetricsEditor && metricsEditorDraft && (
