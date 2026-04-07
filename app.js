@@ -1814,22 +1814,138 @@ var __app = (() => {
     }
     return Array.from(catSet);
   }
-  function calculateYoYDataArray(periods, dataByPeriod, metricCalculator, yoyCalculator, includeLastPeriod = false) {
-    const periodsForYoY = includeLastPeriod ? periods : periods.slice(0, -1);
-    const yoyDataForPeriods = periodsForYoY.map((period) => {
-      const periodRows = dataByPeriod[period] || [];
-      const currentValue = metricCalculator(periodRows);
-      return yoyCalculator(period, currentValue);
-    });
-    const yoyData = includeLastPeriod ? yoyDataForPeriods : [...yoyDataForPeriods, null];
-    let lastPeriodYoY = null;
-    if (!includeLastPeriod && periods.length > 0) {
-      const lastPeriod = periods[periods.length - 1];
-      const lastPeriodRows = dataByPeriod[lastPeriod] || [];
-      const lastPeriodValue = metricCalculator(lastPeriodRows);
-      lastPeriodYoY = yoyCalculator(lastPeriod, lastPeriodValue);
+
+  // src/chartUtils.js
+  function resolveChartType(metricName, metricConfig) {
+    if (metricConfig) {
+      const prefix = metricName === "metric1" ? "volume" : metricName === "metric2" ? "revenue" : "derived";
+      const configuredType = metricConfig[prefix + "ChartType"] || "auto";
+      if (configuredType !== "auto") return configuredType;
+      const mode = metricConfig[prefix + "Mode"] || "aggregation";
+      return mode === "formula" ? "line" : "stacked";
     }
-    return { yoyData, lastPeriodYoY };
+    return metricName === "metric3" ? "line" : "stacked";
+  }
+  function isFormulaMetric(metricName, metricConfig) {
+    if (metricConfig) {
+      const prefix = metricName === "metric1" ? "volume" : metricName === "metric2" ? "revenue" : "derived";
+      return (metricConfig[prefix + "Mode"] || "aggregation") === "formula";
+    }
+    return metricName === "metric3";
+  }
+  function getMetricLabels(metricConfig) {
+    if (metricConfig) {
+      return {
+        metric1: metricConfig.volumeLabel || "Metric 1",
+        metric2: metricConfig.revenueLabel || "Metric 2",
+        metric3: metricConfig.derivedLabel || "Margin Rate"
+      };
+    }
+    return { metric1: "Metric 1", metric2: "Metric 2", metric3: "Metric 3" };
+  }
+  function formatMetricValue(value, metricName, metricConfig) {
+    if (typeof numeral === "undefined") return String(value);
+    if (metricConfig) {
+      if (metricName === "metric1") {
+        const formatted = numeral(value).format(metricConfig.volumeFormat);
+        return (metricConfig.volumePrefix || "") + formatted + (metricConfig.volumeSuffix || "");
+      }
+      if (metricName === "metric2") {
+        const formatted = numeral(value).format(metricConfig.revenueFormat);
+        return (metricConfig.revenuePrefix || "") + formatted + (metricConfig.revenueSuffix || "");
+      }
+      if (metricName === "metric3") {
+        const displayValue = metricConfig.derivedMode !== "formula" && metricConfig.derivedDivisor ? value / metricConfig.derivedDivisor : value;
+        const formatted = numeral(displayValue).format(metricConfig.derivedFormat);
+        return (metricConfig.derivedPrefix || "") + formatted + (metricConfig.derivedSuffix || "");
+      }
+    }
+    switch (metricName) {
+      case "metric1":
+        return "$" + numeral(value).format("0.0a");
+      case "metric2":
+        return "$" + numeral(value).format("0.0a");
+      case "metric3":
+        return numeral(value).format("0.0") + " bps";
+      default:
+        return numeral(value).format("0.0a");
+    }
+  }
+  function getHighlightPeriods(insight, periods) {
+    if (!insight || !insight.metadata) return [];
+    const { metadata } = insight;
+    const periodsToHighlight = [];
+    if (metadata.alertType === "sudden_drop" && metadata.period) {
+      const periodIndex = periods.indexOf(metadata.period);
+      if (periodIndex > 0) {
+        periodsToHighlight.push(periods[periodIndex - 1]);
+        periodsToHighlight.push(periods[periodIndex]);
+      } else if (periodIndex === 0) {
+        periodsToHighlight.push(periods[periodIndex]);
+      }
+    }
+    return periodsToHighlight;
+  }
+  function applyHighlightingToChartData(chartData, highlightPeriods) {
+    if (!highlightPeriods || highlightPeriods.length === 0) return chartData;
+    return chartData.map((trace) => {
+      if (!trace.x || !Array.isArray(trace.x)) return trace;
+      const markerSizes = trace.marker && trace.marker.size ? Array.isArray(trace.marker.size) ? [...trace.marker.size] : new Array(trace.x.length).fill(trace.marker.size || 6) : new Array(trace.x.length).fill(6);
+      const markerColors = trace.marker && trace.marker.color ? Array.isArray(trace.marker.color) ? [...trace.marker.color] : new Array(trace.x.length).fill(trace.marker.color || "#6366f1") : new Array(trace.x.length).fill(trace.color || "#6366f1");
+      const lineWidths = trace.line && trace.line.width ? Array.isArray(trace.line.width) ? [...trace.line.width] : new Array(trace.x.length).fill(trace.line.width || 2.5) : new Array(trace.x.length).fill(2.5);
+      const lineColors = trace.line && trace.line.color ? Array.isArray(trace.line.color) ? [...trace.line.color] : new Array(trace.x.length).fill(trace.line.color || "#6366f1") : new Array(trace.x.length).fill(trace.color || "#6366f1");
+      trace.x.forEach((period, index) => {
+        if (highlightPeriods.includes(period)) {
+          markerSizes[index] = (trace.type === "bar" ? 1.3 : 1.8) * (markerSizes[index] || 6);
+          markerColors[index] = "#ef4444";
+          if (trace.type === "scatter" && trace.mode && trace.mode.includes("lines")) {
+            lineWidths[index] = (lineWidths[index] || 2.5) * 2;
+            lineColors[index] = "#ef4444";
+          }
+        }
+      });
+      const updatedTrace = { ...trace };
+      if (trace.type === "scatter") {
+        if (trace.mode && trace.mode.includes("markers")) {
+          updatedTrace.marker = {
+            ...trace.marker,
+            size: markerSizes,
+            color: markerColors
+          };
+        }
+        if (trace.mode && trace.mode.includes("lines")) {
+          updatedTrace.line = {
+            ...trace.line,
+            width: lineWidths,
+            color: lineColors
+          };
+        }
+      } else if (trace.type === "bar") {
+        const currentLineColor = trace.marker && trace.marker.line && trace.marker.line.color || "rgba(255,255,255,0.3)";
+        const currentLineWidth = trace.marker && trace.marker.line && trace.marker.line.width || 0.5;
+        const baseLineColor = Array.isArray(currentLineColor) ? currentLineColor[0] : currentLineColor;
+        const baseLineWidth = Array.isArray(currentLineWidth) ? currentLineWidth[0] : currentLineWidth;
+        updatedTrace.marker = {
+          ...trace.marker,
+          line: {
+            ...trace.marker && trace.marker.line ? trace.marker.line : {},
+            color: trace.x.map(
+              (period) => highlightPeriods.includes(period) ? "#ef4444" : baseLineColor
+            ),
+            width: trace.x.map(
+              (period) => highlightPeriods.includes(period) ? 3 : baseLineWidth
+            )
+          }
+        };
+      }
+      return updatedTrace;
+    });
+  }
+  function formatXAxisTicks(periodsArray, formatPeriodDateFn) {
+    if (periodsArray.length <= 12) {
+      return periodsArray.map((period) => formatPeriodDateFn(period));
+    }
+    return void 0;
   }
 
   // src/formatUtils.js
@@ -2460,61 +2576,6 @@ var __app = (() => {
   }
 
   // src/compareChartBuilder.js
-  function resolveChartType(metricName, metricConfig) {
-    if (metricConfig) {
-      const prefix = metricName === "metric1" ? "volume" : metricName === "metric2" ? "revenue" : "derived";
-      const configuredType = metricConfig[prefix + "ChartType"] || "auto";
-      if (configuredType !== "auto") return configuredType;
-      const mode = metricConfig[prefix + "Mode"] || "aggregation";
-      return mode === "formula" ? "line" : "stacked";
-    }
-    return metricName === "metric3" ? "line" : "stacked";
-  }
-  function isFormulaMetric(metricName, metricConfig) {
-    if (metricConfig) {
-      const prefix = metricName === "metric1" ? "volume" : metricName === "metric2" ? "revenue" : "derived";
-      return (metricConfig[prefix + "Mode"] || "aggregation") === "formula";
-    }
-    return metricName === "metric3";
-  }
-  function getMetricLabels(metricConfig) {
-    if (metricConfig) {
-      return {
-        metric1: metricConfig.volumeLabel || "Metric 1",
-        metric2: metricConfig.revenueLabel || "Metric 2",
-        metric3: metricConfig.derivedLabel || "Margin Rate"
-      };
-    }
-    return { metric1: "Metric 1", metric2: "Metric 2", metric3: "Metric 3" };
-  }
-  function formatMetricValue(value, metricName, metricConfig) {
-    if (typeof numeral === "undefined") return String(value);
-    if (metricConfig) {
-      if (metricName === "metric1") {
-        const formatted = numeral(value).format(metricConfig.volumeFormat);
-        return (metricConfig.volumePrefix || "") + formatted + (metricConfig.volumeSuffix || "");
-      }
-      if (metricName === "metric2") {
-        const formatted = numeral(value).format(metricConfig.revenueFormat);
-        return (metricConfig.revenuePrefix || "") + formatted + (metricConfig.revenueSuffix || "");
-      }
-      if (metricName === "metric3") {
-        const displayValue = metricConfig.derivedMode !== "formula" && metricConfig.derivedDivisor ? value / metricConfig.derivedDivisor : value;
-        const formatted = numeral(displayValue).format(metricConfig.derivedFormat);
-        return (metricConfig.derivedPrefix || "") + formatted + (metricConfig.derivedSuffix || "");
-      }
-    }
-    switch (metricName) {
-      case "metric1":
-        return "$" + numeral(value).format("0.0a");
-      case "metric2":
-        return "$" + numeral(value).format("0.0a");
-      case "metric3":
-        return numeral(value).format("0.0") + " bps";
-      default:
-        return numeral(value).format("0.0a");
-    }
-  }
   function filterPeriodsByDateRange(allPeriods, dateRange) {
     if (!dateRange || dateRange === "All") return allPeriods;
     const now = /* @__PURE__ */ new Date();
@@ -2981,144 +3042,381 @@ var __app = (() => {
     return { traces, layout };
   }
 
-  // Analyzer_Demo.js
-  function render() {
-    const [isDarkMode, setIsDarkMode] = React.useState(false);
-    const theme = isDarkMode ? THEME_CONFIG.dark : THEME_CONFIG.light;
-    const [showDataSummary, setShowDataSummary] = React.useState(false);
-    const DATE_RANGES = ["7D", "14D", "30D", "QTD", "YTD", "1Y", "All"];
-    const STATIC_STYLES = React.useMemo(
-      () => ({
-        base: {
-          button: {
-            padding: "6px 12px",
-            border: "none",
-            borderRadius: "6px",
-            fontSize: "12px",
-            fontWeight: "500",
-            cursor: "pointer",
-            transition: "all 0.15s ease"
-          },
-          input: {
-            padding: "6px 10px",
-            border: `1px solid ${theme.borderSecondary}`,
-            borderRadius: "6px",
-            fontSize: "12px",
-            color: theme.textSecondary,
-            backgroundColor: theme.bgPrimary,
-            transition: "all 0.15s ease"
-          },
-          flexRow: { display: "flex", alignItems: "center", gap: "8px" },
-          flexCol: { display: "flex", flexDirection: "column" },
-          card: {
-            backgroundColor: theme.bgPrimary,
-            borderRadius: "8px",
-            border: "none",
-            boxShadow: isDarkMode ? "0 1px 3px rgba(0, 0, 0, 0.3)" : "0 1px 2px rgba(0, 0, 0, 0.05)"
+  // src/components/CompareView.js
+  function CompareDockBar({
+    compareCards,
+    isDarkMode,
+    editingCompareCardId,
+    setEditingCompareCardId,
+    updateCompareCardLabel,
+    removeCompareCard,
+    addCompareCard,
+    clearAllCompareCards,
+    setCompareDateRange,
+    setShowCompareView
+  }) {
+    if (compareCards.length === 0) return null;
+    return /* @__PURE__ */ React.createElement("div", { style: {
+      position: "fixed",
+      bottom: 0,
+      left: 0,
+      right: 0,
+      height: "72px",
+      backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
+      borderTop: `2px solid ${isDarkMode ? "#334155" : "#e2e8f0"}`,
+      display: "flex",
+      alignItems: "center",
+      padding: "0 20px",
+      gap: "12px",
+      zIndex: 50,
+      boxShadow: "0 -4px 12px rgba(0,0,0,0.1)"
+    } }, compareCards.map((card, idx) => /* @__PURE__ */ React.createElement("div", { key: card.id, style: {
+      display: "flex",
+      alignItems: "center",
+      gap: "10px",
+      padding: "8px 12px",
+      backgroundColor: isDarkMode ? "#0f172a" : "#f8fafc",
+      borderLeft: `4px solid ${COMPARE_CARD_COLORS[idx]}`,
+      borderRadius: "6px",
+      border: `1px solid ${isDarkMode ? "#334155" : "#e2e8f0"}`,
+      borderLeftWidth: "4px",
+      borderLeftColor: COMPARE_CARD_COLORS[idx],
+      minWidth: "180px",
+      maxWidth: "280px"
+    } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, editingCompareCardId === card.id ? /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        autoFocus: true,
+        defaultValue: card.label,
+        onBlur: (e) => {
+          updateCompareCardLabel(card.id, e.target.value || card.label);
+          setEditingCompareCardId(null);
+        },
+        onKeyDown: (e) => {
+          if (e.key === "Enter") {
+            updateCompareCardLabel(card.id, e.target.value || card.label);
+            setEditingCompareCardId(null);
+          }
+          if (e.key === "Escape") setEditingCompareCardId(null);
+        },
+        style: {
+          fontSize: "13px",
+          fontWeight: "600",
+          width: "100%",
+          color: isDarkMode ? "#f1f5f9" : "#1e293b",
+          background: isDarkMode ? "#1e293b" : "#ffffff",
+          border: `1px solid ${COMPARE_CARD_COLORS[idx]}`,
+          borderRadius: "3px",
+          padding: "1px 4px",
+          outline: "none"
+        }
+      }
+    ) : /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        onDoubleClick: () => setEditingCompareCardId(card.id),
+        title: "Double-click to rename",
+        style: {
+          fontSize: "13px",
+          fontWeight: "600",
+          color: isDarkMode ? "#f1f5f9" : "#1e293b",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          cursor: "text"
+        }
+      },
+      card.label
+    ), /* @__PURE__ */ React.createElement("div", { style: {
+      fontSize: "11px",
+      color: isDarkMode ? "#94a3b8" : "#64748b",
+      whiteSpace: "nowrap",
+      overflow: "hidden",
+      textOverflow: "ellipsis"
+    } }, card.tabName, " | ", card.metricLabel, " | ", card.view, " | ", card.dateRange)), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: () => removeCompareCard(card.id),
+        style: {
+          background: "none",
+          border: "none",
+          fontSize: "16px",
+          color: isDarkMode ? "#94a3b8" : "#94a3b8",
+          cursor: "pointer",
+          padding: "2px",
+          lineHeight: 1
+        },
+        title: "Remove from comparison"
+      },
+      "x"
+    ))), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }), compareCards.length < 3 && /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: addCompareCard,
+        style: {
+          padding: "8px 16px",
+          backgroundColor: isDarkMode ? "#1e40af" : "#3b82f6",
+          color: "white",
+          border: "none",
+          borderRadius: "6px",
+          fontSize: "12px",
+          fontWeight: "600",
+          cursor: "pointer"
+        }
+      },
+      "+ Add Current View"
+    ), compareCards.length >= 2 && /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: () => {
+          setCompareDateRange("All");
+          setShowCompareView(true);
+        },
+        style: {
+          padding: "8px 16px",
+          backgroundColor: isDarkMode ? "#065f46" : "#10b981",
+          color: "white",
+          border: "none",
+          borderRadius: "6px",
+          fontSize: "12px",
+          fontWeight: "600",
+          cursor: "pointer"
+        }
+      },
+      "Compare"
+    ), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: clearAllCompareCards,
+        style: {
+          padding: "8px 12px",
+          backgroundColor: "transparent",
+          color: isDarkMode ? "#94a3b8" : "#64748b",
+          border: `1px solid ${isDarkMode ? "#475569" : "#cbd5e1"}`,
+          borderRadius: "6px",
+          fontSize: "12px",
+          cursor: "pointer"
+        }
+      },
+      "Clear All"
+    ));
+  }
+  function CompareOverlay({
+    compareCards,
+    isDarkMode,
+    showCompareView,
+    setShowCompareView,
+    compareDateRange,
+    setCompareDateRange,
+    buildComparisonChart: buildComparisonChart2,
+    dateRanges
+  }) {
+    if (!showCompareView || compareCards.length < 2) return null;
+    const { traces: comparisonTraces, layout: comparisonLayout } = buildComparisonChart2(compareCards, compareDateRange, isDarkMode);
+    return /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        style: {
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: isDarkMode ? "rgba(0,0,0,0.85)" : "rgba(0,0,0,0.6)",
+          zIndex: 100,
+          display: "flex",
+          flexDirection: "column"
+        },
+        onClick: (e) => {
+          if (e.target === e.currentTarget) setShowCompareView(false);
+        }
+      },
+      /* @__PURE__ */ React.createElement("div", { style: {
+        flex: 1,
+        margin: "20px",
+        backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
+        borderRadius: "12px",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden"
+      } }, /* @__PURE__ */ React.createElement("div", { style: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "16px 24px",
+        borderBottom: `1px solid ${isDarkMode ? "#334155" : "#e2e8f0"}`
+      } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "12px" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: "16px", fontWeight: "700", color: isDarkMode ? "#f1f5f9" : "#1e293b" } }, "Comparison View"), compareCards.map((card, i) => /* @__PURE__ */ React.createElement("span", { key: card.id, style: {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "6px",
+        padding: "4px 10px",
+        borderRadius: "16px",
+        backgroundColor: COMPARE_CARD_COLORS[i] + "20",
+        fontSize: "12px",
+        fontWeight: "500",
+        color: COMPARE_CARD_COLORS[i]
+      } }, /* @__PURE__ */ React.createElement("span", { style: { width: 8, height: 8, borderRadius: "50%", backgroundColor: COMPARE_CARD_COLORS[i] } }), card.label))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "4px" } }, dateRanges.map((range) => /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          key: range,
+          onClick: () => setCompareDateRange(range),
+          style: {
+            padding: "4px 10px",
+            fontSize: "11px",
+            fontWeight: compareDateRange === range ? "700" : "500",
+            color: compareDateRange === range ? "#ffffff" : isDarkMode ? "#94a3b8" : "#64748b",
+            backgroundColor: compareDateRange === range ? "#3b82f6" : isDarkMode ? "#334155" : "#f1f5f9",
+            border: `1px solid ${compareDateRange === range ? "#3b82f6" : isDarkMode ? "#475569" : "#e2e8f0"}`,
+            borderRadius: "4px",
+            cursor: "pointer"
           }
         },
-        buttonGroup: {
-          display: "flex",
-          gap: "4px",
-          backgroundColor: theme.bgQuaternary,
-          padding: "4px",
-          borderRadius: "8px",
-          border: `1px solid ${theme.borderSecondary}`
+        range
+      ))), /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          onClick: () => setShowCompareView(false),
+          style: {
+            background: "none",
+            border: "none",
+            fontSize: "24px",
+            color: isDarkMode ? "#94a3b8" : "#6b7280",
+            cursor: "pointer",
+            padding: "4px"
+          },
+          title: "Close comparison (Esc)"
         },
-        buttonGroupBtn: {
-          padding: "4px 10px",
+        "x"
+      )), /* @__PURE__ */ React.createElement("div", { style: { flex: 1, padding: "16px 24px" } }, /* @__PURE__ */ React.createElement(
+        PlotlyChart,
+        {
+          data: comparisonTraces,
+          layout: comparisonLayout,
+          config: { responsive: true, displayModeBar: true, displaylogo: false },
+          style: { width: "100%", height: "100%" }
+        }
+      )))
+    );
+  }
+
+  // src/components/StatusBanner.js
+  function BannerBase({ isDarkMode, color, children }) {
+    const colors = {
+      blue: {
+        bg: isDarkMode ? "rgba(99, 102, 241, 0.12)" : "rgba(99, 102, 241, 0.1)",
+        border: isDarkMode ? "rgba(99, 102, 241, 0.35)" : "rgba(99, 102, 241, 0.4)",
+        text: isDarkMode ? "#a5b4fc" : "#4338ca"
+      },
+      red: {
+        bg: isDarkMode ? "rgba(239, 68, 68, 0.12)" : "rgba(239, 68, 68, 0.1)",
+        border: isDarkMode ? "rgba(239, 68, 68, 0.35)" : "rgba(239, 68, 68, 0.4)",
+        text: isDarkMode ? "#fca5a5" : "#dc2626"
+      },
+      amber: {
+        bg: isDarkMode ? "rgba(245, 158, 11, 0.12)" : "rgba(245, 158, 11, 0.1)",
+        border: isDarkMode ? "rgba(245, 158, 11, 0.35)" : "rgba(245, 158, 11, 0.4)",
+        text: isDarkMode ? "#fbbf24" : "#92400e"
+      },
+      yellow: {
+        bg: isDarkMode ? "rgba(234, 179, 8, 0.12)" : "rgba(234, 179, 8, 0.1)",
+        border: isDarkMode ? "rgba(234, 179, 8, 0.35)" : "rgba(234, 179, 8, 0.4)",
+        text: isDarkMode ? "#fcd34d" : "#92400e"
+      }
+    };
+    const c = colors[color] || colors.blue;
+    return /* @__PURE__ */ React.createElement("div", { style: {
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      padding: "8px 16px",
+      backgroundColor: c.bg,
+      border: `1px solid ${c.border}`,
+      borderRadius: "8px",
+      marginBottom: "12px",
+      fontSize: "12px",
+      color: c.text
+    } }, children);
+  }
+  function Spinner() {
+    return /* @__PURE__ */ React.createElement("div", { style: {
+      width: "14px",
+      height: "14px",
+      border: "2px solid currentColor",
+      borderTopColor: "transparent",
+      borderRadius: "50%",
+      animation: "spin 0.8s linear infinite"
+    } });
+  }
+  function StatusBanner({
+    baseConnection,
+    activeTab,
+    configLoading,
+    configError,
+    liveDataLoading,
+    liveDataError,
+    liveDataTruncated,
+    dataSourceType,
+    connectionParams,
+    isDarkMode,
+    handleCsvUpload,
+    setShowConnectModal
+  }) {
+    return /* @__PURE__ */ React.createElement(React.Fragment, null, baseConnection && activeTab && !activeTab.dataset && !liveDataLoading && /* @__PURE__ */ React.createElement(BannerBase, { isDarkMode, color: "amber" }, /* @__PURE__ */ React.createElement("span", null, "No dataset configured. Click ", /* @__PURE__ */ React.createElement("strong", null, "Configure Metrics"), " to set the table name.")), configLoading && /* @__PURE__ */ React.createElement(BannerBase, { isDarkMode, color: "blue" }, /* @__PURE__ */ React.createElement(Spinner, null), /* @__PURE__ */ React.createElement("span", null, "Loading dashboard configuration...")), configError && /* @__PURE__ */ React.createElement(BannerBase, { isDarkMode, color: "red" }, /* @__PURE__ */ React.createElement("span", null, configError), /* @__PURE__ */ React.createElement("button", { onClick: () => window.location.reload(), style: {
+      marginLeft: "auto",
+      padding: "2px 10px",
+      borderRadius: "4px",
+      fontSize: "11px",
+      cursor: "pointer",
+      border: `1px solid ${isDarkMode ? "rgba(239, 68, 68, 0.4)" : "rgba(239, 68, 68, 0.5)"}`,
+      background: "transparent",
+      color: "inherit"
+    } }, "Retry")), liveDataLoading && /* @__PURE__ */ React.createElement(BannerBase, { isDarkMode, color: "blue" }, /* @__PURE__ */ React.createElement(Spinner, null), /* @__PURE__ */ React.createElement("span", null, "Connecting to ", /* @__PURE__ */ React.createElement("strong", null, connectionParams?.dataset), "...")), liveDataError && /* @__PURE__ */ React.createElement(BannerBase, { isDarkMode, color: "red" }, /* @__PURE__ */ React.createElement("span", null, "Connection failed: ", liveDataError, ". Showing demo data instead.")), liveDataTruncated && !liveDataLoading && /* @__PURE__ */ React.createElement(BannerBase, { isDarkMode, color: "amber" }, /* @__PURE__ */ React.createElement("span", null, "Data truncated \u2014 results hit the row limit. Metrics may be incomplete.")), dataSourceType === "csv" && !connectionParams && !liveDataLoading && !liveDataError && /* @__PURE__ */ React.createElement(BannerBase, { isDarkMode, color: "yellow" }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("strong", null, "Demo Data"), " \u2014 viewing sample CSV."), /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto", display: "flex", gap: "6px" } }, /* @__PURE__ */ React.createElement("label", { style: {
+      padding: "4px 12px",
+      borderRadius: "4px",
+      fontSize: "11px",
+      cursor: "pointer",
+      border: `1px solid ${isDarkMode ? "rgba(16, 185, 129, 0.5)" : "rgba(16, 185, 129, 0.5)"}`,
+      background: isDarkMode ? "rgba(16, 185, 129, 0.2)" : "rgba(16, 185, 129, 0.1)",
+      color: isDarkMode ? "#6ee7b7" : "#065f46",
+      fontWeight: 600,
+      whiteSpace: "nowrap"
+    } }, "Upload CSV", /* @__PURE__ */ React.createElement("input", { type: "file", accept: ".csv,.tsv", hidden: true, onChange: (e) => {
+      if (e.target.files[0]) handleCsvUpload(e.target.files[0]);
+      e.target.value = "";
+    } })), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: () => setShowConnectModal(true),
+        style: {
+          padding: "4px 12px",
           borderRadius: "4px",
-          backgroundColor: "transparent",
-          color: theme.textTertiary,
-          border: "none",
-          fontSize: "12px",
-          fontWeight: "500",
+          fontSize: "11px",
           cursor: "pointer",
-          transition: "all 0.15s ease"
-        },
-        buttonGroupBtnActive: {
-          backgroundColor: theme.accentPrimary,
-          color: "white"
-        },
-        topSection: {
-          display: "flex",
-          flexDirection: "column",
-          gap: "12px",
-          marginBottom: "12px"
-        },
-        statBoxContainer: {
-          display: "flex",
-          gap: "12px",
-          flexWrap: "nowrap",
-          width: "100%"
-        },
-        controlsHeader: {
-          display: "flex",
-          alignItems: "center",
-          padding: "14px 18px",
-          backgroundColor: "transparent",
-          borderBottom: `1px solid ${isDarkMode ? "rgba(148, 163, 184, 0.1)" : "rgba(229, 231, 235, 0.5)"}`,
-          gap: "16px",
-          flexWrap: "wrap"
-        },
-        controlsHeaderTitle: {
-          fontSize: "14px",
-          fontWeight: "700",
-          color: theme.textPrimary,
-          display: "flex",
-          alignItems: "center",
-          gap: "8px"
-        },
-        controlsHeaderChevron: { fontSize: "12px", color: theme.textTertiary },
-        controlsContent: { padding: "18px", overflowY: "visible" },
-        controlsRow: {
-          display: "flex",
-          flexWrap: "wrap",
-          gap: "20px",
-          alignItems: "end"
-        },
-        controlGroup: {
-          display: "flex",
-          flexDirection: "column",
-          minWidth: "140px",
-          flex: "1 1 auto"
-        },
-        controlGroupCompact: {
-          display: "flex",
-          flexDirection: "row",
-          alignItems: "center",
-          gap: "8px",
-          flex: "1 1 auto"
-        },
-        label: {
-          fontSize: "13px",
-          fontWeight: "normal",
-          color: theme.textPrimary,
-          marginBottom: "6px"
-        },
-        labelCompact: {
-          fontSize: "12px",
-          fontWeight: "500",
-          color: theme.textSecondary,
-          marginBottom: "0",
-          marginRight: "4px",
+          border: `1px solid ${isDarkMode ? "rgba(99, 102, 241, 0.5)" : "rgba(99, 102, 241, 0.5)"}`,
+          background: isDarkMode ? "rgba(99, 102, 241, 0.2)" : "rgba(99, 102, 241, 0.1)",
+          color: isDarkMode ? "#a5b4fc" : "#4338ca",
+          fontWeight: 600,
           whiteSpace: "nowrap"
-        },
-        resetButton: {
-          backgroundColor: "#ef4444",
-          color: "white",
-          whiteSpace: "nowrap",
+        }
+      },
+      "Connect to Database"
+    ))));
+  }
+
+  // src/styles.js
+  function buildStaticStyles(theme, isDarkMode, showDataSummary) {
+    return {
+      base: {
+        button: {
           padding: "6px 12px",
           border: "none",
           borderRadius: "6px",
           fontSize: "12px",
           fontWeight: "500",
-          cursor: "pointer"
+          cursor: "pointer",
+          transition: "all 0.15s ease"
         },
-        filterSearchContainer: { position: "relative", minWidth: "200px" },
-        filterSearchInput: {
-          width: "100%",
-          outline: "none",
+        input: {
           padding: "6px 10px",
           border: `1px solid ${theme.borderSecondary}`,
           borderRadius: "6px",
@@ -3127,909 +3425,1150 @@ var __app = (() => {
           backgroundColor: theme.bgPrimary,
           transition: "all 0.15s ease"
         },
-        filterSuggestionItem: {
-          display: "flex",
-          alignItems: "center",
-          padding: "8px 12px",
-          cursor: "pointer",
-          borderBottom: `1px solid ${theme.bgQuaternary}`
-        },
-        filterSuggestionName: {
-          fontSize: "13px",
-          color: theme.textPrimary,
-          fontWeight: "500",
-          cursor: "pointer",
-          userSelect: "none"
-        },
-        filterGroupHeader: {
-          padding: "8px 12px",
-          backgroundColor: theme.bgTertiary,
-          fontSize: "11px",
-          color: theme.textTertiary,
-          fontWeight: "600",
-          textTransform: "uppercase",
-          letterSpacing: "0.05em",
-          borderBottom: `1px solid ${theme.borderPrimary}`
-        },
-        mainContent: {
-          display: "flex",
-          gap: "12px",
-          alignItems: "flex-start",
-          position: "relative"
-        },
-        leftPanel: {
-          display: "flex",
-          flexDirection: "column",
-          minWidth: "300px",
-          maxWidth: "350px"
-        },
-        statBoxLeft: {
-          display: "flex",
-          flexDirection: "column",
-          flex: "1 1 0",
-          position: "relative",
-          zIndex: 1
-        },
-        statBoxRight: {
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "flex-end",
-          justifyContent: "flex-start",
-          gap: "12px",
-          minWidth: "130px",
-          position: "relative",
-          zIndex: 1
-        },
-        statBoxActive: {
-          border: "none",
-          backgroundColor: isDarkMode ? "rgba(129, 140, 248, 0.15)" : theme.statBoxActiveBg,
-          transform: "translateY(-2px)",
-          boxShadow: isDarkMode ? `0 4px 16px rgba(129, 140, 248, 0.4), 0 0 0 1px rgba(129, 140, 248, 0.5)` : `0 4px 12px rgba(99, 102, 241, 0.2), 0 0 0 1px ${theme.accentPrimary}`
-        },
-        statBoxInactive: { opacity: 0.9 },
-        statTitle: {
-          fontSize: "12px",
-          fontWeight: "600",
-          color: theme.textTertiary,
-          marginBottom: "8px",
-          textTransform: "uppercase",
-          letterSpacing: "0.08em",
-          display: "flex",
-          alignItems: "center",
-          gap: "6px"
-        },
-        statValue: {
-          fontSize: "28px",
-          fontWeight: "800",
-          color: theme.textPrimary,
-          lineHeight: "1.1",
-          marginBottom: "10px",
-          letterSpacing: "-0.02em"
-        },
-        statPeriod: {
-          fontSize: "11px",
-          color: theme.textQuaternary,
-          marginBottom: "0",
-          fontWeight: "500",
-          display: "flex",
-          alignItems: "center",
-          gap: "4px"
-        },
-        changeContainer: {
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "flex-end",
-          gap: "6px",
-          marginBottom: "0",
-          paddingLeft: "12px",
-          borderLeft: `2px solid ${theme.bgQuaternary}`
-        },
-        changeValue: {
-          fontSize: "15px",
-          fontWeight: "700",
-          display: "flex",
-          alignItems: "center",
-          gap: "4px"
-        },
-        changePercent: {
-          fontSize: "11px",
-          fontWeight: "600",
-          padding: "4px 10px",
-          borderRadius: "16px",
-          display: "inline-block"
-        },
-        undoButton: {
-          position: "absolute",
-          top: "12px",
-          left: "12px",
-          backgroundColor: theme.bgPrimary,
-          border: `1px solid ${theme.borderSecondary}`,
-          borderRadius: "6px",
-          padding: "4px 6px",
-          fontSize: "16px",
-          cursor: "pointer",
-          zIndex: 10,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          minWidth: "28px",
-          minHeight: "28px",
-          opacity: 1,
-          color: theme.textSecondary
-        },
-        undoButtonDisabled: { opacity: 0.4, cursor: "not-allowed" },
-        shareModal: {
-          position: "fixed",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: theme.overlayBg,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          zIndex: 1e4
-        },
-        shareModalContent: {
+        flexRow: { display: "flex", alignItems: "center", gap: "8px" },
+        flexCol: { display: "flex", flexDirection: "column" },
+        card: {
           backgroundColor: theme.bgPrimary,
           borderRadius: "8px",
-          padding: "24px",
-          maxWidth: "500px",
-          width: "90%",
-          boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)"
-        },
-        shareModalHeader: {
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: "20px"
-        },
-        shareModalTitle: {
-          fontSize: "20px",
-          fontWeight: "600",
-          color: theme.textPrimary
-        },
-        shareModalClose: {
-          background: "none",
           border: "none",
-          fontSize: "24px",
-          color: theme.textTertiary,
-          cursor: "pointer",
-          padding: "0",
-          width: "32px",
-          height: "32px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          borderRadius: "4px"
-        },
-        shareLinkContainer: { display: "flex", gap: "8px", marginBottom: "16px" },
-        shareLinkInput: {
-          flex: 1,
-          padding: "10px 12px",
-          border: `1px solid ${theme.borderSecondary}`,
-          borderRadius: "6px",
-          fontSize: "14px",
-          fontFamily: "monospace",
-          backgroundColor: theme.bgTertiary,
-          color: theme.textSecondary
-        },
-        shareCopyButton: {
-          padding: "10px 20px",
-          backgroundColor: theme.accentPrimary,
-          color: "white",
-          fontSize: "14px",
-          border: "none",
-          borderRadius: "6px",
-          fontWeight: "500",
-          cursor: "pointer"
-        },
-        shareInstructions: {
-          fontSize: "14px",
-          color: theme.textTertiary,
-          lineHeight: "1.5"
-        },
-        shareCodeSection: { marginBottom: "24px" },
-        shareCodeLabel: {
-          fontSize: "12px",
-          fontWeight: "500",
-          color: theme.textTertiary,
-          marginBottom: "8px",
-          display: "block"
-        },
-        pasteCodeSection: {
-          marginTop: "24px",
-          paddingTop: "24px",
-          borderTop: `1px solid ${theme.borderPrimary}`
-        },
-        pasteCodeInput: {
-          width: "100%",
-          padding: "10px 12px",
-          border: `1px solid ${theme.borderSecondary}`,
-          borderRadius: "6px",
-          fontSize: "14px",
-          fontFamily: "monospace",
-          backgroundColor: theme.bgTertiary,
-          color: theme.textSecondary,
-          marginBottom: "8px"
-        },
-        pasteCodeError: {
-          fontSize: "12px",
-          color: theme.dangerText,
-          marginBottom: "8px"
-        },
-        shareLoadButton: {
-          padding: "10px 20px",
-          backgroundColor: theme.success,
-          color: "white",
-          fontSize: "14px",
-          width: "100%",
-          border: "none",
-          borderRadius: "6px",
-          fontWeight: "500",
-          cursor: "pointer"
-        },
-        topXControl: {
-          position: "absolute",
-          top: "12px",
-          right: "12px",
-          backgroundColor: theme.bgPrimary,
-          border: `1px solid ${theme.borderSecondary}`,
-          borderRadius: "8px",
-          padding: "8px 12px",
-          fontSize: "13px",
-          cursor: "pointer",
-          zIndex: 10,
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-          minHeight: "40px",
-          color: theme.textSecondary
-        },
-        topXControlDropdown: {
-          position: "absolute",
-          top: "100%",
-          right: "0",
-          marginTop: "8px",
-          backgroundColor: theme.bgPrimary,
-          border: `1px solid ${theme.borderSecondary}`,
-          borderRadius: "8px",
-          minWidth: "280px",
-          maxWidth: "400px",
-          maxHeight: "500px",
-          overflowY: "auto",
-          zIndex: 1e3,
-          padding: "12px"
-        },
-        topXControlHeader: {
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: "12px",
-          paddingBottom: "8px",
-          borderBottom: `1px solid ${theme.borderPrimary}`
-        },
-        topXControlTitle: {
-          fontSize: "14px",
-          fontWeight: "600",
-          color: theme.textSecondary
-        },
-        topXModeToggle: {
-          display: "flex",
-          gap: "4px",
-          backgroundColor: theme.bgQuaternary,
-          padding: "4px",
-          borderRadius: "6px",
-          marginBottom: "12px"
-        },
-        topXInput: {
-          width: "100%",
-          padding: "6px 8px",
-          border: `1px solid ${theme.borderSecondary}`,
-          borderRadius: "4px",
-          fontSize: "13px",
-          marginBottom: "12px",
-          backgroundColor: theme.bgPrimary,
-          color: theme.textSecondary
-        },
-        categorySelectionList: {
-          display: "flex",
-          flexDirection: "column",
-          gap: "4px",
-          maxHeight: "300px",
-          overflowY: "auto"
-        },
-        categorySelectionItem: {
-          display: "flex",
-          alignItems: "center",
-          padding: "6px 8px",
-          borderRadius: "4px",
-          cursor: "pointer",
-          color: theme.textSecondary
-        },
-        categoryCheckbox: {
-          width: "16px",
-          height: "16px",
-          marginRight: "8px",
-          cursor: "pointer",
-          accentColor: theme.accentPrimary
-        },
-        advancedFiltersHeader: {
-          padding: "24px 24px 20px",
-          borderBottom: `1px solid ${isDarkMode ? "rgba(75, 85, 99, 0.2)" : "rgba(229, 231, 235, 0.5)"}`,
-          backgroundColor: theme.bgTertiary,
-          position: "sticky",
-          top: 0,
-          zIndex: 10
-        },
-        advancedFiltersTitle: {
-          fontSize: "18px",
-          fontWeight: "600",
-          color: theme.textSecondary,
-          margin: "0",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between"
-        },
-        closeButton: {
-          background: "none",
-          border: "none",
-          fontSize: "24px",
-          color: theme.textTertiary,
-          cursor: "pointer",
-          padding: "0",
-          width: "32px",
-          height: "32px",
-          borderRadius: "6px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center"
-        },
-        advancedFiltersContent: { padding: "24px" },
-        filterSection: { marginBottom: "24px" },
-        sectionTitle: {
-          fontSize: "14px",
-          fontWeight: "600",
-          color: theme.textSecondary,
-          marginBottom: "16px",
-          textTransform: "uppercase",
-          letterSpacing: "0.05em",
-          borderBottom: `1px solid ${isDarkMode ? "rgba(75, 85, 99, 0.3)" : "rgba(229, 231, 235, 0.6)"}`,
-          paddingBottom: "8px"
-        },
-        modernSelect: {
-          width: "100%",
-          padding: "8px 12px",
-          border: `1px solid ${theme.borderSecondary}`,
-          borderRadius: "8px",
-          fontSize: "14px",
-          color: theme.textSecondary,
-          backgroundColor: theme.bgPrimary,
-          cursor: "pointer",
-          appearance: "none",
-          backgroundImage: `url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6,9 12,15 18,9'%3e%3c/polyline%3e%3c/svg%3e")`,
-          backgroundRepeat: "no-repeat",
-          backgroundPosition: "right 12px center",
-          backgroundSize: "16px",
-          paddingRight: "48px"
-        },
-        modernInput: {
-          width: "100%",
-          padding: "8px 12px",
-          border: `1px solid ${theme.borderSecondary}`,
-          borderRadius: "8px",
-          fontSize: "14px",
-          color: theme.textSecondary,
-          backgroundColor: theme.bgPrimary,
-          boxSizing: "border-box"
-        },
-        inputGroup: { display: "flex", flexDirection: "column", gap: "8px" },
-        modernLabel: {
-          fontSize: "13px",
-          fontWeight: "500",
-          color: theme.textTertiary,
-          marginBottom: "6px"
-        },
-        checkboxContainer: {
-          border: `1px solid ${isDarkMode ? "rgba(75, 85, 99, 0.3)" : "rgba(229, 231, 235, 0.6)"}`,
-          borderRadius: "8px",
-          padding: "8px",
-          backgroundColor: theme.bgPrimary,
-          maxHeight: "200px",
-          overflowY: "auto"
-        },
-        checkboxItem: {
-          display: "flex",
-          alignItems: "center",
-          padding: "6px 8px",
-          cursor: "pointer",
-          borderRadius: "4px"
-        },
-        checkboxInput: {
-          width: "16px",
-          height: "16px",
-          marginRight: "8px",
-          cursor: "pointer",
-          accentColor: theme.accentPrimary
-        },
-        checkboxLabel: {
-          fontSize: "13px",
-          color: theme.textSecondary,
-          cursor: "pointer",
-          userSelect: "none"
-        },
-        filterDropdown: {
-          border: `1px solid ${isDarkMode ? "rgba(75, 85, 99, 0.3)" : "rgba(229, 231, 235, 0.6)"}`,
-          borderRadius: "8px",
-          backgroundColor: theme.bgPrimary,
-          marginBottom: "8px"
-        },
-        filterDropdownHeader: {
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "10px 12px",
-          cursor: "pointer",
-          borderRadius: "6px"
-        },
-        filterDropdownTitle: {
-          fontSize: "13px",
-          fontWeight: "500",
-          color: theme.textSecondary,
-          display: "flex",
-          alignItems: "center",
-          gap: "8px"
-        },
-        filterDropdownChevron: { fontSize: "12px", color: theme.textTertiary },
-        filterDropdownContent: {
-          maxHeight: "200px",
-          overflowY: "auto",
-          padding: "8px",
-          borderTop: `1px solid ${theme.borderPrimary}`
-        },
-        filterSelectedCount: {
-          fontSize: "11px",
-          color: theme.accentPrimary,
-          fontWeight: "600",
-          marginLeft: "4px"
-        },
-        queryInputGroup: {
-          display: "flex",
-          flexDirection: "column",
-          gap: "4px",
-          position: "relative"
-        },
-        queryLabelContainer: {
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: "10px",
-          marginBottom: "4px"
-        },
-        queryLabel: {
-          fontSize: "20px",
-          fontWeight: "600",
-          textAlign: "center",
-          letterSpacing: "-0.02em",
-          background: "linear-gradient(135deg, #4c51bf 0%, #5b21b6 25%, #a855f7 50%, #2563eb 75%, #0891b2 100%)",
-          WebkitBackgroundClip: "text",
-          WebkitTextFillColor: "transparent",
-          backgroundClip: "text",
-          fontFamily: "'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif",
-          position: "relative"
-        },
-        queryTooltipIcon: {
-          position: "relative",
-          cursor: "pointer",
-          fontSize: "12px",
-          color: "#9ca3af",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          width: "16px",
-          height: "16px"
-        },
-        queryTooltip: {
-          position: "absolute",
-          top: "calc(100% + 8px)",
-          left: "50%",
-          transform: "translateX(-50%)",
-          padding: "10px 14px",
-          backgroundColor: theme.bgPrimary,
-          color: theme.textSecondary,
-          fontSize: "11px",
-          borderRadius: "8px",
-          zIndex: 1e3,
-          pointerEvents: "none",
-          textAlign: "left",
-          lineHeight: "1.5",
-          border: `1px solid ${theme.borderPrimary}`,
-          fontFamily: "'Inter', 'Segoe UI', sans-serif",
-          width: "320px",
-          maxWidth: "320px",
-          wordWrap: "break-word",
-          whiteSpace: "normal"
-        },
-        queryTooltipArrow: {
-          position: "absolute",
-          top: "-6px",
-          left: "50%",
-          transform: "translateX(-50%)",
-          width: "0",
-          height: "0",
-          borderLeft: "6px solid transparent",
-          borderRight: "6px solid transparent",
-          borderBottom: `6px solid ${theme.bgPrimary}`
-        },
-        queryInputWrapper: { display: "flex", gap: "8px", alignItems: "stretch" },
-        queryInput: {
-          flex: 1,
-          padding: "12px 16px",
-          border: `1px solid ${isDarkMode ? "rgba(148, 163, 184, 0.2)" : theme.borderSecondary}`,
-          borderRadius: "10px",
-          fontSize: "14px",
-          color: theme.textSecondary,
-          backgroundColor: isDarkMode ? "rgba(51, 65, 85, 0.5)" : theme.bgPrimary,
-          outline: "none",
-          fontFamily: "'Inter', 'Segoe UI', sans-serif",
-          boxShadow: isDarkMode ? "inset 0 1px 3px rgba(0, 0, 0, 0.3)" : "inset 0 1px 2px rgba(0, 0, 0, 0.05)"
-        },
-        queryButton: {
-          padding: "10px 24px",
-          backgroundColor: theme.accentPrimary,
-          color: "white",
-          fontSize: "14px",
-          fontWeight: "600",
-          whiteSpace: "nowrap",
-          border: "none",
-          borderRadius: "6px",
-          cursor: "pointer"
-        },
-        queryButtonDisabled: {
-          backgroundColor: theme.borderSecondary,
-          color: theme.textQuaternary,
-          cursor: "not-allowed"
-        },
-        luckyButton: {
-          padding: "10px 20px",
-          backgroundColor: theme.bgPrimary,
-          color: theme.accentPrimary,
-          fontSize: "14px",
-          fontWeight: "600",
-          whiteSpace: "nowrap",
-          border: `2px solid ${theme.accentPrimary}`,
-          borderRadius: "6px",
-          cursor: "pointer"
-        },
-        queryHint: {
-          fontSize: "11px",
-          color: theme.textTertiary,
-          fontStyle: "italic",
-          marginTop: "4px"
-        },
-        modernResetButton: {
-          width: "100%",
-          padding: "8px 12px",
-          backgroundColor: theme.danger,
-          color: "white",
-          fontSize: "14px",
-          fontWeight: "600",
-          border: "none",
-          borderRadius: "6px",
-          cursor: "pointer"
-        },
-        insightsTabsContainer: {
-          display: "flex",
-          gap: "6px",
-          backgroundColor: "transparent",
-          padding: "0",
-          borderRadius: "0",
-          border: "none"
-        },
-        insightsTab: {
-          flex: 1,
-          padding: "10px 16px",
-          borderRadius: "4px",
-          fontWeight: "600",
-          backgroundColor: "transparent",
-          color: theme.textTertiary,
-          display: "flex",
-          alignItems: "center",
-          gap: "6px",
-          border: "none",
-          fontSize: "12px",
-          cursor: "pointer"
-        },
-        insightsTabActive: {
-          backgroundColor: theme.accentPrimary,
-          color: "white"
-        },
-        clickForInsightsButton: {
-          flex: 1,
-          padding: "14px 20px",
-          borderRadius: "8px",
-          fontWeight: "700",
-          backgroundColor: theme.accentPrimary,
-          color: "white",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: "8px",
-          border: "none",
-          fontSize: "14px",
-          cursor: "pointer",
-          boxShadow: "none",
-          transition: "all 0.2s ease"
-        },
-        tabCount: {
-          fontSize: "10px",
-          color: "inherit",
-          backgroundColor: "rgba(255,255,255,0.2)",
-          padding: "2px 6px",
-          borderRadius: "8px"
-        },
-        insightsContext: {
-          fontSize: "13px",
-          color: theme.accentPrimary,
-          fontWeight: "600",
-          marginBottom: "4px"
-        },
-        insightsSubtitle: {
-          fontSize: "12px",
-          color: theme.textTertiary,
-          fontWeight: "400",
-          marginBottom: "20px"
-        },
-        categorySection: { marginBottom: "16px" },
-        categoryTitle: {
-          fontSize: "14px",
-          fontWeight: "600",
-          color: theme.textSecondary,
-          marginBottom: "12px",
-          paddingBottom: "6px",
-          borderBottom: `1px solid ${isDarkMode ? "rgba(75, 85, 99, 0.2)" : "rgba(229, 231, 235, 0.5)"}`,
-          display: "flex",
-          alignItems: "center",
-          gap: "6px"
-        },
-        insightsList: { display: "flex", flexDirection: "column", gap: "8px" },
-        insightItem: {
-          padding: "12px 14px",
-          backgroundColor: isDarkMode ? "rgba(148, 163, 184, 0.08)" : theme.bgSecondary,
-          borderRadius: "8px",
-          border: "none",
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "flex-start",
-          gap: "10px",
-          transition: "all 0.15s ease"
-        },
-        insightNumber: {
-          fontSize: "12px",
-          fontWeight: "700",
-          color: theme.accentPrimary,
-          minWidth: "16px"
-        },
-        insightText: {
-          fontSize: "12px",
-          color: theme.textSecondary,
-          lineHeight: "1.4",
-          flex: 1
-        },
-        summaryTitle: {
-          fontSize: "16px",
-          fontWeight: "600",
-          color: theme.textSecondary,
-          marginBottom: showDataSummary ? "16px" : "0px",
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-          userSelect: "none"
-        },
-        summaryGrid: {
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-          gap: "12px"
-        },
-        summaryItem: { fontSize: "13px", color: theme.textTertiary },
-        flexBetween: {
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-          justifyContent: "space-between"
-        },
-        flexWrap: {
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-          flexWrap: "wrap",
-          flex: "1 1 auto"
-        },
-        flexGap8: { display: "flex", alignItems: "center", gap: "8px" },
-        block: { display: "block" },
-        fontWeight600: {
-          fontWeight: "600",
-          marginBottom: "4px",
-          color: theme.textPrimary
-        },
-        textGray: { color: theme.textTertiary },
-        marginTop12: { marginTop: "12px" },
-        guideOverlay: {
-          position: "fixed",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: theme.overlayBg,
-          zIndex: 2e3,
-          pointerEvents: "auto"
-        },
-        guideHighlight: {
-          position: "fixed",
-          border: `3px solid ${theme.accentPrimary}`,
-          borderRadius: "8px",
-          boxShadow: `0 0 0 9999px ${theme.overlayBg}`,
-          pointerEvents: "none",
-          zIndex: 2001,
-          boxSizing: "border-box"
-        },
-        guideTooltip: {
-          position: "fixed",
-          backgroundColor: theme.bgPrimary,
-          borderRadius: "12px",
-          zIndex: 2002,
-          maxWidth: "400px",
-          padding: "16px",
-          fontFamily: "'Inter', 'Segoe UI', sans-serif",
-          pointerEvents: "auto"
-        },
-        guideTooltipHeader: {
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
-          marginBottom: "8px"
-        },
-        guideTooltipTitle: {
-          fontSize: "16px",
-          fontWeight: "600",
-          color: theme.textPrimary,
-          marginBottom: "4px"
-        },
-        guideTooltipStep: {
-          fontSize: "12px",
-          color: theme.textTertiary,
-          fontWeight: "500"
-        },
-        guideTooltipDescription: {
-          fontSize: "14px",
-          color: theme.textSecondary,
-          lineHeight: "1.5",
-          marginBottom: "12px"
-        },
-        guideTooltipButtons: {
-          display: "flex",
-          gap: "8px",
-          justifyContent: "flex-end"
-        },
-        guideTooltipButton: {
-          padding: "6px 12px",
-          borderRadius: "6px",
-          border: "none",
-          fontSize: "13px",
-          fontWeight: "500",
-          cursor: "pointer"
-        },
-        guideTooltipButtonPrimary: {
-          backgroundColor: theme.accentPrimary,
-          color: "white"
-        },
-        guideTooltipButtonSecondary: {
-          backgroundColor: theme.bgQuaternary,
-          color: theme.textSecondary
-        },
-        guideTooltipClose: {
-          background: "none",
-          border: "none",
-          fontSize: "20px",
-          color: theme.textTertiary,
-          cursor: "pointer",
-          padding: "0",
-          width: "24px",
-          height: "24px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          borderRadius: "4px"
-        },
-        helpButton: {
-          position: "absolute",
-          top: "-12px",
-          right: "12px",
-          padding: "6px 12px",
-          borderRadius: "16px",
-          backgroundColor: theme.accentPrimary,
-          color: "white",
-          border: "none",
-          fontSize: "12px",
-          fontWeight: "600",
-          cursor: "pointer",
-          zIndex: 1500,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          whiteSpace: "nowrap",
-          boxShadow: "0 2px 4px rgba(0,0,0,0.1)"
-        },
-        // Optimization 6: Hoisted styles for .map() loops
-        checkboxItemSelected: {
-          display: "flex",
-          alignItems: "center",
-          padding: "6px 8px",
-          cursor: "pointer",
-          borderRadius: "4px",
-          fontWeight: "600",
-          backgroundColor: "#f0f9ff"
-        },
-        checkboxItemUnselected: {
-          display: "flex",
-          alignItems: "center",
-          padding: "6px 8px",
-          cursor: "pointer",
-          borderRadius: "4px",
-          backgroundColor: "transparent"
-        },
-        filterSuggestionItemSelected: {
-          display: "flex",
-          alignItems: "center",
-          padding: "8px 12px",
-          cursor: "pointer",
-          borderBottom: `1px solid ${theme.bgQuaternary}`,
-          backgroundColor: isDarkMode ? "rgba(129, 140, 248, 0.15)" : "#f0f9ff"
-        },
-        filterSuggestionItemUnselected: {
-          display: "flex",
-          alignItems: "center",
-          padding: "8px 12px",
-          cursor: "pointer",
-          borderBottom: `1px solid ${theme.bgQuaternary}`,
-          backgroundColor: isDarkMode ? "rgba(51, 65, 85, 0.3)" : "white"
-        },
-        categorySelectionItemSelected: {
-          display: "flex",
-          alignItems: "center",
-          padding: "6px 8px",
-          borderRadius: "4px",
-          cursor: "pointer",
-          color: theme.textSecondary,
-          backgroundColor: "#f0f9ff"
-        },
-        categorySelectionItemUnselected: {
-          display: "flex",
-          alignItems: "center",
-          padding: "6px 8px",
-          borderRadius: "4px",
-          cursor: "pointer",
-          color: theme.textSecondary,
-          backgroundColor: "transparent"
-        },
-        categoryLabelText: { fontSize: "13px", color: "#374151" },
-        noCategoriesFound: {
-          padding: "12px",
-          textAlign: "center",
-          color: "#6b7280",
-          fontSize: "13px"
-        },
-        radioLabel: {
-          display: "flex",
-          alignItems: "center",
-          cursor: "pointer",
-          fontSize: "13px"
-        },
-        marginRight6: { marginRight: "6px" },
-        marginBottom16: { marginBottom: "16px" },
-        flexGap12Mt8: { display: "flex", gap: "12px", marginTop: "8px" }
-      }),
+          boxShadow: isDarkMode ? "0 1px 3px rgba(0, 0, 0, 0.3)" : "0 1px 2px rgba(0, 0, 0, 0.05)"
+        }
+      },
+      buttonGroup: {
+        display: "flex",
+        gap: "4px",
+        backgroundColor: theme.bgQuaternary,
+        padding: "4px",
+        borderRadius: "8px",
+        border: `1px solid ${theme.borderSecondary}`
+      },
+      buttonGroupBtn: {
+        padding: "4px 10px",
+        borderRadius: "4px",
+        backgroundColor: "transparent",
+        color: theme.textTertiary,
+        border: "none",
+        fontSize: "12px",
+        fontWeight: "500",
+        cursor: "pointer",
+        transition: "all 0.15s ease"
+      },
+      buttonGroupBtnActive: {
+        backgroundColor: theme.accentPrimary,
+        color: "white"
+      },
+      topSection: {
+        display: "flex",
+        flexDirection: "column",
+        gap: "12px",
+        marginBottom: "12px"
+      },
+      statBoxContainer: {
+        display: "flex",
+        gap: "12px",
+        flexWrap: "nowrap",
+        width: "100%"
+      },
+      controlsHeader: {
+        display: "flex",
+        alignItems: "center",
+        padding: "14px 18px",
+        backgroundColor: "transparent",
+        borderBottom: `1px solid ${isDarkMode ? "rgba(148, 163, 184, 0.1)" : "rgba(229, 231, 235, 0.5)"}`,
+        gap: "16px",
+        flexWrap: "wrap"
+      },
+      controlsHeaderTitle: {
+        fontSize: "14px",
+        fontWeight: "700",
+        color: theme.textPrimary,
+        display: "flex",
+        alignItems: "center",
+        gap: "8px"
+      },
+      controlsHeaderChevron: { fontSize: "12px", color: theme.textTertiary },
+      controlsContent: { padding: "18px", overflowY: "visible" },
+      controlsRow: {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "20px",
+        alignItems: "end"
+      },
+      controlGroup: {
+        display: "flex",
+        flexDirection: "column",
+        minWidth: "140px",
+        flex: "1 1 auto"
+      },
+      controlGroupCompact: {
+        display: "flex",
+        flexDirection: "row",
+        alignItems: "center",
+        gap: "8px",
+        flex: "1 1 auto"
+      },
+      label: {
+        fontSize: "13px",
+        fontWeight: "normal",
+        color: theme.textPrimary,
+        marginBottom: "6px"
+      },
+      labelCompact: {
+        fontSize: "12px",
+        fontWeight: "500",
+        color: theme.textSecondary,
+        marginBottom: "0",
+        marginRight: "4px",
+        whiteSpace: "nowrap"
+      },
+      resetButton: {
+        backgroundColor: "#ef4444",
+        color: "white",
+        whiteSpace: "nowrap",
+        padding: "6px 12px",
+        border: "none",
+        borderRadius: "6px",
+        fontSize: "12px",
+        fontWeight: "500",
+        cursor: "pointer"
+      },
+      filterSearchContainer: { position: "relative", minWidth: "200px" },
+      filterSearchInput: {
+        width: "100%",
+        outline: "none",
+        padding: "6px 10px",
+        border: `1px solid ${theme.borderSecondary}`,
+        borderRadius: "6px",
+        fontSize: "12px",
+        color: theme.textSecondary,
+        backgroundColor: theme.bgPrimary,
+        transition: "all 0.15s ease"
+      },
+      filterSuggestionItem: {
+        display: "flex",
+        alignItems: "center",
+        padding: "8px 12px",
+        cursor: "pointer",
+        borderBottom: `1px solid ${theme.bgQuaternary}`
+      },
+      filterSuggestionName: {
+        fontSize: "13px",
+        color: theme.textPrimary,
+        fontWeight: "500",
+        cursor: "pointer",
+        userSelect: "none"
+      },
+      filterGroupHeader: {
+        padding: "8px 12px",
+        backgroundColor: theme.bgTertiary,
+        fontSize: "11px",
+        color: theme.textTertiary,
+        fontWeight: "600",
+        textTransform: "uppercase",
+        letterSpacing: "0.05em",
+        borderBottom: `1px solid ${theme.borderPrimary}`
+      },
+      mainContent: {
+        display: "flex",
+        gap: "12px",
+        alignItems: "flex-start",
+        position: "relative"
+      },
+      leftPanel: {
+        display: "flex",
+        flexDirection: "column",
+        minWidth: "300px",
+        maxWidth: "350px"
+      },
+      statBoxLeft: {
+        display: "flex",
+        flexDirection: "column",
+        flex: "1 1 0",
+        position: "relative",
+        zIndex: 1
+      },
+      statBoxRight: {
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-end",
+        justifyContent: "flex-start",
+        gap: "12px",
+        minWidth: "130px",
+        position: "relative",
+        zIndex: 1
+      },
+      statBoxActive: {
+        border: "none",
+        backgroundColor: isDarkMode ? "rgba(129, 140, 248, 0.15)" : theme.statBoxActiveBg,
+        transform: "translateY(-2px)",
+        boxShadow: isDarkMode ? `0 4px 16px rgba(129, 140, 248, 0.4), 0 0 0 1px rgba(129, 140, 248, 0.5)` : `0 4px 12px rgba(99, 102, 241, 0.2), 0 0 0 1px ${theme.accentPrimary}`
+      },
+      statBoxInactive: { opacity: 0.9 },
+      statTitle: {
+        fontSize: "12px",
+        fontWeight: "600",
+        color: theme.textTertiary,
+        marginBottom: "8px",
+        textTransform: "uppercase",
+        letterSpacing: "0.08em",
+        display: "flex",
+        alignItems: "center",
+        gap: "6px"
+      },
+      statValue: {
+        fontSize: "28px",
+        fontWeight: "800",
+        color: theme.textPrimary,
+        lineHeight: "1.1",
+        marginBottom: "10px",
+        letterSpacing: "-0.02em"
+      },
+      statPeriod: {
+        fontSize: "11px",
+        color: theme.textQuaternary,
+        marginBottom: "0",
+        fontWeight: "500",
+        display: "flex",
+        alignItems: "center",
+        gap: "4px"
+      },
+      changeContainer: {
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-end",
+        gap: "6px",
+        marginBottom: "0",
+        paddingLeft: "12px",
+        borderLeft: `2px solid ${theme.bgQuaternary}`
+      },
+      changeValue: {
+        fontSize: "15px",
+        fontWeight: "700",
+        display: "flex",
+        alignItems: "center",
+        gap: "4px"
+      },
+      changePercent: {
+        fontSize: "11px",
+        fontWeight: "600",
+        padding: "4px 10px",
+        borderRadius: "16px",
+        display: "inline-block"
+      },
+      undoButton: {
+        position: "absolute",
+        top: "12px",
+        left: "12px",
+        backgroundColor: theme.bgPrimary,
+        border: `1px solid ${theme.borderSecondary}`,
+        borderRadius: "6px",
+        padding: "4px 6px",
+        fontSize: "16px",
+        cursor: "pointer",
+        zIndex: 10,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minWidth: "28px",
+        minHeight: "28px",
+        opacity: 1,
+        color: theme.textSecondary
+      },
+      undoButtonDisabled: { opacity: 0.4, cursor: "not-allowed" },
+      shareModal: {
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: theme.overlayBg,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1e4
+      },
+      shareModalContent: {
+        backgroundColor: theme.bgPrimary,
+        borderRadius: "8px",
+        padding: "24px",
+        maxWidth: "500px",
+        width: "90%",
+        boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)"
+      },
+      shareModalHeader: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        marginBottom: "20px"
+      },
+      shareModalTitle: {
+        fontSize: "20px",
+        fontWeight: "600",
+        color: theme.textPrimary
+      },
+      shareModalClose: {
+        background: "none",
+        border: "none",
+        fontSize: "24px",
+        color: theme.textTertiary,
+        cursor: "pointer",
+        padding: "0",
+        width: "32px",
+        height: "32px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: "4px"
+      },
+      shareLinkContainer: { display: "flex", gap: "8px", marginBottom: "16px" },
+      shareLinkInput: {
+        flex: 1,
+        padding: "10px 12px",
+        border: `1px solid ${theme.borderSecondary}`,
+        borderRadius: "6px",
+        fontSize: "14px",
+        fontFamily: "monospace",
+        backgroundColor: theme.bgTertiary,
+        color: theme.textSecondary
+      },
+      shareCopyButton: {
+        padding: "10px 20px",
+        backgroundColor: theme.accentPrimary,
+        color: "white",
+        fontSize: "14px",
+        border: "none",
+        borderRadius: "6px",
+        fontWeight: "500",
+        cursor: "pointer"
+      },
+      shareInstructions: {
+        fontSize: "14px",
+        color: theme.textTertiary,
+        lineHeight: "1.5"
+      },
+      shareCodeSection: { marginBottom: "24px" },
+      shareCodeLabel: {
+        fontSize: "12px",
+        fontWeight: "500",
+        color: theme.textTertiary,
+        marginBottom: "8px",
+        display: "block"
+      },
+      pasteCodeSection: {
+        marginTop: "24px",
+        paddingTop: "24px",
+        borderTop: `1px solid ${theme.borderPrimary}`
+      },
+      pasteCodeInput: {
+        width: "100%",
+        padding: "10px 12px",
+        border: `1px solid ${theme.borderSecondary}`,
+        borderRadius: "6px",
+        fontSize: "14px",
+        fontFamily: "monospace",
+        backgroundColor: theme.bgTertiary,
+        color: theme.textSecondary,
+        marginBottom: "8px"
+      },
+      pasteCodeError: {
+        fontSize: "12px",
+        color: theme.dangerText,
+        marginBottom: "8px"
+      },
+      shareLoadButton: {
+        padding: "10px 20px",
+        backgroundColor: theme.success,
+        color: "white",
+        fontSize: "14px",
+        width: "100%",
+        border: "none",
+        borderRadius: "6px",
+        fontWeight: "500",
+        cursor: "pointer"
+      },
+      topXControl: {
+        position: "absolute",
+        top: "12px",
+        right: "12px",
+        backgroundColor: theme.bgPrimary,
+        border: `1px solid ${theme.borderSecondary}`,
+        borderRadius: "8px",
+        padding: "8px 12px",
+        fontSize: "13px",
+        cursor: "pointer",
+        zIndex: 10,
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        minHeight: "40px",
+        color: theme.textSecondary
+      },
+      topXControlDropdown: {
+        position: "absolute",
+        top: "100%",
+        right: "0",
+        marginTop: "8px",
+        backgroundColor: theme.bgPrimary,
+        border: `1px solid ${theme.borderSecondary}`,
+        borderRadius: "8px",
+        minWidth: "280px",
+        maxWidth: "400px",
+        maxHeight: "500px",
+        overflowY: "auto",
+        zIndex: 1e3,
+        padding: "12px"
+      },
+      topXControlHeader: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        marginBottom: "12px",
+        paddingBottom: "8px",
+        borderBottom: `1px solid ${theme.borderPrimary}`
+      },
+      topXControlTitle: {
+        fontSize: "14px",
+        fontWeight: "600",
+        color: theme.textSecondary
+      },
+      topXModeToggle: {
+        display: "flex",
+        gap: "4px",
+        backgroundColor: theme.bgQuaternary,
+        padding: "4px",
+        borderRadius: "6px",
+        marginBottom: "12px"
+      },
+      topXInput: {
+        width: "100%",
+        padding: "6px 8px",
+        border: `1px solid ${theme.borderSecondary}`,
+        borderRadius: "4px",
+        fontSize: "13px",
+        marginBottom: "12px",
+        backgroundColor: theme.bgPrimary,
+        color: theme.textSecondary
+      },
+      categorySelectionList: {
+        display: "flex",
+        flexDirection: "column",
+        gap: "4px",
+        maxHeight: "300px",
+        overflowY: "auto"
+      },
+      categorySelectionItem: {
+        display: "flex",
+        alignItems: "center",
+        padding: "6px 8px",
+        borderRadius: "4px",
+        cursor: "pointer",
+        color: theme.textSecondary
+      },
+      categoryCheckbox: {
+        width: "16px",
+        height: "16px",
+        marginRight: "8px",
+        cursor: "pointer",
+        accentColor: theme.accentPrimary
+      },
+      advancedFiltersHeader: {
+        padding: "24px 24px 20px",
+        borderBottom: `1px solid ${isDarkMode ? "rgba(75, 85, 99, 0.2)" : "rgba(229, 231, 235, 0.5)"}`,
+        backgroundColor: theme.bgTertiary,
+        position: "sticky",
+        top: 0,
+        zIndex: 10
+      },
+      advancedFiltersTitle: {
+        fontSize: "18px",
+        fontWeight: "600",
+        color: theme.textSecondary,
+        margin: "0",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between"
+      },
+      closeButton: {
+        background: "none",
+        border: "none",
+        fontSize: "24px",
+        color: theme.textTertiary,
+        cursor: "pointer",
+        padding: "0",
+        width: "32px",
+        height: "32px",
+        borderRadius: "6px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center"
+      },
+      advancedFiltersContent: { padding: "24px" },
+      filterSection: { marginBottom: "24px" },
+      sectionTitle: {
+        fontSize: "14px",
+        fontWeight: "600",
+        color: theme.textSecondary,
+        marginBottom: "16px",
+        textTransform: "uppercase",
+        letterSpacing: "0.05em",
+        borderBottom: `1px solid ${isDarkMode ? "rgba(75, 85, 99, 0.3)" : "rgba(229, 231, 235, 0.6)"}`,
+        paddingBottom: "8px"
+      },
+      modernSelect: {
+        width: "100%",
+        padding: "8px 12px",
+        border: `1px solid ${theme.borderSecondary}`,
+        borderRadius: "8px",
+        fontSize: "14px",
+        color: theme.textSecondary,
+        backgroundColor: theme.bgPrimary,
+        cursor: "pointer",
+        appearance: "none",
+        backgroundImage: `url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6,9 12,15 18,9'%3e%3c/polyline%3e%3c/svg%3e")`,
+        backgroundRepeat: "no-repeat",
+        backgroundPosition: "right 12px center",
+        backgroundSize: "16px",
+        paddingRight: "48px"
+      },
+      modernInput: {
+        width: "100%",
+        padding: "8px 12px",
+        border: `1px solid ${theme.borderSecondary}`,
+        borderRadius: "8px",
+        fontSize: "14px",
+        color: theme.textSecondary,
+        backgroundColor: theme.bgPrimary,
+        boxSizing: "border-box"
+      },
+      inputGroup: { display: "flex", flexDirection: "column", gap: "8px" },
+      modernLabel: {
+        fontSize: "13px",
+        fontWeight: "500",
+        color: theme.textTertiary,
+        marginBottom: "6px"
+      },
+      checkboxContainer: {
+        border: `1px solid ${isDarkMode ? "rgba(75, 85, 99, 0.3)" : "rgba(229, 231, 235, 0.6)"}`,
+        borderRadius: "8px",
+        padding: "8px",
+        backgroundColor: theme.bgPrimary,
+        maxHeight: "200px",
+        overflowY: "auto"
+      },
+      checkboxItem: {
+        display: "flex",
+        alignItems: "center",
+        padding: "6px 8px",
+        cursor: "pointer",
+        borderRadius: "4px"
+      },
+      checkboxInput: {
+        width: "16px",
+        height: "16px",
+        marginRight: "8px",
+        cursor: "pointer",
+        accentColor: theme.accentPrimary
+      },
+      checkboxLabel: {
+        fontSize: "13px",
+        color: theme.textSecondary,
+        cursor: "pointer",
+        userSelect: "none"
+      },
+      filterDropdown: {
+        border: `1px solid ${isDarkMode ? "rgba(75, 85, 99, 0.3)" : "rgba(229, 231, 235, 0.6)"}`,
+        borderRadius: "8px",
+        backgroundColor: theme.bgPrimary,
+        marginBottom: "8px"
+      },
+      filterDropdownHeader: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "10px 12px",
+        cursor: "pointer",
+        borderRadius: "6px"
+      },
+      filterDropdownTitle: {
+        fontSize: "13px",
+        fontWeight: "500",
+        color: theme.textSecondary,
+        display: "flex",
+        alignItems: "center",
+        gap: "8px"
+      },
+      filterDropdownChevron: { fontSize: "12px", color: theme.textTertiary },
+      filterDropdownContent: {
+        maxHeight: "200px",
+        overflowY: "auto",
+        padding: "8px",
+        borderTop: `1px solid ${theme.borderPrimary}`
+      },
+      filterSelectedCount: {
+        fontSize: "11px",
+        color: theme.accentPrimary,
+        fontWeight: "600",
+        marginLeft: "4px"
+      },
+      queryInputGroup: {
+        display: "flex",
+        flexDirection: "column",
+        gap: "4px",
+        position: "relative"
+      },
+      queryLabelContainer: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: "10px",
+        marginBottom: "4px"
+      },
+      queryLabel: {
+        fontSize: "20px",
+        fontWeight: "600",
+        textAlign: "center",
+        letterSpacing: "-0.02em",
+        background: "linear-gradient(135deg, #4c51bf 0%, #5b21b6 25%, #a855f7 50%, #2563eb 75%, #0891b2 100%)",
+        WebkitBackgroundClip: "text",
+        WebkitTextFillColor: "transparent",
+        backgroundClip: "text",
+        fontFamily: "'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif",
+        position: "relative"
+      },
+      queryTooltipIcon: {
+        position: "relative",
+        cursor: "pointer",
+        fontSize: "12px",
+        color: "#9ca3af",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: "16px",
+        height: "16px"
+      },
+      queryTooltip: {
+        position: "absolute",
+        top: "calc(100% + 8px)",
+        left: "50%",
+        transform: "translateX(-50%)",
+        padding: "10px 14px",
+        backgroundColor: theme.bgPrimary,
+        color: theme.textSecondary,
+        fontSize: "11px",
+        borderRadius: "8px",
+        zIndex: 1e3,
+        pointerEvents: "none",
+        textAlign: "left",
+        lineHeight: "1.5",
+        border: `1px solid ${theme.borderPrimary}`,
+        fontFamily: "'Inter', 'Segoe UI', sans-serif",
+        width: "320px",
+        maxWidth: "320px",
+        wordWrap: "break-word",
+        whiteSpace: "normal"
+      },
+      queryTooltipArrow: {
+        position: "absolute",
+        top: "-6px",
+        left: "50%",
+        transform: "translateX(-50%)",
+        width: "0",
+        height: "0",
+        borderLeft: "6px solid transparent",
+        borderRight: "6px solid transparent",
+        borderBottom: `6px solid ${theme.bgPrimary}`
+      },
+      queryInputWrapper: { display: "flex", gap: "8px", alignItems: "stretch" },
+      queryInput: {
+        flex: 1,
+        padding: "12px 16px",
+        border: `1px solid ${isDarkMode ? "rgba(148, 163, 184, 0.2)" : theme.borderSecondary}`,
+        borderRadius: "10px",
+        fontSize: "14px",
+        color: theme.textSecondary,
+        backgroundColor: isDarkMode ? "rgba(51, 65, 85, 0.5)" : theme.bgPrimary,
+        outline: "none",
+        fontFamily: "'Inter', 'Segoe UI', sans-serif",
+        boxShadow: isDarkMode ? "inset 0 1px 3px rgba(0, 0, 0, 0.3)" : "inset 0 1px 2px rgba(0, 0, 0, 0.05)"
+      },
+      queryButton: {
+        padding: "10px 24px",
+        backgroundColor: theme.accentPrimary,
+        color: "white",
+        fontSize: "14px",
+        fontWeight: "600",
+        whiteSpace: "nowrap",
+        border: "none",
+        borderRadius: "6px",
+        cursor: "pointer"
+      },
+      queryButtonDisabled: {
+        backgroundColor: theme.borderSecondary,
+        color: theme.textQuaternary,
+        cursor: "not-allowed"
+      },
+      luckyButton: {
+        padding: "10px 20px",
+        backgroundColor: theme.bgPrimary,
+        color: theme.accentPrimary,
+        fontSize: "14px",
+        fontWeight: "600",
+        whiteSpace: "nowrap",
+        border: `2px solid ${theme.accentPrimary}`,
+        borderRadius: "6px",
+        cursor: "pointer"
+      },
+      queryHint: {
+        fontSize: "11px",
+        color: theme.textTertiary,
+        fontStyle: "italic",
+        marginTop: "4px"
+      },
+      modernResetButton: {
+        width: "100%",
+        padding: "8px 12px",
+        backgroundColor: theme.danger,
+        color: "white",
+        fontSize: "14px",
+        fontWeight: "600",
+        border: "none",
+        borderRadius: "6px",
+        cursor: "pointer"
+      },
+      insightsTabsContainer: {
+        display: "flex",
+        gap: "6px",
+        backgroundColor: "transparent",
+        padding: "0",
+        borderRadius: "0",
+        border: "none"
+      },
+      insightsTab: {
+        flex: 1,
+        padding: "10px 16px",
+        borderRadius: "4px",
+        fontWeight: "600",
+        backgroundColor: "transparent",
+        color: theme.textTertiary,
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+        border: "none",
+        fontSize: "12px",
+        cursor: "pointer"
+      },
+      insightsTabActive: {
+        backgroundColor: theme.accentPrimary,
+        color: "white"
+      },
+      clickForInsightsButton: {
+        flex: 1,
+        padding: "14px 20px",
+        borderRadius: "8px",
+        fontWeight: "700",
+        backgroundColor: theme.accentPrimary,
+        color: "white",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: "8px",
+        border: "none",
+        fontSize: "14px",
+        cursor: "pointer",
+        boxShadow: "none",
+        transition: "all 0.2s ease"
+      },
+      tabCount: {
+        fontSize: "10px",
+        color: "inherit",
+        backgroundColor: "rgba(255,255,255,0.2)",
+        padding: "2px 6px",
+        borderRadius: "8px"
+      },
+      insightsContext: {
+        fontSize: "13px",
+        color: theme.accentPrimary,
+        fontWeight: "600",
+        marginBottom: "4px"
+      },
+      insightsSubtitle: {
+        fontSize: "12px",
+        color: theme.textTertiary,
+        fontWeight: "400",
+        marginBottom: "20px"
+      },
+      categorySection: { marginBottom: "16px" },
+      categoryTitle: {
+        fontSize: "14px",
+        fontWeight: "600",
+        color: theme.textSecondary,
+        marginBottom: "12px",
+        paddingBottom: "6px",
+        borderBottom: `1px solid ${isDarkMode ? "rgba(75, 85, 99, 0.2)" : "rgba(229, 231, 235, 0.5)"}`,
+        display: "flex",
+        alignItems: "center",
+        gap: "6px"
+      },
+      insightsList: { display: "flex", flexDirection: "column", gap: "8px" },
+      insightItem: {
+        padding: "12px 14px",
+        backgroundColor: isDarkMode ? "rgba(148, 163, 184, 0.08)" : theme.bgSecondary,
+        borderRadius: "8px",
+        border: "none",
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "flex-start",
+        gap: "10px",
+        transition: "all 0.15s ease"
+      },
+      insightNumber: {
+        fontSize: "12px",
+        fontWeight: "700",
+        color: theme.accentPrimary,
+        minWidth: "16px"
+      },
+      insightText: {
+        fontSize: "12px",
+        color: theme.textSecondary,
+        lineHeight: "1.4",
+        flex: 1
+      },
+      summaryTitle: {
+        fontSize: "16px",
+        fontWeight: "600",
+        color: theme.textSecondary,
+        marginBottom: showDataSummary ? "16px" : "0px",
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        userSelect: "none"
+      },
+      summaryGrid: {
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+        gap: "12px"
+      },
+      summaryItem: { fontSize: "13px", color: theme.textTertiary },
+      flexBetween: {
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        justifyContent: "space-between"
+      },
+      flexWrap: {
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        flexWrap: "wrap",
+        flex: "1 1 auto"
+      },
+      flexGap8: { display: "flex", alignItems: "center", gap: "8px" },
+      block: { display: "block" },
+      fontWeight600: {
+        fontWeight: "600",
+        marginBottom: "4px",
+        color: theme.textPrimary
+      },
+      textGray: { color: theme.textTertiary },
+      marginTop12: { marginTop: "12px" },
+      guideOverlay: {
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: theme.overlayBg,
+        zIndex: 2e3,
+        pointerEvents: "auto"
+      },
+      guideHighlight: {
+        position: "fixed",
+        border: `3px solid ${theme.accentPrimary}`,
+        borderRadius: "8px",
+        boxShadow: `0 0 0 9999px ${theme.overlayBg}`,
+        pointerEvents: "none",
+        zIndex: 2001,
+        boxSizing: "border-box"
+      },
+      guideTooltip: {
+        position: "fixed",
+        backgroundColor: theme.bgPrimary,
+        borderRadius: "12px",
+        zIndex: 2002,
+        maxWidth: "400px",
+        padding: "16px",
+        fontFamily: "'Inter', 'Segoe UI', sans-serif",
+        pointerEvents: "auto"
+      },
+      guideTooltipHeader: {
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "flex-start",
+        marginBottom: "8px"
+      },
+      guideTooltipTitle: {
+        fontSize: "16px",
+        fontWeight: "600",
+        color: theme.textPrimary,
+        marginBottom: "4px"
+      },
+      guideTooltipStep: {
+        fontSize: "12px",
+        color: theme.textTertiary,
+        fontWeight: "500"
+      },
+      guideTooltipDescription: {
+        fontSize: "14px",
+        color: theme.textSecondary,
+        lineHeight: "1.5",
+        marginBottom: "12px"
+      },
+      guideTooltipButtons: {
+        display: "flex",
+        gap: "8px",
+        justifyContent: "flex-end"
+      },
+      guideTooltipButton: {
+        padding: "6px 12px",
+        borderRadius: "6px",
+        border: "none",
+        fontSize: "13px",
+        fontWeight: "500",
+        cursor: "pointer"
+      },
+      guideTooltipButtonPrimary: {
+        backgroundColor: theme.accentPrimary,
+        color: "white"
+      },
+      guideTooltipButtonSecondary: {
+        backgroundColor: theme.bgQuaternary,
+        color: theme.textSecondary
+      },
+      guideTooltipClose: {
+        background: "none",
+        border: "none",
+        fontSize: "20px",
+        color: theme.textTertiary,
+        cursor: "pointer",
+        padding: "0",
+        width: "24px",
+        height: "24px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: "4px"
+      },
+      helpButton: {
+        position: "absolute",
+        top: "-12px",
+        right: "12px",
+        padding: "6px 12px",
+        borderRadius: "16px",
+        backgroundColor: theme.accentPrimary,
+        color: "white",
+        border: "none",
+        fontSize: "12px",
+        fontWeight: "600",
+        cursor: "pointer",
+        zIndex: 1500,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        whiteSpace: "nowrap",
+        boxShadow: "0 2px 4px rgba(0,0,0,0.1)"
+      },
+      // Optimization 6: Hoisted styles for .map() loops
+      checkboxItemSelected: {
+        display: "flex",
+        alignItems: "center",
+        padding: "6px 8px",
+        cursor: "pointer",
+        borderRadius: "4px",
+        fontWeight: "600",
+        backgroundColor: "#f0f9ff"
+      },
+      checkboxItemUnselected: {
+        display: "flex",
+        alignItems: "center",
+        padding: "6px 8px",
+        cursor: "pointer",
+        borderRadius: "4px",
+        backgroundColor: "transparent"
+      },
+      filterSuggestionItemSelected: {
+        display: "flex",
+        alignItems: "center",
+        padding: "8px 12px",
+        cursor: "pointer",
+        borderBottom: `1px solid ${theme.bgQuaternary}`,
+        backgroundColor: isDarkMode ? "rgba(129, 140, 248, 0.15)" : "#f0f9ff"
+      },
+      filterSuggestionItemUnselected: {
+        display: "flex",
+        alignItems: "center",
+        padding: "8px 12px",
+        cursor: "pointer",
+        borderBottom: `1px solid ${theme.bgQuaternary}`,
+        backgroundColor: isDarkMode ? "rgba(51, 65, 85, 0.3)" : "white"
+      },
+      categorySelectionItemSelected: {
+        display: "flex",
+        alignItems: "center",
+        padding: "6px 8px",
+        borderRadius: "4px",
+        cursor: "pointer",
+        color: theme.textSecondary,
+        backgroundColor: "#f0f9ff"
+      },
+      categorySelectionItemUnselected: {
+        display: "flex",
+        alignItems: "center",
+        padding: "6px 8px",
+        borderRadius: "4px",
+        cursor: "pointer",
+        color: theme.textSecondary,
+        backgroundColor: "transparent"
+      },
+      categoryLabelText: { fontSize: "13px", color: "#374151" },
+      noCategoriesFound: {
+        padding: "12px",
+        textAlign: "center",
+        color: "#6b7280",
+        fontSize: "13px"
+      },
+      radioLabel: {
+        display: "flex",
+        alignItems: "center",
+        cursor: "pointer",
+        fontSize: "13px"
+      },
+      marginRight6: { marginRight: "6px" },
+      marginBottom16: { marginBottom: "16px" },
+      flexGap12Mt8: { display: "flex", gap: "12px", marginTop: "8px" }
+    };
+  }
+
+  // src/constants.js
+  var DATE_RANGES = ["7D", "14D", "30D", "QTD", "YTD", "1Y", "All"];
+  var GUIDE_STEPS = [
+    {
+      id: "quick-query",
+      title: "Quick Query",
+      description: "Click '\u{1F3B2} Feeling Lucky' to generate example queries, then click 'Ask' to visualize the data.",
+      targetSelector: '[data-guide="quick-query"]'
+    },
+    {
+      id: "metric-statboxes",
+      title: "Metric Statboxes",
+      description: "View key metrics (Volume, Revenue, Margin Rate). Click any metric to filter the chart.",
+      targetSelector: '[data-guide="metric-statboxes"]'
+    },
+    {
+      id: "insights-panel",
+      title: "Insights Panel",
+      description: "View automated insights: Solo Insights (single-dimension) and Cross Insights (multi-dimensional patterns).",
+      targetSelector: '[data-guide="insights-panel"]'
+    },
+    {
+      id: "view-selector",
+      title: "View Selector",
+      description: "Split the data by selecting a dimension (Product, Product Group, Region, Customer Segment, etc.).",
+      targetSelector: '[data-guide="view-selector"]'
+    },
+    {
+      id: "top-x-control",
+      title: "Top X Control",
+      description: "Once the data is split, control which categories of that dimension are shown in the chart. Select Top X categories by total value, or manually pick specific categories to display.",
+      targetSelector: '[data-guide="top-x-control"]'
+    },
+    {
+      id: "filter-search",
+      title: "Filter Search",
+      description: "Search and apply filters across all dimensions. Faster than Advanced Filters panel.",
+      targetSelector: '[data-guide="filter-search"]'
+    },
+    {
+      id: "reset-button",
+      title: "Reset Button",
+      description: "Clear all active filters and return to default view. Useful when you want to start fresh.",
+      targetSelector: '[data-guide="reset-button"]'
+    },
+    {
+      id: "share-link",
+      title: "Share Link",
+      description: "Generate shareable URL that preserves filters, date range, view selection, and settings.",
+      targetSelector: '[data-guide="share-link"]'
+    },
+    {
+      id: "advanced-filters",
+      title: "Advanced Filters",
+      description: "Access detailed filtering options via gear icon. Useful for multiple filters.",
+      targetSelector: '[data-guide="advanced-filters"]'
+    },
+    {
+      id: "comparison",
+      title: "Compare Views",
+      description: "Add up to 3 views to the compare dock bar, then overlay them on a single chart.",
+      targetSelector: '[data-guide="comparison"]'
+    },
+    {
+      id: "undo-button",
+      title: "Undo Button",
+      description: "Revert to previous filter state. Disabled when there's no history.",
+      targetSelector: '[data-guide="undo-button"]'
+    }
+  ];
+  var PRO_TIPS = [
+    {
+      icon: "\u{1F4C5}",
+      title: "Weekly Business Review",
+      text: 'Switch to Weekly view by changing Date Aggregation \u2192 then click "Insights" to analyze week-over-week trends.'
+    },
+    {
+      icon: "\u{1F4C8}",
+      title: "Split by Dimension",
+      text: 'Use "Split By" to see top 3 categories of any dimension. Change to top 5 or custom select using the control in the top-right corner of the chart.'
+    },
+    {
+      icon: "\u{1F3B2}",
+      title: "Quick Query",
+      text: 'Click "\u{1F3B2} Feeling Lucky" to generate example queries with the correct pattern, then click "Ask" to visualize the data.'
+    },
+    {
+      icon: "\u{1F517}",
+      title: "Share Your View",
+      text: 'Click the "\u{1F517} Share" button to generate a unique link to your current chart configuration. Anyone with the link sees the exact same view.'
+    },
+    {
+      icon: "\u{1F4CA}",
+      title: "Compare Views",
+      text: 'Use the "\u{1F4CA} Compare" button to add views to a dock bar at the bottom. Compare up to 3 views across different tabs.'
+    },
+    {
+      icon: "\u{1F3AF}",
+      title: "Filter Smart",
+      text: "Type in the filter search box to quickly find and apply filters. It searches across all dimensions \u2014 much faster than scrolling through dropdowns."
+    },
+    {
+      icon: "\u{1F4A1}",
+      title: "Insights Panel",
+      text: 'Click "\u2728 Click for Insights" to get auto-generated analysis. Toggle between "Solo Insights" (single dimension) and "Cross Insights" (multi-dimensional).'
+    },
+    {
+      icon: "\u{1F4C9}",
+      title: "Track Visibility",
+      text: "Click on legend items in the chart to show/hide specific traces. Double-click to isolate a single trace. Your visibility preferences persist across changes."
+    }
+  ];
+
+  // Analyzer_Demo.js
+  function render() {
+    const [isDarkMode, setIsDarkMode] = React.useState(false);
+    const theme = isDarkMode ? THEME_CONFIG.dark : THEME_CONFIG.light;
+    const [showDataSummary, setShowDataSummary] = React.useState(false);
+    const STATIC_STYLES = React.useMemo(
+      () => buildStaticStyles(theme, isDarkMode, showDataSummary),
       [theme, isDarkMode, showDataSummary]
     );
     const [urlRoute] = React.useState(() => parseUrlRoute());
@@ -4439,15 +4978,7 @@ var __app = (() => {
     const [dynamicFilters, setDynamicFilters] = React.useState({});
     const COLUMNS = buildLiveColumns(visibleLiveDimensions);
     const DIMENSION_DEFINITIONS = buildLiveDimensions(visibleLiveDimensions);
-    const METRIC_LABELS = liveMetricConfig ? {
-      metric1: liveMetricConfig.volumeLabel,
-      metric2: liveMetricConfig.revenueLabel,
-      metric3: liveMetricConfig.derivedLabel
-    } : {
-      metric1: "Metric 1",
-      metric2: "Metric 2",
-      metric3: "Metric 3"
-    };
+    const METRIC_LABELS = getMetricLabels(liveMetricConfig);
     const queryData = React.useMemo(function() {
       return { rows: [] };
     }, []);
@@ -4546,74 +5077,6 @@ var __app = (() => {
       return filteredViews;
     }, [columnExists]);
     const VIEW_LABEL_OVERRIDES = {};
-    const GUIDE_STEPS = [
-      {
-        id: "quick-query",
-        title: "Quick Query",
-        description: "Click '\u{1F3B2} Feeling Lucky' to generate example queries, then click 'Ask' to visualize the data.",
-        targetSelector: '[data-guide="quick-query"]'
-      },
-      {
-        id: "metric-statboxes",
-        title: "Metric Statboxes",
-        description: "View key metrics (Volume, Revenue, Margin Rate). Click any metric to filter the chart.",
-        targetSelector: '[data-guide="metric-statboxes"]'
-      },
-      {
-        id: "insights-panel",
-        title: "Insights Panel",
-        description: "View automated insights: Solo Insights (single-dimension) and Cross Insights (multi-dimensional patterns).",
-        targetSelector: '[data-guide="insights-panel"]'
-      },
-      {
-        id: "view-selector",
-        title: "View Selector",
-        description: "Split the data by selecting a dimension (Product, Product Group, Region, Customer Segment, etc.).",
-        targetSelector: '[data-guide="view-selector"]'
-      },
-      {
-        id: "top-x-control",
-        title: "Top X Control",
-        description: "Once the data is split, control which categories of that dimension are shown in the chart. Select Top X categories by total value, or manually pick specific categories to display.",
-        targetSelector: '[data-guide="top-x-control"]'
-      },
-      {
-        id: "filter-search",
-        title: "Filter Search",
-        description: "Search and apply filters across all dimensions. Faster than Advanced Filters panel.",
-        targetSelector: '[data-guide="filter-search"]'
-      },
-      {
-        id: "reset-button",
-        title: "Reset Button",
-        description: "Clear all active filters and return to default view. Useful when you want to start fresh.",
-        targetSelector: '[data-guide="reset-button"]'
-      },
-      {
-        id: "share-link",
-        title: "Share Link",
-        description: "Generate shareable URL that preserves filters, date range, view selection, and settings.",
-        targetSelector: '[data-guide="share-link"]'
-      },
-      {
-        id: "advanced-filters",
-        title: "Advanced Filters",
-        description: "Access detailed filtering options via gear icon. Useful for multiple filters.",
-        targetSelector: '[data-guide="advanced-filters"]'
-      },
-      {
-        id: "comparison",
-        title: "Compare Views",
-        description: "Add up to 3 views to the compare dock bar, then overlay them on a single chart.",
-        targetSelector: '[data-guide="comparison"]'
-      },
-      {
-        id: "undo-button",
-        title: "Undo Button",
-        description: "Revert to previous filter state. Disabled when there's no history.",
-        targetSelector: '[data-guide="undo-button"]'
-      }
-    ];
     const [dataFrequency, setDataFrequency] = React.useState("Monthly");
     const [metric, setMetric] = React.useState("metric2");
     const [activePeriodComparison, setActivePeriodComparison] = React.useState("YoY");
@@ -5223,51 +5686,6 @@ var __app = (() => {
     const [guideStep, setGuideStep] = React.useState(0);
     const [showGuideButton, setShowGuideButton] = React.useState(true);
     const guideTargetRefs = React.useRef({});
-    const PRO_TIPS = React.useMemo(
-      () => [
-        {
-          icon: "\u{1F4C5}",
-          title: "Weekly Business Review",
-          text: 'Switch to Weekly view by changing Date Aggregation \u2192 then click "Insights" to analyze week-over-week trends.'
-        },
-        {
-          icon: "\u{1F4C8}",
-          title: "Split by Dimension",
-          text: 'Use "Split By" to see top 3 categories of any dimension. Change to top 5 or custom select using the control in the top-right corner of the chart.'
-        },
-        {
-          icon: "\u{1F3B2}",
-          title: "Quick Query",
-          text: 'Click "\u{1F3B2} Feeling Lucky" to generate example queries with the correct pattern, then click "Ask" to visualize the data.'
-        },
-        {
-          icon: "\u{1F517}",
-          title: "Share Your View",
-          text: 'Click the "\u{1F517} Share" button to generate a unique link to your current chart configuration. Anyone with the link sees the exact same view.'
-        },
-        {
-          icon: "\u{1F4CA}",
-          title: "Compare Views",
-          text: 'Use the "\u{1F4CA} Compare" button to add views to a dock bar at the bottom. Compare up to 3 views across different tabs.'
-        },
-        {
-          icon: "\u{1F3AF}",
-          title: "Filter Smart",
-          text: "Type in the filter search box to quickly find and apply filters. It searches across all dimensions \u2014 much faster than scrolling through dropdowns."
-        },
-        {
-          icon: "\u{1F4A1}",
-          title: "Insights Panel",
-          text: 'Click "\u2728 Click for Insights" to get auto-generated analysis. Toggle between "Solo Insights" (single dimension) and "Cross Insights" (multi-dimensional).'
-        },
-        {
-          icon: "\u{1F4C9}",
-          title: "Track Visibility",
-          text: "Click on legend items in the chart to show/hide specific traces. Double-click to isolate a single trace. Your visibility preferences persist across changes."
-        }
-      ],
-      []
-    );
     const [currentTipIndex, setCurrentTipIndex] = React.useState(
       () => Math.floor(Math.random() * 8)
     );
@@ -6608,77 +7026,25 @@ var __app = (() => {
       (rows) => calculateMetricValue(rows, metric),
       [metric, calculateMetricValue]
     );
-    const resolveChartType2 = React.useCallback((metricName) => {
-      if (liveMetricConfig) {
-        const prefix = metricName === "metric1" ? "volume" : metricName === "metric2" ? "revenue" : "derived";
-        const configuredType = liveMetricConfig[prefix + "ChartType"] || "auto";
-        if (configuredType !== "auto") return configuredType;
-        const mode = liveMetricConfig[prefix + "Mode"] || "aggregation";
-        return mode === "formula" ? "line" : "stacked";
-      }
-      return metricName === "metric3" ? "line" : "stacked";
-    }, [liveMetricConfig]);
-    const isFormulaMetric2 = React.useCallback((metricName) => {
-      if (liveMetricConfig) {
-        const prefix = metricName === "metric1" ? "volume" : metricName === "metric2" ? "revenue" : "derived";
-        return (liveMetricConfig[prefix + "Mode"] || "aggregation") === "formula";
-      }
-      return metricName === "metric3";
-    }, [liveMetricConfig]);
-    const formatMetricValue2 = React.useCallback((value, metricName) => {
-      if (liveMetricConfig) {
-        if (metricName === "metric1") {
-          const formatted = numeral(value).format(liveMetricConfig.volumeFormat);
-          return (liveMetricConfig.volumePrefix || "") + formatted + (liveMetricConfig.volumeSuffix || "");
-        }
-        if (metricName === "metric2") {
-          const formatted = numeral(value).format(liveMetricConfig.revenueFormat);
-          return (liveMetricConfig.revenuePrefix || "") + formatted + (liveMetricConfig.revenueSuffix || "");
-        }
-        if (metricName === "metric3") {
-          const displayValue = liveMetricConfig.derivedMode !== "formula" && liveMetricConfig.derivedDivisor ? value / liveMetricConfig.derivedDivisor : value;
-          const formatted = numeral(displayValue).format(liveMetricConfig.derivedFormat);
-          return (liveMetricConfig.derivedPrefix || "") + formatted + (liveMetricConfig.derivedSuffix || "");
-        }
-      }
-      switch (metricName) {
-        case "metric1":
-          return "$" + numeral(value).format("0.0a");
-        case "metric2":
-          return "$" + numeral(value).format("0.0a");
-        case "metric3":
-          return numeral(value).format("0.0") + " bps";
-        default:
-          return numeral(value).format("0.0a");
-      }
-    }, [liveMetricConfig]);
+    const resolveChartType2 = React.useCallback(
+      (metricName) => resolveChartType(metricName, liveMetricConfig),
+      [liveMetricConfig]
+    );
+    const isFormulaMetric2 = React.useCallback(
+      (metricName) => isFormulaMetric(metricName, liveMetricConfig),
+      [liveMetricConfig]
+    );
+    const formatMetricValue2 = React.useCallback(
+      (value, metricName) => formatMetricValue(value, metricName, liveMetricConfig),
+      [liveMetricConfig]
+    );
     const formatMetric = React.useCallback(
       (value) => formatMetricValue2(value, metric),
       [metric, formatMetricValue2]
     );
-    const calculatePercentageChange2 = React.useCallback(
-      (currentValue, previousValue) => calculatePercentageChange(currentValue, previousValue),
-      []
-    );
-    const calculateGrowthMetrics2 = React.useCallback(
-      (currentValue, previousValue, overallGrowthRate = null) => calculateGrowthMetrics(currentValue, previousValue, overallGrowthRate),
-      []
-    );
     const formatPeriodDate2 = React.useCallback(
       (periodString) => formatPeriodDate(periodString, dataFrequency),
       [dataFrequency]
-    );
-    const formatYoYValue2 = React.useCallback(
-      (yoyValue) => formatYoYValue(yoyValue),
-      []
-    );
-    const capYoYForDisplay2 = React.useCallback(
-      (yoyValue) => capYoYForDisplay(yoyValue),
-      []
-    );
-    const calculateYoYDataArray2 = React.useCallback(
-      (periods2, dataByPeriod2, metricCalculator, yoyCalculator, includeLastPeriod = false) => calculateYoYDataArray(periods2, dataByPeriod2, metricCalculator, yoyCalculator, includeLastPeriod),
-      []
     );
     const generateExcessGrowthInsights = React.useCallback(
       (insightContext2) => {
@@ -6743,7 +7109,7 @@ var __app = (() => {
             categoryValue,
             metric
           );
-          const categoryGrowth = calculatePercentageChange2(
+          const categoryGrowth = calculatePercentageChange(
             categoryLastValue,
             categoryFirstValue
           );
@@ -6960,7 +7326,7 @@ var __app = (() => {
         periodAggregates,
         metric,
         dateField,
-        calculatePercentageChange2,
+        calculatePercentageChange,
         formatFilterName2,
         columnExists,
         getFilterState,
@@ -7169,7 +7535,7 @@ var __app = (() => {
           const prevRows = completeDataByPeriod[recentPeriods[i - 1]] || [];
           const currentValue = calculateMetric(currentRows);
           const prevValue = calculateMetric(prevRows);
-          const percentChange = calculatePercentageChange2(
+          const percentChange = calculatePercentageChange(
             currentValue,
             prevValue
           );
@@ -7205,7 +7571,7 @@ var __app = (() => {
           const prevRows = completeDataByPeriod[completePeriods[i - 1]] || [];
           const currentValue = calculateMetric(currentRows);
           const prevValue = calculateMetric(prevRows);
-          const percentChange = calculatePercentageChange2(
+          const percentChange = calculatePercentageChange(
             currentValue,
             prevValue
           );
@@ -7440,7 +7806,7 @@ var __app = (() => {
           growthRate: totalGrowth,
           direction,
           absoluteGrowth
-        } = calculateGrowthMetrics2(lastValue, firstValue);
+        } = calculateGrowthMetrics(lastValue, firstValue);
         const contextualDescription = getFilterContext();
         const priority = calculateBasePriority(totalGrowth, "growth_percentage");
         structuredInsights2.basicInsights.overallTrends.push(
@@ -7536,7 +7902,7 @@ var __app = (() => {
         ).slice(0, INSIGHT_LIMITS.generation.marketLeaders);
       }
       if (tabType === "advanced" && completePeriods.length >= 2) {
-        const { growthRate: overallMarketGrowthRate } = firstValue && firstValue !== 0 && firstValue !== null ? calculateGrowthMetrics2(lastValue, firstValue) : { growthRate: 0 };
+        const { growthRate: overallMarketGrowthRate } = firstValue && firstValue !== 0 && firstValue !== null ? calculateGrowthMetrics(lastValue, firstValue) : { growthRate: 0 };
         const crossDimensionalCombos = [
           {
             fields: [COLUMNS.PRODUCT_NAME, COLUMNS.REGION],
@@ -7636,7 +8002,7 @@ var __app = (() => {
               const lastSegmentValue = calculateMetric(lastPeriodSegmentRows);
               if (firstSegmentValue === 0 || firstSegmentValue === null)
                 return null;
-              const { growthRate, relativeGrowth, direction, absoluteGrowth } = calculateGrowthMetrics2(
+              const { growthRate, relativeGrowth, direction, absoluteGrowth } = calculateGrowthMetrics(
                 lastSegmentValue,
                 firstSegmentValue,
                 overallMarketGrowthRate
@@ -7707,7 +8073,7 @@ var __app = (() => {
         const marketFirstValue = calculateMetric(marketFirstPeriodRows);
         const marketLastValue = calculateMetric(marketLastPeriodRows);
         if (marketFirstValue === 0 || marketFirstValue === null) return [];
-        const { growthRate: overallMarketGrowthRate } = calculateGrowthMetrics2(
+        const { growthRate: overallMarketGrowthRate } = calculateGrowthMetrics(
           marketLastValue,
           marketFirstValue
         );
@@ -7747,7 +8113,7 @@ var __app = (() => {
                 relativeGrowth,
                 direction,
                 absoluteGrowth
-              } = calculateGrowthMetrics2(
+              } = calculateGrowthMetrics(
                 categoryLastValue,
                 categoryFirstValue,
                 overallMarketGrowthRate
@@ -8061,7 +8427,7 @@ var __app = (() => {
         if (yoyAgg) {
           const previousYearValue = yoyAgg[metricName];
           yoyAbsoluteChange = mainValue - previousYearValue;
-          yoyChange = calculatePercentageChange2(mainValue, previousYearValue);
+          yoyChange = calculatePercentageChange(mainValue, previousYearValue);
         }
         result[metricName] = {
           lastPeriod: mainPeriod,
@@ -8079,94 +8445,17 @@ var __app = (() => {
       dataFrequency,
       sortedBaseDataPeriods,
       baseDataAggregatesByPeriod,
-      calculatePercentageChange2
+      calculatePercentageChange
     ]);
     const statData = React.useMemo(() => {
       return allMetricsStatData[metric] || null;
     }, [allMetricsStatData, metric]);
-    const getHighlightPeriods = React.useCallback(
-      (insight) => {
-        if (!insight || !insight.metadata) return [];
-        const { metadata } = insight;
-        const periodsToHighlight = [];
-        if (metadata.alertType === "sudden_drop" && metadata.period) {
-          const periodIndex = periods.indexOf(metadata.period);
-          if (periodIndex > 0) {
-            periodsToHighlight.push(periods[periodIndex - 1]);
-            periodsToHighlight.push(periods[periodIndex]);
-          } else if (periodIndex === 0) {
-            periodsToHighlight.push(periods[periodIndex]);
-          }
-        }
-        return periodsToHighlight;
-      },
+    const getHighlightPeriods2 = React.useCallback(
+      (insight) => getHighlightPeriods(insight, periods),
       [periods]
     );
-    const applyHighlightingToChartData = React.useCallback(
-      (chartData2, highlightPeriods) => {
-        if (!highlightPeriods || highlightPeriods.length === 0) return chartData2;
-        return chartData2.map((trace) => {
-          if (!trace.x || !Array.isArray(trace.x)) return trace;
-          const markerSizes = trace.marker && trace.marker.size ? Array.isArray(trace.marker.size) ? [...trace.marker.size] : new Array(trace.x.length).fill(trace.marker.size || 6) : new Array(trace.x.length).fill(6);
-          const markerColors = trace.marker && trace.marker.color ? Array.isArray(trace.marker.color) ? [...trace.marker.color] : new Array(trace.x.length).fill(trace.marker.color || "#6366f1") : new Array(trace.x.length).fill(trace.color || "#6366f1");
-          const lineWidths = trace.line && trace.line.width ? Array.isArray(trace.line.width) ? [...trace.line.width] : new Array(trace.x.length).fill(trace.line.width || 2.5) : new Array(trace.x.length).fill(2.5);
-          const lineColors = trace.line && trace.line.color ? Array.isArray(trace.line.color) ? [...trace.line.color] : new Array(trace.x.length).fill(trace.line.color || "#6366f1") : new Array(trace.x.length).fill(trace.color || "#6366f1");
-          trace.x.forEach((period, index) => {
-            if (highlightPeriods.includes(period)) {
-              markerSizes[index] = (trace.type === "bar" ? 1.3 : 1.8) * (markerSizes[index] || 6);
-              markerColors[index] = "#ef4444";
-              if (trace.type === "scatter" && trace.mode && trace.mode.includes("lines")) {
-                lineWidths[index] = (lineWidths[index] || 2.5) * 2;
-                lineColors[index] = "#ef4444";
-              }
-            }
-          });
-          const updatedTrace = { ...trace };
-          if (trace.type === "scatter") {
-            if (trace.mode && trace.mode.includes("markers")) {
-              updatedTrace.marker = {
-                ...trace.marker,
-                size: markerSizes,
-                color: markerColors
-              };
-            }
-            if (trace.mode && trace.mode.includes("lines")) {
-              updatedTrace.line = {
-                ...trace.line,
-                width: lineWidths,
-                color: lineColors
-              };
-            }
-          } else if (trace.type === "bar") {
-            const currentLineColor = trace.marker && trace.marker.line && trace.marker.line.color || "rgba(255,255,255,0.3)";
-            const currentLineWidth = trace.marker && trace.marker.line && trace.marker.line.width || 0.5;
-            const baseLineColor = Array.isArray(currentLineColor) ? currentLineColor[0] : currentLineColor;
-            const baseLineWidth = Array.isArray(currentLineWidth) ? currentLineWidth[0] : currentLineWidth;
-            updatedTrace.marker = {
-              ...trace.marker,
-              line: {
-                ...trace.marker && trace.marker.line ? trace.marker.line : {},
-                color: trace.x.map(
-                  (period) => highlightPeriods.includes(period) ? "#ef4444" : baseLineColor
-                ),
-                width: trace.x.map(
-                  (period) => highlightPeriods.includes(period) ? 3 : baseLineWidth
-                )
-              }
-            };
-          }
-          return updatedTrace;
-        });
-      },
-      []
-    );
-    const formatXAxisTicks = React.useCallback(
-      (periodsArray) => {
-        if (periodsArray.length <= 12) {
-          return periodsArray.map((period) => formatPeriodDate2(period));
-        }
-        return void 0;
-      },
+    const formatXAxisTicks2 = React.useCallback(
+      (periodsArray) => formatXAxisTicks(periodsArray, formatPeriodDate2),
       [formatPeriodDate2]
     );
     const prepareChartDataByAttribute = React.useCallback(
@@ -8412,7 +8701,7 @@ var __app = (() => {
                     metric
                   );
                 }
-                return calculatePercentageChange2(
+                return calculatePercentageChange(
                   currentCategoryValue,
                   previousCategoryValue
                 );
@@ -8424,7 +8713,7 @@ var __app = (() => {
               mode: "lines+markers",
               name: `${category} - %Growth YoY`,
               x: periods,
-              y: yoyGrowthRates.map(capYoYForDisplay2),
+              y: yoyGrowthRates.map(capYoYForDisplay),
               // Cap infinity for display
               visible: showAllGrowthTraces ? true : "legendonly",
               line: {
@@ -8437,7 +8726,7 @@ var __app = (() => {
                 color: categoryColor
               },
               yaxis: "y2",
-              customdata: yoyGrowthRates.map(formatYoYValue2),
+              customdata: yoyGrowthRates.map(formatYoYValue),
               hovertemplate: `${category} - %Growth YoY<br>%{customdata}<extra></extra>`
             });
           }
@@ -8502,7 +8791,7 @@ var __app = (() => {
             // Show all ticks if total number of ticks is <= 12
             tickmode: periods.length <= 12 ? "array" : "auto",
             tickvals: periods.length <= 12 ? periods : void 0,
-            ticktext: formatXAxisTicks(periods)
+            ticktext: formatXAxisTicks2(periods)
           },
           yaxis: {
             title: {
@@ -8578,9 +8867,9 @@ var __app = (() => {
         dataFrequency,
         baseFilteredData,
         formatPeriodDate2,
-        formatXAxisTicks,
-        formatYoYValue2,
-        capYoYForDisplay2,
+        formatXAxisTicks2,
+        formatYoYValue,
+        capYoYForDisplay,
         // Optimization: pre-computed aggregates
         dimensionAggregates,
         dimensionCategoryTotals,
@@ -8660,12 +8949,12 @@ var __app = (() => {
               type: "scatter",
               mode: "lines+markers",
               x: periods,
-              y: changeData.map(capYoYForDisplay2),
+              y: changeData.map(capYoYForDisplay),
               name: overlay.label + " Change %",
               yaxis: "y2",
               line: { color: overlay.color, width: 2.5, shape: "spline", smoothing: 0.3 },
               marker: { size: 3, color: overlay.color, line: { color: "#ffffff", width: 1 } },
-              customdata: changeData.map(formatYoYValue2),
+              customdata: changeData.map(formatYoYValue),
               hovertemplate: overlay.label + " Change: %{customdata}<extra></extra>",
               connectgaps: false
             });
@@ -8801,7 +9090,7 @@ var __app = (() => {
             // Show all ticks if total number of ticks is <= 12
             tickmode: forecastExtendedPeriods.length <= 12 ? "array" : "auto",
             tickvals: forecastExtendedPeriods.length <= 12 ? forecastExtendedPeriods : void 0,
-            ticktext: formatXAxisTicks(forecastExtendedPeriods)
+            ticktext: formatXAxisTicks2(forecastExtendedPeriods)
           },
           yaxis: {
             title: {
@@ -8942,8 +9231,8 @@ var __app = (() => {
       prepareChartDataByAttribute,
       getSimpleChartTitle,
       formatPeriodDate2,
-      capYoYForDisplay2,
-      formatYoYValue2,
+      capYoYForDisplay,
+      formatYoYValue,
       isDarkMode,
       theme,
       periodAggregates,
@@ -8957,13 +9246,13 @@ var __app = (() => {
     ]);
     const highlightedChartData = React.useMemo(() => {
       if (!hoveredInsight) return chartData;
-      const highlightPeriods = getHighlightPeriods(hoveredInsight);
+      const highlightPeriods = getHighlightPeriods2(hoveredInsight);
       if (highlightPeriods.length === 0) return chartData;
       return applyHighlightingToChartData(chartData, highlightPeriods);
     }, [
       chartData,
       hoveredInsight,
-      getHighlightPeriods,
+      getHighlightPeriods2,
       applyHighlightingToChartData
     ]);
     const addCompareCard = React.useCallback(() => {
@@ -9688,123 +9977,23 @@ var __app = (() => {
           outline: "none"
         }
       }
-    ), unlockError && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", color: "#ef4444", marginTop: "4px" } }, unlockError), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", color: isDarkMode ? "#6b7280" : "#9ca3af", marginTop: "6px" } }, "Press Enter to unlock editing")))), baseConnection && activeTab && !activeTab.dataset && !liveDataLoading && /* @__PURE__ */ React.createElement("div", { style: {
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-      padding: "8px 16px",
-      backgroundColor: isDarkMode ? "rgba(245, 158, 11, 0.12)" : "rgba(245, 158, 11, 0.1)",
-      border: `1px solid ${isDarkMode ? "rgba(245, 158, 11, 0.35)" : "rgba(245, 158, 11, 0.4)"}`,
-      borderRadius: "8px",
-      marginBottom: "12px",
-      fontSize: "12px",
-      color: isDarkMode ? "#fbbf24" : "#92400e"
-    } }, /* @__PURE__ */ React.createElement("span", null, "No dataset configured. Click ", /* @__PURE__ */ React.createElement("strong", null, "Configure Metrics"), " to set the table name.")), configLoading && /* @__PURE__ */ React.createElement("div", { style: {
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-      padding: "8px 16px",
-      backgroundColor: isDarkMode ? "rgba(99, 102, 241, 0.12)" : "rgba(99, 102, 241, 0.1)",
-      border: `1px solid ${isDarkMode ? "rgba(99, 102, 241, 0.35)" : "rgba(99, 102, 241, 0.4)"}`,
-      borderRadius: "8px",
-      marginBottom: "12px",
-      fontSize: "12px",
-      color: isDarkMode ? "#a5b4fc" : "#4338ca"
-    } }, /* @__PURE__ */ React.createElement("div", { style: { width: "14px", height: "14px", border: "2px solid currentColor", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" } }), /* @__PURE__ */ React.createElement("span", null, "Loading dashboard configuration...")), configError && /* @__PURE__ */ React.createElement("div", { style: {
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-      padding: "8px 16px",
-      backgroundColor: isDarkMode ? "rgba(239, 68, 68, 0.12)" : "rgba(239, 68, 68, 0.1)",
-      border: `1px solid ${isDarkMode ? "rgba(239, 68, 68, 0.35)" : "rgba(239, 68, 68, 0.4)"}`,
-      borderRadius: "8px",
-      marginBottom: "12px",
-      fontSize: "12px",
-      color: isDarkMode ? "#fca5a5" : "#dc2626"
-    } }, /* @__PURE__ */ React.createElement("span", null, configError), /* @__PURE__ */ React.createElement("button", { onClick: () => window.location.reload(), style: {
-      marginLeft: "auto",
-      padding: "2px 10px",
-      borderRadius: "4px",
-      fontSize: "11px",
-      cursor: "pointer",
-      border: `1px solid ${isDarkMode ? "rgba(239, 68, 68, 0.4)" : "rgba(239, 68, 68, 0.5)"}`,
-      background: "transparent",
-      color: "inherit"
-    } }, "Retry")), liveDataLoading && /* @__PURE__ */ React.createElement("div", { style: {
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-      padding: "8px 16px",
-      backgroundColor: isDarkMode ? "rgba(99, 102, 241, 0.12)" : "rgba(99, 102, 241, 0.1)",
-      border: `1px solid ${isDarkMode ? "rgba(99, 102, 241, 0.35)" : "rgba(99, 102, 241, 0.4)"}`,
-      borderRadius: "8px",
-      marginBottom: "12px",
-      fontSize: "12px",
-      color: isDarkMode ? "#a5b4fc" : "#4338ca"
-    } }, /* @__PURE__ */ React.createElement("div", { style: { width: "14px", height: "14px", border: "2px solid currentColor", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" } }), /* @__PURE__ */ React.createElement("span", null, "Connecting to ", /* @__PURE__ */ React.createElement("strong", null, connectionParams?.dataset), "...")), liveDataError && /* @__PURE__ */ React.createElement("div", { style: {
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-      padding: "8px 16px",
-      backgroundColor: isDarkMode ? "rgba(239, 68, 68, 0.12)" : "rgba(239, 68, 68, 0.1)",
-      border: `1px solid ${isDarkMode ? "rgba(239, 68, 68, 0.35)" : "rgba(239, 68, 68, 0.4)"}`,
-      borderRadius: "8px",
-      marginBottom: "12px",
-      fontSize: "12px",
-      color: isDarkMode ? "#fca5a5" : "#dc2626"
-    } }, /* @__PURE__ */ React.createElement("span", null, "Connection failed: ", liveDataError, ". Showing demo data instead.")), liveDataTruncated && !liveDataLoading && /* @__PURE__ */ React.createElement("div", { style: {
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-      padding: "8px 16px",
-      backgroundColor: isDarkMode ? "rgba(245, 158, 11, 0.12)" : "rgba(245, 158, 11, 0.1)",
-      border: `1px solid ${isDarkMode ? "rgba(245, 158, 11, 0.35)" : "rgba(245, 158, 11, 0.4)"}`,
-      borderRadius: "8px",
-      marginBottom: "12px",
-      fontSize: "12px",
-      color: isDarkMode ? "#fbbf24" : "#92400e"
-    } }, /* @__PURE__ */ React.createElement("span", null, "Data truncated \u2014 results hit the row limit. Metrics may be incomplete.")), dataSourceType === "csv" && !connectionParams && !liveDataLoading && !liveDataError && /* @__PURE__ */ React.createElement("div", { style: {
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-      padding: "8px 16px",
-      backgroundColor: isDarkMode ? "rgba(234, 179, 8, 0.12)" : "rgba(234, 179, 8, 0.1)",
-      border: `1px solid ${isDarkMode ? "rgba(234, 179, 8, 0.35)" : "rgba(234, 179, 8, 0.4)"}`,
-      borderRadius: "8px",
-      marginBottom: "12px",
-      fontSize: "12px",
-      color: isDarkMode ? "#fcd34d" : "#92400e"
-    } }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("strong", null, "Demo Data"), " \u2014 viewing sample CSV."), /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto", display: "flex", gap: "6px" } }, /* @__PURE__ */ React.createElement("label", { style: {
-      padding: "4px 12px",
-      borderRadius: "4px",
-      fontSize: "11px",
-      cursor: "pointer",
-      border: `1px solid ${isDarkMode ? "rgba(16, 185, 129, 0.5)" : "rgba(16, 185, 129, 0.5)"}`,
-      background: isDarkMode ? "rgba(16, 185, 129, 0.2)" : "rgba(16, 185, 129, 0.1)",
-      color: isDarkMode ? "#6ee7b7" : "#065f46",
-      fontWeight: 600,
-      whiteSpace: "nowrap"
-    } }, "Upload CSV", /* @__PURE__ */ React.createElement("input", { type: "file", accept: ".csv,.tsv", hidden: true, onChange: (e) => {
-      if (e.target.files[0]) handleCsvUpload(e.target.files[0]);
-      e.target.value = "";
-    } })), /* @__PURE__ */ React.createElement(
-      "button",
+    ), unlockError && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", color: "#ef4444", marginTop: "4px" } }, unlockError), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", color: isDarkMode ? "#6b7280" : "#9ca3af", marginTop: "6px" } }, "Press Enter to unlock editing")))), /* @__PURE__ */ React.createElement(
+      StatusBanner,
       {
-        onClick: () => setShowConnectModal(true),
-        style: {
-          padding: "4px 12px",
-          borderRadius: "4px",
-          fontSize: "11px",
-          cursor: "pointer",
-          border: `1px solid ${isDarkMode ? "rgba(99, 102, 241, 0.5)" : "rgba(99, 102, 241, 0.5)"}`,
-          background: isDarkMode ? "rgba(99, 102, 241, 0.2)" : "rgba(99, 102, 241, 0.1)",
-          color: isDarkMode ? "#a5b4fc" : "#4338ca",
-          fontWeight: 600,
-          whiteSpace: "nowrap"
-        }
-      },
-      "Connect to Database"
-    ))), /* @__PURE__ */ React.createElement("div", { style: styles.topSection }, /* @__PURE__ */ React.createElement("div", { style: styles.queryContainer, "data-guide": "quick-query" }, /* @__PURE__ */ React.createElement("div", { style: styles.queryInputGroup }, /* @__PURE__ */ React.createElement("div", { style: styles.queryLabelContainer }, /* @__PURE__ */ React.createElement("label", { style: styles.queryLabel }, "Quick Query"), /* @__PURE__ */ React.createElement(
+        baseConnection,
+        activeTab,
+        configLoading,
+        configError,
+        liveDataLoading,
+        liveDataError,
+        liveDataTruncated,
+        dataSourceType,
+        connectionParams,
+        isDarkMode,
+        handleCsvUpload,
+        setShowConnectModal
+      }
+    ), /* @__PURE__ */ React.createElement("div", { style: styles.topSection }, /* @__PURE__ */ React.createElement("div", { style: styles.queryContainer, "data-guide": "quick-query" }, /* @__PURE__ */ React.createElement("div", { style: styles.queryInputGroup }, /* @__PURE__ */ React.createElement("div", { style: styles.queryLabelContainer }, /* @__PURE__ */ React.createElement("label", { style: styles.queryLabel }, "Quick Query"), /* @__PURE__ */ React.createElement(
       "div",
       {
         style: styles.queryTooltipIcon,
@@ -11259,237 +11448,33 @@ var __app = (() => {
           guideStep < GUIDE_STEPS.length - 1 ? "Next \u2192" : "Finish"
         ))
       ));
-    })(), compareCards.length > 0 && /* @__PURE__ */ React.createElement("div", { style: {
-      position: "fixed",
-      bottom: 0,
-      left: 0,
-      right: 0,
-      height: "72px",
-      backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
-      borderTop: `2px solid ${isDarkMode ? "#334155" : "#e2e8f0"}`,
-      display: "flex",
-      alignItems: "center",
-      padding: "0 20px",
-      gap: "12px",
-      zIndex: 50,
-      boxShadow: "0 -4px 12px rgba(0,0,0,0.1)"
-    } }, compareCards.map((card, idx) => /* @__PURE__ */ React.createElement("div", { key: card.id, style: {
-      display: "flex",
-      alignItems: "center",
-      gap: "10px",
-      padding: "8px 12px",
-      backgroundColor: isDarkMode ? "#0f172a" : "#f8fafc",
-      borderLeft: `4px solid ${COMPARE_CARD_COLORS[idx]}`,
-      borderRadius: "6px",
-      border: `1px solid ${isDarkMode ? "#334155" : "#e2e8f0"}`,
-      borderLeftWidth: "4px",
-      borderLeftColor: COMPARE_CARD_COLORS[idx],
-      minWidth: "180px",
-      maxWidth: "280px"
-    } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, editingCompareCardId === card.id ? /* @__PURE__ */ React.createElement(
-      "input",
+    })(), /* @__PURE__ */ React.createElement(
+      CompareDockBar,
       {
-        autoFocus: true,
-        defaultValue: card.label,
-        onBlur: (e) => {
-          updateCompareCardLabel(card.id, e.target.value || card.label);
-          setEditingCompareCardId(null);
-        },
-        onKeyDown: (e) => {
-          if (e.key === "Enter") {
-            updateCompareCardLabel(card.id, e.target.value || card.label);
-            setEditingCompareCardId(null);
-          }
-          if (e.key === "Escape") setEditingCompareCardId(null);
-        },
-        style: {
-          fontSize: "13px",
-          fontWeight: "600",
-          width: "100%",
-          color: isDarkMode ? "#f1f5f9" : "#1e293b",
-          background: isDarkMode ? "#1e293b" : "#ffffff",
-          border: `1px solid ${COMPARE_CARD_COLORS[idx]}`,
-          borderRadius: "3px",
-          padding: "1px 4px",
-          outline: "none"
-        }
+        compareCards,
+        isDarkMode,
+        editingCompareCardId,
+        setEditingCompareCardId,
+        updateCompareCardLabel,
+        removeCompareCard,
+        addCompareCard,
+        clearAllCompareCards,
+        setCompareDateRange,
+        setShowCompareView
       }
-    ) : /* @__PURE__ */ React.createElement(
-      "div",
-      {
-        onDoubleClick: () => setEditingCompareCardId(card.id),
-        title: "Double-click to rename",
-        style: {
-          fontSize: "13px",
-          fontWeight: "600",
-          color: isDarkMode ? "#f1f5f9" : "#1e293b",
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          cursor: "text"
-        }
-      },
-      card.label
-    ), /* @__PURE__ */ React.createElement("div", { style: {
-      fontSize: "11px",
-      color: isDarkMode ? "#94a3b8" : "#64748b",
-      whiteSpace: "nowrap",
-      overflow: "hidden",
-      textOverflow: "ellipsis"
-    } }, card.tabName, " | ", card.metricLabel, " | ", card.view, " | ", card.dateRange)), /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        onClick: () => removeCompareCard(card.id),
-        style: {
-          background: "none",
-          border: "none",
-          fontSize: "16px",
-          color: isDarkMode ? "#94a3b8" : "#94a3b8",
-          cursor: "pointer",
-          padding: "2px",
-          lineHeight: 1
-        },
-        title: "Remove from comparison"
-      },
-      "x"
-    ))), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }), compareCards.length < 3 && /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        onClick: addCompareCard,
-        style: {
-          padding: "8px 16px",
-          backgroundColor: isDarkMode ? "#1e40af" : "#3b82f6",
-          color: "white",
-          border: "none",
-          borderRadius: "6px",
-          fontSize: "12px",
-          fontWeight: "600",
-          cursor: "pointer"
-        }
-      },
-      "+ Add Current View"
-    ), compareCards.length >= 2 && /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        onClick: () => {
-          setCompareDateRange("All");
-          setShowCompareView(true);
-        },
-        style: {
-          padding: "8px 16px",
-          backgroundColor: isDarkMode ? "#065f46" : "#10b981",
-          color: "white",
-          border: "none",
-          borderRadius: "6px",
-          fontSize: "12px",
-          fontWeight: "600",
-          cursor: "pointer"
-        }
-      },
-      "Compare"
     ), /* @__PURE__ */ React.createElement(
-      "button",
+      CompareOverlay,
       {
-        onClick: clearAllCompareCards,
-        style: {
-          padding: "8px 12px",
-          backgroundColor: "transparent",
-          color: isDarkMode ? "#94a3b8" : "#64748b",
-          border: `1px solid ${isDarkMode ? "#475569" : "#cbd5e1"}`,
-          borderRadius: "6px",
-          fontSize: "12px",
-          cursor: "pointer"
-        }
-      },
-      "Clear All"
-    )), showCompareView && compareCards.length >= 2 && (() => {
-      const cards = compareCards;
-      const { traces: comparisonTraces, layout: comparisonLayout } = buildComparisonChart(cards, compareDateRange, isDarkMode);
-      return /* @__PURE__ */ React.createElement(
-        "div",
-        {
-          style: {
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: isDarkMode ? "rgba(0,0,0,0.85)" : "rgba(0,0,0,0.6)",
-            zIndex: 100,
-            display: "flex",
-            flexDirection: "column"
-          },
-          onClick: (e) => {
-            if (e.target === e.currentTarget) setShowCompareView(false);
-          }
-        },
-        /* @__PURE__ */ React.createElement("div", { style: {
-          flex: 1,
-          margin: "20px",
-          backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
-          borderRadius: "12px",
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden"
-        } }, /* @__PURE__ */ React.createElement("div", { style: {
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "16px 24px",
-          borderBottom: `1px solid ${isDarkMode ? "#334155" : "#e2e8f0"}`
-        } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "12px" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: "16px", fontWeight: "700", color: isDarkMode ? "#f1f5f9" : "#1e293b" } }, "Comparison View"), cards.map((card, i) => /* @__PURE__ */ React.createElement("span", { key: card.id, style: {
-          display: "inline-flex",
-          alignItems: "center",
-          gap: "6px",
-          padding: "4px 10px",
-          borderRadius: "16px",
-          backgroundColor: COMPARE_CARD_COLORS[i] + "20",
-          fontSize: "12px",
-          fontWeight: "500",
-          color: COMPARE_CARD_COLORS[i]
-        } }, /* @__PURE__ */ React.createElement("span", { style: { width: 8, height: 8, borderRadius: "50%", backgroundColor: COMPARE_CARD_COLORS[i] } }), card.label))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "4px" } }, DATE_RANGES.map((range) => /* @__PURE__ */ React.createElement(
-          "button",
-          {
-            key: range,
-            onClick: () => setCompareDateRange(range),
-            style: {
-              padding: "4px 10px",
-              fontSize: "11px",
-              fontWeight: compareDateRange === range ? "700" : "500",
-              color: compareDateRange === range ? "#ffffff" : isDarkMode ? "#94a3b8" : "#64748b",
-              backgroundColor: compareDateRange === range ? "#3b82f6" : isDarkMode ? "#334155" : "#f1f5f9",
-              border: `1px solid ${compareDateRange === range ? "#3b82f6" : isDarkMode ? "#475569" : "#e2e8f0"}`,
-              borderRadius: "4px",
-              cursor: "pointer"
-            }
-          },
-          range
-        ))), /* @__PURE__ */ React.createElement(
-          "button",
-          {
-            onClick: () => setShowCompareView(false),
-            style: {
-              background: "none",
-              border: "none",
-              fontSize: "24px",
-              color: isDarkMode ? "#94a3b8" : "#6b7280",
-              cursor: "pointer",
-              padding: "4px"
-            },
-            title: "Close comparison (Esc)"
-          },
-          "x"
-        )), /* @__PURE__ */ React.createElement("div", { style: { flex: 1, padding: "16px 24px" } }, /* @__PURE__ */ React.createElement(
-          PlotlyChart,
-          {
-            data: comparisonTraces,
-            layout: comparisonLayout,
-            config: { responsive: true, displayModeBar: true, displaylogo: false },
-            style: { width: "100%", height: "100%" }
-          }
-        )))
-      );
-    })(), showMetricsEditor && metricsEditorDraft && /* @__PURE__ */ React.createElement(
+        compareCards,
+        isDarkMode,
+        showCompareView,
+        setShowCompareView,
+        compareDateRange,
+        setCompareDateRange,
+        buildComparisonChart,
+        dateRanges: DATE_RANGES
+      }
+    ), showMetricsEditor && metricsEditorDraft && /* @__PURE__ */ React.createElement(
       MetricsEditorModal,
       {
         draft: metricsEditorDraft,

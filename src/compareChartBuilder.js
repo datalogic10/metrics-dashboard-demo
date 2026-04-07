@@ -23,64 +23,7 @@ import {
   calculateSMA,
 } from './metrics.js';
 import { getCategoryColor } from './theme.js';
-
-// --- Config-derived helpers (replicate useCallback logic as pure functions) ---
-
-export function resolveChartType(metricName, metricConfig) {
-  if (metricConfig) {
-    const prefix = metricName === 'metric1' ? 'volume' : metricName === 'metric2' ? 'revenue' : 'derived';
-    const configuredType = metricConfig[prefix + 'ChartType'] || 'auto';
-    if (configuredType !== 'auto') return configuredType;
-    const mode = metricConfig[prefix + 'Mode'] || 'aggregation';
-    return mode === 'formula' ? 'line' : 'stacked';
-  }
-  return metricName === 'metric3' ? 'line' : 'stacked';
-}
-
-export function isFormulaMetric(metricName, metricConfig) {
-  if (metricConfig) {
-    const prefix = metricName === 'metric1' ? 'volume' : metricName === 'metric2' ? 'revenue' : 'derived';
-    return (metricConfig[prefix + 'Mode'] || 'aggregation') === 'formula';
-  }
-  return metricName === 'metric3';
-}
-
-export function getMetricLabels(metricConfig) {
-  if (metricConfig) {
-    return {
-      metric1: metricConfig.volumeLabel || 'Metric 1',
-      metric2: metricConfig.revenueLabel || 'Metric 2',
-      metric3: metricConfig.derivedLabel || 'Margin Rate',
-    };
-  }
-  return { metric1: 'Metric 1', metric2: 'Metric 2', metric3: 'Metric 3' };
-}
-
-function formatMetricValue(value, metricName, metricConfig) {
-  if (typeof numeral === 'undefined') return String(value);
-  if (metricConfig) {
-    if (metricName === 'metric1') {
-      const formatted = numeral(value).format(metricConfig.volumeFormat);
-      return (metricConfig.volumePrefix || '') + formatted + (metricConfig.volumeSuffix || '');
-    }
-    if (metricName === 'metric2') {
-      const formatted = numeral(value).format(metricConfig.revenueFormat);
-      return (metricConfig.revenuePrefix || '') + formatted + (metricConfig.revenueSuffix || '');
-    }
-    if (metricName === 'metric3') {
-      const displayValue = (metricConfig.derivedMode !== 'formula' && metricConfig.derivedDivisor)
-        ? value / metricConfig.derivedDivisor : value;
-      const formatted = numeral(displayValue).format(metricConfig.derivedFormat);
-      return (metricConfig.derivedPrefix || '') + formatted + (metricConfig.derivedSuffix || '');
-    }
-  }
-  switch (metricName) {
-    case 'metric1': return '$' + numeral(value).format('0.0a');
-    case 'metric2': return '$' + numeral(value).format('0.0a');
-    case 'metric3': return numeral(value).format('0.0') + ' bps';
-    default: return numeral(value).format('0.0a');
-  }
-}
+import { resolveChartType, isFormulaMetric, formatMetricValue, getMetricLabels } from './chartUtils.js';
 
 // --- Period filtering ---
 
