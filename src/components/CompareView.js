@@ -168,9 +168,15 @@ export function CompareOverlay({
   buildComparisonChart,
   dateRanges,
 }) {
-  if (!showCompareView || compareCards.length < 2) return null;
+  // Memoize chart computation to prevent Plotly from resetting legend toggle state on parent re-renders
+  const { traces: comparisonTraces, layout: comparisonLayout } = React.useMemo(
+    () => showCompareView && compareCards.length >= 2
+      ? buildComparisonChart(compareCards, compareDateRange, isDarkMode)
+      : { traces: [], layout: {} },
+    [compareCards, compareDateRange, isDarkMode, showCompareView, buildComparisonChart]
+  );
 
-  const { traces: comparisonTraces, layout: comparisonLayout } = buildComparisonChart(compareCards, compareDateRange, isDarkMode);
+  if (!showCompareView || compareCards.length < 2) return null;
 
   return (
     <div style={{

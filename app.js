@@ -3264,8 +3264,11 @@ var __app = (() => {
     buildComparisonChart: buildComparisonChart2,
     dateRanges
   }) {
+    const { traces: comparisonTraces, layout: comparisonLayout } = React.useMemo(
+      () => showCompareView && compareCards.length >= 2 ? buildComparisonChart2(compareCards, compareDateRange, isDarkMode) : { traces: [], layout: {} },
+      [compareCards, compareDateRange, isDarkMode, showCompareView, buildComparisonChart2]
+    );
     if (!showCompareView || compareCards.length < 2) return null;
-    const { traces: comparisonTraces, layout: comparisonLayout } = buildComparisonChart2(compareCards, compareDateRange, isDarkMode);
     return /* @__PURE__ */ React.createElement(
       "div",
       {
@@ -9324,7 +9327,9 @@ var __app = (() => {
       baseDataAggregatesByPeriod,
       baseDimensionAggregates,
       activeTabId,
-      activeTab
+      activeTab,
+      activeOverlays,
+      smaWindow
     ]);
     const removeCompareCard = React.useCallback((id) => {
       setCompareCards((prev) => prev.filter((c) => c.id !== id));

@@ -6107,7 +6107,7 @@ export function render() {
     setCompareCards(prev => [...prev, card]);
   }, [compareCards, metric, view, dateRange, dataFrequency, topX, selectedCategories, categorySelectionMode,
       liveMetricConfig, VIEW_CONFIG, categoryColorMap, baseDataAggregatesByPeriod, baseDimensionAggregates,
-      activeTabId, activeTab]);
+      activeTabId, activeTab, activeOverlays, smaWindow]);
 
   const removeCompareCard = React.useCallback((id) => {
     setCompareCards(prev => prev.filter(c => c.id !== id));
