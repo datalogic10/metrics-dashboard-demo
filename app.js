@@ -1871,6 +1871,46 @@ var __app = (() => {
         return numeral(value).format("0.0a");
     }
   }
+  function buildBaseChartLayout(isDarkMode) {
+    const textPrimary = isDarkMode ? "#e2e8f0" : "#374151";
+    const textSecondary = isDarkMode ? "#94a3b8" : "#6b7280";
+    const gridcolor = isDarkMode ? "rgba(75, 85, 99, 0.4)" : "rgba(229, 231, 235, 0.5)";
+    return {
+      font: {
+        family: "'Inter', 'Segoe UI', sans-serif",
+        size: 12,
+        color: textPrimary
+      },
+      plot_bgcolor: isDarkMode ? "#0f172a" : "#ffffff",
+      paper_bgcolor: isDarkMode ? "#1e293b" : "#ffffff",
+      hoverlabel: {
+        font: {
+          size: 11,
+          family: "'Inter', 'Segoe UI', sans-serif",
+          color: textPrimary
+        },
+        bgcolor: isDarkMode ? "rgba(45, 55, 72, 0.95)" : "rgba(255, 255, 255, 0.95)",
+        bordercolor: isDarkMode ? "#4b5563" : "#e5e7eb"
+      },
+      hovermode: "x unified",
+      legend: {
+        bgcolor: "transparent",
+        bordercolor: "transparent",
+        borderwidth: 0,
+        font: { color: textSecondary, size: 11 },
+        orientation: "h",
+        y: -0.25
+      },
+      showlegend: true,
+      height: 500,
+      margin: { l: 80, r: 80, t: 60, b: 140 },
+      _gridcolor: gridcolor,
+      // exposed for axis config
+      _textPrimary: textPrimary,
+      // exposed for title overrides
+      _textSecondary: textSecondary
+    };
+  }
   function getHighlightPeriods(insight, periods) {
     if (!insight || !insight.metadata) return [];
     const { metadata } = insight;
@@ -2927,19 +2967,20 @@ var __app = (() => {
     const isSideBySide = cards.length === 3;
     const cardResults = cards.map((card) => buildCardTraces(card, compareDateRange));
     let traces = [];
+    const baseLayout = buildBaseChartLayout(isDarkMode);
     const layout = {
-      font: { family: "'Inter', 'Segoe UI', sans-serif", size: 12, color: isDarkMode ? "#e2e8f0" : "#374151" },
-      plot_bgcolor: isDarkMode ? "#0f172a" : "#ffffff",
-      paper_bgcolor: isDarkMode ? "#1e293b" : "#ffffff",
-      legend: { bgcolor: "transparent", bordercolor: "transparent", font: { color: isDarkMode ? "#94a3b8" : "#6b7280", size: 11 }, orientation: "h", y: -0.2 },
+      ...baseLayout,
       height: isSideBySide ? 500 : 550,
-      margin: { l: 80, r: 80, t: 60, b: 120 },
-      showlegend: true
+      margin: { l: 80, r: 80, t: 60, b: 120 }
     };
+    delete layout._gridcolor;
+    delete layout._textPrimary;
+    delete layout._textSecondary;
     if (isSideBySide) {
       const domains = [[0, 0.3], [0.35, 0.65], [0.7, 1]];
       layout.annotations = [];
-      layout.barmode = "group";
+      const barChartTypes = cardResults.map((r) => r.chartType).filter((t) => t !== "line");
+      layout.barmode = barChartTypes.some((t) => t === "stacked") ? "relative" : barChartTypes.length > 0 ? "group" : void 0;
       cardResults.forEach((result, i) => {
         const primaryYIdx = i * 2 + 1;
         const overlayYIdx = i * 2 + 2;
@@ -2947,8 +2988,8 @@ var __app = (() => {
         const yKey = primaryYIdx === 1 ? "yaxis" : `yaxis${primaryYIdx}`;
         const yRef = primaryYIdx === 1 ? "y" : `y${primaryYIdx}`;
         const xRef = i === 0 ? "x" : `x${i + 1}`;
-        layout[xKey] = { domain: domains[i], anchor: yRef, type: "category", tickangle: -45, tickfont: { size: 10, color: isDarkMode ? "#94a3b8" : "#6b7280" } };
-        layout[yKey] = { anchor: xRef, title: { text: result.yAxisTitle, font: { size: 11 } }, tickfont: { size: 10, color: isDarkMode ? "#94a3b8" : "#6b7280" }, gridcolor: isDarkMode ? "#334155" : "#f1f5f9" };
+        layout[xKey] = { domain: domains[i], anchor: yRef, type: "category", tickangle: -45, tickfont: { size: 10, color: baseLayout._textSecondary } };
+        layout[yKey] = { anchor: xRef, title: { text: result.yAxisTitle, font: { size: 11 } }, tickfont: { size: 10, color: baseLayout._textSecondary }, gridcolor: baseLayout._gridcolor };
         if (result.hasY2) {
           layout[`yaxis${overlayYIdx}`] = {
             anchor: xRef,
@@ -2988,11 +3029,11 @@ var __app = (() => {
     } else {
       const allPeriods = [.../* @__PURE__ */ new Set([...cardResults[0].periods, ...cardResults[1].periods])].sort();
       const anyHasY2 = cardResults.some((r) => r.hasY2);
-      layout.xaxis = { type: "category", tickangle: -45, tickfont: { size: 10, color: isDarkMode ? "#94a3b8" : "#6b7280" } };
+      layout.xaxis = { type: "category", tickangle: -45, tickfont: { size: 10, color: baseLayout._textSecondary } };
       layout.yaxis = {
         title: { text: [...new Set(cardResults.map((r) => r.yAxisTitle))].join(" / "), font: { size: 11 } },
-        tickfont: { size: 10, color: isDarkMode ? "#94a3b8" : "#6b7280" },
-        gridcolor: isDarkMode ? "#334155" : "#f1f5f9"
+        tickfont: { size: 10, color: baseLayout._textSecondary },
+        gridcolor: baseLayout._gridcolor
       };
       if (anyHasY2) {
         layout.yaxis2 = {
@@ -9159,75 +9200,47 @@ var __app = (() => {
           chartLayout2 = result.chartLayout;
         }
       }
+      const baseLayout = buildBaseChartLayout(isDarkMode);
       const modernLayout = {
         ...chartLayout2,
-        font: {
-          family: "'Inter', 'Segoe UI', sans-serif",
-          size: 12,
-          color: theme.textPrimary
-        },
-        legend: {
-          bgcolor: "transparent",
-          bordercolor: "transparent",
-          borderwidth: 0,
-          font: { color: theme.textSecondary, size: 11 },
-          orientation: "h",
-          y: -0.25
-        },
+        ...baseLayout,
+        // Theme-specific overrides (main chart has full theme object)
         plot_bgcolor: theme.chartPlotBg,
         paper_bgcolor: theme.chartBg,
         hoverlabel: {
-          font: {
-            size: 11,
-            family: "'Inter', 'Segoe UI', sans-serif",
-            color: theme.textPrimary
-          },
-          bgcolor: isDarkMode ? "rgba(45, 55, 72, 0.95)" : "rgba(255, 255, 255, 0.95)",
+          ...baseLayout.hoverlabel,
           bordercolor: theme.borderPrimary
         },
         xaxis: {
           ...chartLayout2.xaxis,
           color: theme.textPrimary,
-          gridcolor: isDarkMode ? "rgba(75, 85, 99, 0.4)" : "rgba(229, 231, 235, 0.5)",
+          gridcolor: baseLayout._gridcolor,
           title: chartLayout2.xaxis && chartLayout2.xaxis.title ? {
             ...chartLayout2.xaxis.title,
-            font: {
-              color: theme.textPrimary,
-              size: 12
-            }
+            font: { color: theme.textPrimary, size: 12 }
           } : void 0
         },
         yaxis: {
           ...chartLayout2.yaxis,
           color: theme.textPrimary,
-          gridcolor: isDarkMode ? "rgba(75, 85, 99, 0.4)" : "rgba(229, 231, 235, 0.5)",
+          gridcolor: baseLayout._gridcolor,
           title: chartLayout2.yaxis && chartLayout2.yaxis.title ? {
             ...chartLayout2.yaxis.title,
-            font: {
-              color: theme.textPrimary,
-              size: 12
-            }
+            font: { color: theme.textPrimary, size: 12 }
           } : void 0
         },
         title: chartLayout2.title ? {
           ...chartLayout2.title,
-          font: {
-            color: theme.textPrimary,
-            size: 14,
-            family: "'Inter', 'Segoe UI', sans-serif"
-          }
+          font: { color: theme.textPrimary, size: 14, family: baseLayout.font.family }
         } : void 0,
         annotations: chartLayout2.annotations ? chartLayout2.annotations.map((ann) => ({
           ...ann,
-          font: {
-            ...ann.font,
-            color: theme.textPrimary,
-            size: 11
-          }
-        })) : void 0,
-        height: 500,
-        margin: { l: 80, r: 80, t: 60, b: 140 }
+          font: { ...ann.font, color: theme.textPrimary, size: 11 }
+        })) : void 0
       };
+      delete modernLayout._gridcolor;
+      delete modernLayout._textPrimary;
+      delete modernLayout._textSecondary;
       return { chartData: chartData2, chartLayout: modernLayout };
     }, [
       view,

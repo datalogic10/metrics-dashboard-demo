@@ -23,7 +23,7 @@ import {
   calculateSMA,
 } from './metrics.js';
 import { getCategoryColor } from './theme.js';
-import { resolveChartType, isFormulaMetric, formatMetricValue, getMetricLabels } from './chartUtils.js';
+import { resolveChartType, isFormulaMetric, formatMetricValue, getMetricLabels, resolveBarmode, buildBaseChartLayout } from './chartUtils.js';
 
 // --- Period filtering ---
 
@@ -391,21 +391,24 @@ export function buildComparisonChart(cards, compareDateRange, isDarkMode) {
   const cardResults = cards.map(card => buildCardTraces(card, compareDateRange));
 
   let traces = [];
+  const baseLayout = buildBaseChartLayout(isDarkMode);
   const layout = {
-    font: { family: "'Inter', 'Segoe UI', sans-serif", size: 12, color: isDarkMode ? '#e2e8f0' : '#374151' },
-    plot_bgcolor: isDarkMode ? '#0f172a' : '#ffffff',
-    paper_bgcolor: isDarkMode ? '#1e293b' : '#ffffff',
-    legend: { bgcolor: 'transparent', bordercolor: 'transparent', font: { color: isDarkMode ? '#94a3b8' : '#6b7280', size: 11 }, orientation: 'h', y: -0.2 },
+    ...baseLayout,
     height: isSideBySide ? 500 : 550,
     margin: { l: 80, r: 80, t: 60, b: 120 },
-    showlegend: true,
   };
+  // Remove internal helper keys from layout
+  delete layout._gridcolor;
+  delete layout._textPrimary;
+  delete layout._textSecondary;
 
   if (isSideBySide) {
     // 3 cards: side-by-side subplots
     const domains = [[0, 0.30], [0.35, 0.65], [0.70, 1.0]];
     layout.annotations = [];
-    layout.barmode = 'group';
+    // Use barmode from the first card that has bars; if mixed stacked/grouped, prefer relative (stacked)
+    const barChartTypes = cardResults.map(r => r.chartType).filter(t => t !== 'line');
+    layout.barmode = barChartTypes.some(t => t === 'stacked') ? 'relative' : (barChartTypes.length > 0 ? 'group' : undefined);
 
     cardResults.forEach((result, i) => {
       // Axis numbering: card i gets primary y at index (i*2+1), overlay y2 at (i*2+2)
@@ -418,8 +421,8 @@ export function buildComparisonChart(cards, compareDateRange, isDarkMode) {
       const xRef = i === 0 ? 'x' : `x${i + 1}`;
 
       // Anchor x and y axes to each other so each subplot is self-contained
-      layout[xKey] = { domain: domains[i], anchor: yRef, type: 'category', tickangle: -45, tickfont: { size: 10, color: isDarkMode ? '#94a3b8' : '#6b7280' } };
-      layout[yKey] = { anchor: xRef, title: { text: result.yAxisTitle, font: { size: 11 } }, tickfont: { size: 10, color: isDarkMode ? '#94a3b8' : '#6b7280' }, gridcolor: isDarkMode ? '#334155' : '#f1f5f9' };
+      layout[xKey] = { domain: domains[i], anchor: yRef, type: 'category', tickangle: -45, tickfont: { size: 10, color: baseLayout._textSecondary } };
+      layout[yKey] = { anchor: xRef, title: { text: result.yAxisTitle, font: { size: 11 } }, tickfont: { size: 10, color: baseLayout._textSecondary }, gridcolor: baseLayout._gridcolor };
 
       // Y2 overlay for each subplot if needed
       if (result.hasY2) {
@@ -453,11 +456,11 @@ export function buildComparisonChart(cards, compareDateRange, isDarkMode) {
     const allPeriods = [...new Set([...cardResults[0].periods, ...cardResults[1].periods])].sort();
     const anyHasY2 = cardResults.some(r => r.hasY2);
 
-    layout.xaxis = { type: 'category', tickangle: -45, tickfont: { size: 10, color: isDarkMode ? '#94a3b8' : '#6b7280' } };
+    layout.xaxis = { type: 'category', tickangle: -45, tickfont: { size: 10, color: baseLayout._textSecondary } };
     layout.yaxis = {
       title: { text: [...new Set(cardResults.map(r => r.yAxisTitle))].join(' / '), font: { size: 11 } },
-      tickfont: { size: 10, color: isDarkMode ? '#94a3b8' : '#6b7280' },
-      gridcolor: isDarkMode ? '#334155' : '#f1f5f9',
+      tickfont: { size: 10, color: baseLayout._textSecondary },
+      gridcolor: baseLayout._gridcolor,
     };
     if (anyHasY2) {
       layout.yaxis2 = {
@@ -466,6 +469,8 @@ export function buildComparisonChart(cards, compareDateRange, isDarkMode) {
         zeroline: true, zerolinecolor: 'rgba(0,0,0,0.05)', zerolinewidth: 1,
       };
     }
+    // 2-card overlay: use "group" so bars from different cards sit side-by-side (not stacked on top of each other)
+    // This overrides per-card stacked behavior because overlaying stacked bars from 2 cards is unreadable
     layout.barmode = 'group';
 
     cardResults.forEach((result, cardIdx) => {

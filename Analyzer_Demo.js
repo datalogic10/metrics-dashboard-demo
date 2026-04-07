@@ -47,6 +47,7 @@ import {
   getHighlightPeriods as getHighlightPeriodsUtil,
   applyHighlightingToChartData,
   formatXAxisTicks as formatXAxisTicksUtil,
+  buildBaseChartLayout,
 } from './src/chartUtils.js';
 import {
   formatFilterName as formatFilterNameUtil,
@@ -5975,92 +5976,59 @@ export function render() {
       }
     }
 
-    // Modern layout configuration
+    // Modern layout — shared base from chartUtils.js, with theme-specific overrides
+    const baseLayout = buildBaseChartLayout(isDarkMode);
     const modernLayout = {
       ...chartLayout,
-      font: {
-        family: "'Inter', 'Segoe UI', sans-serif",
-        size: 12,
-        color: theme.textPrimary,
-      },
-      legend: {
-        bgcolor: "transparent",
-        bordercolor: "transparent",
-        borderwidth: 0,
-        font: { color: theme.textSecondary, size: 11 },
-        orientation: "h",
-        y: -0.25,
-      },
+      ...baseLayout,
+      // Theme-specific overrides (main chart has full theme object)
       plot_bgcolor: theme.chartPlotBg,
       paper_bgcolor: theme.chartBg,
       hoverlabel: {
-        font: {
-          size: 11,
-          family: "'Inter', 'Segoe UI', sans-serif",
-          color: theme.textPrimary,
-        },
-        bgcolor: isDarkMode
-          ? "rgba(45, 55, 72, 0.95)"
-          : "rgba(255, 255, 255, 0.95)",
+        ...baseLayout.hoverlabel,
         bordercolor: theme.borderPrimary,
       },
       xaxis: {
         ...chartLayout.xaxis,
         color: theme.textPrimary,
-        gridcolor: isDarkMode
-          ? "rgba(75, 85, 99, 0.4)"
-          : "rgba(229, 231, 235, 0.5)",
+        gridcolor: baseLayout._gridcolor,
         title:
           chartLayout.xaxis && chartLayout.xaxis.title
             ? {
                 ...chartLayout.xaxis.title,
-                font: {
-                  color: theme.textPrimary,
-                  size: 12,
-                },
+                font: { color: theme.textPrimary, size: 12 },
               }
             : undefined,
       },
       yaxis: {
         ...chartLayout.yaxis,
         color: theme.textPrimary,
-        gridcolor: isDarkMode
-          ? "rgba(75, 85, 99, 0.4)"
-          : "rgba(229, 231, 235, 0.5)",
+        gridcolor: baseLayout._gridcolor,
         title:
           chartLayout.yaxis && chartLayout.yaxis.title
             ? {
                 ...chartLayout.yaxis.title,
-                font: {
-                  color: theme.textPrimary,
-                  size: 12,
-                },
+                font: { color: theme.textPrimary, size: 12 },
               }
             : undefined,
       },
       title: chartLayout.title
         ? {
             ...chartLayout.title,
-            font: {
-              color: theme.textPrimary,
-              size: 14,
-              family: "'Inter', 'Segoe UI', sans-serif",
-            },
+            font: { color: theme.textPrimary, size: 14, family: baseLayout.font.family },
           }
         : undefined,
       annotations: chartLayout.annotations
         ? chartLayout.annotations.map((ann) => ({
             ...ann,
-            font: {
-              ...ann.font,
-              color: theme.textPrimary,
-              size: 11,
-            },
+            font: { ...ann.font, color: theme.textPrimary, size: 11 },
           }))
         : undefined,
-      height: 500,
-      margin: { l: 80, r: 80, t: 60, b: 140 },
     };
+    // Clean up internal helper keys
+    delete modernLayout._gridcolor;
+    delete modernLayout._textPrimary;
+    delete modernLayout._textSecondary;
 
     return { chartData, chartLayout: modernLayout };
   }, [

@@ -73,6 +73,65 @@ export function formatMetricValue(value, metricName, metricConfig) {
   }
 }
 
+// --- Shared chart layout helpers ---
+
+/**
+ * Resolve Plotly barmode for a given chart type.
+ * Stacked bars use "relative" (not "stack") to handle negative values correctly.
+ * @param {string} chartType - "stacked" | "grouped" | "line"
+ * @returns {string|undefined} Plotly barmode value
+ */
+export function resolveBarmode(chartType) {
+  if (chartType === 'line') return undefined;
+  return chartType === 'grouped' ? 'group' : 'relative';
+}
+
+/**
+ * Build a theme-aware base layout that can be used by both main chart and comparison chart.
+ * This ensures consistent UX (fonts, hover behavior, legend, colors) across all charts.
+ * @param {boolean} isDarkMode
+ * @returns {Object} Plotly layout properties
+ */
+export function buildBaseChartLayout(isDarkMode) {
+  const textPrimary = isDarkMode ? '#e2e8f0' : '#374151';
+  const textSecondary = isDarkMode ? '#94a3b8' : '#6b7280';
+  const gridcolor = isDarkMode ? 'rgba(75, 85, 99, 0.4)' : 'rgba(229, 231, 235, 0.5)';
+
+  return {
+    font: {
+      family: "'Inter', 'Segoe UI', sans-serif",
+      size: 12,
+      color: textPrimary,
+    },
+    plot_bgcolor: isDarkMode ? '#0f172a' : '#ffffff',
+    paper_bgcolor: isDarkMode ? '#1e293b' : '#ffffff',
+    hoverlabel: {
+      font: {
+        size: 11,
+        family: "'Inter', 'Segoe UI', sans-serif",
+        color: textPrimary,
+      },
+      bgcolor: isDarkMode ? 'rgba(45, 55, 72, 0.95)' : 'rgba(255, 255, 255, 0.95)',
+      bordercolor: isDarkMode ? '#4b5563' : '#e5e7eb',
+    },
+    hovermode: 'x unified',
+    legend: {
+      bgcolor: 'transparent',
+      bordercolor: 'transparent',
+      borderwidth: 0,
+      font: { color: textSecondary, size: 11 },
+      orientation: 'h',
+      y: -0.25,
+    },
+    showlegend: true,
+    height: 500,
+    margin: { l: 80, r: 80, t: 60, b: 140 },
+    _gridcolor: gridcolor,       // exposed for axis config
+    _textPrimary: textPrimary,   // exposed for title overrides
+    _textSecondary: textSecondary,
+  };
+}
+
 // --- Chart data transformation helpers ---
 
 /**
