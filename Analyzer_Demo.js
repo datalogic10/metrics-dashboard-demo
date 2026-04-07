@@ -58,7 +58,7 @@ export function render() {
   // Data Summary collapse state (declared early — used in STATIC_STYLES below)
   const [showDataSummary, setShowDataSummary] = React.useState(false);
 
-  const DATE_RANGES = ["7D", "30D", "QTD", "YTD", "1Y", "All"];
+  const DATE_RANGES = ["7D", "14D", "30D", "QTD", "YTD", "1Y", "All"];
 
   // Static styles for performance (Optimization #3)
   // Memoized: only recomputes when theme/isDarkMode/showDataSummary changes
@@ -3955,6 +3955,8 @@ export function render() {
     switch (dateRange) {
       case "7D":
         return allDates.filter((date) => periodToDateStr(date) >= computeDaysAgo(7));
+      case "14D":
+        return allDates.filter((date) => periodToDateStr(date) >= computeDaysAgo(14));
       case "30D":
         return allDates.filter((date) => periodToDateStr(date) >= computeDaysAgo(30));
       case "QTD":

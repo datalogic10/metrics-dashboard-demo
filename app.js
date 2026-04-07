@@ -2482,7 +2482,7 @@ var __app = (() => {
     const [isDarkMode, setIsDarkMode] = React.useState(false);
     const theme = isDarkMode ? THEME_CONFIG.dark : THEME_CONFIG.light;
     const [showDataSummary, setShowDataSummary] = React.useState(false);
-    const DATE_RANGES = ["7D", "30D", "QTD", "YTD", "1Y", "All"];
+    const DATE_RANGES = ["7D", "14D", "30D", "QTD", "YTD", "1Y", "All"];
     const STATIC_STYLES = React.useMemo(
       () => ({
         base: {
@@ -5870,6 +5870,8 @@ var __app = (() => {
       switch (dateRange) {
         case "7D":
           return allDates.filter((date) => periodToDateStr(date) >= computeDaysAgo(7));
+        case "14D":
+          return allDates.filter((date) => periodToDateStr(date) >= computeDaysAgo(14));
         case "30D":
           return allDates.filter((date) => periodToDateStr(date) >= computeDaysAgo(30));
         case "QTD":
