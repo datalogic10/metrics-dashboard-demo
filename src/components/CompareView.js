@@ -125,7 +125,7 @@ export function CompareDockBar({
       )}
       {compareCards.length >= 2 && (
         <button
-          onClick={() => { setCompareDateRange("All"); setShowCompareView(true); }}
+          onClick={() => { setCompareDateRange("30D"); setShowCompareView(true); }}
           style={{
             padding: "8px 16px",
             backgroundColor: isDarkMode ? "#065f46" : "#10b981",

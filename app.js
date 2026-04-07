@@ -2941,13 +2941,26 @@ var __app = (() => {
       layout.annotations = [];
       layout.barmode = "group";
       cardResults.forEach((result, i) => {
+        const primaryYIdx = i * 2 + 1;
+        const overlayYIdx = i * 2 + 2;
         const xKey = i === 0 ? "xaxis" : `xaxis${i + 1}`;
-        const yKey = i === 0 ? "yaxis" : `yaxis${i + 1}`;
-        layout[xKey] = { domain: domains[i], type: "category", tickangle: -45, tickfont: { size: 10, color: isDarkMode ? "#94a3b8" : "#6b7280" } };
-        layout[yKey] = { title: { text: result.yAxisTitle, font: { size: 11 } }, tickfont: { size: 10, color: isDarkMode ? "#94a3b8" : "#6b7280" }, gridcolor: isDarkMode ? "#334155" : "#f1f5f9" };
+        const yKey = primaryYIdx === 1 ? "yaxis" : `yaxis${primaryYIdx}`;
+        const yRef = primaryYIdx === 1 ? "y" : `y${primaryYIdx}`;
+        const xRef = i === 0 ? "x" : `x${i + 1}`;
+        layout[xKey] = { domain: domains[i], anchor: yRef, type: "category", tickangle: -45, tickfont: { size: 10, color: isDarkMode ? "#94a3b8" : "#6b7280" } };
+        layout[yKey] = { anchor: xRef, title: { text: result.yAxisTitle, font: { size: 11 } }, tickfont: { size: 10, color: isDarkMode ? "#94a3b8" : "#6b7280" }, gridcolor: isDarkMode ? "#334155" : "#f1f5f9" };
         if (result.hasY2) {
-          const y2Key = `yaxis${i * 2 + 2}`;
-          layout[y2Key] = { title: { text: "% Share / %Growth YoY", font: { size: 10 } }, tickfont: { size: 9 }, overlaying: i === 0 ? "y" : `y${i + 1}`, side: "right", showgrid: false };
+          layout[`yaxis${overlayYIdx}`] = {
+            anchor: xRef,
+            title: { text: "% Share / %Growth YoY", font: { size: 10 } },
+            tickfont: { size: 9 },
+            overlaying: yRef,
+            side: "right",
+            showgrid: false,
+            zeroline: true,
+            zerolinecolor: "rgba(0,0,0,0.05)",
+            zerolinewidth: 1
+          };
         }
         layout.annotations.push({
           text: `<b>${cards[i].label}</b>`,
@@ -2959,13 +2972,12 @@ var __app = (() => {
           font: { size: 12, color: COMPARE_CARD_COLORS[i] }
         });
         result.traces.forEach((trace) => {
-          const xRef = i === 0 ? "x" : `x${i + 1}`;
-          const yRef = trace.yaxis === "y2" ? `y${i * 2 + 2}` : i === 0 ? "y" : `y${i + 1}`;
+          const traceYRef = trace.yaxis === "y2" ? `y${overlayYIdx}` : yRef;
           const prefixedName = `[${cards[i].label}] ${trace.name}`;
           traces.push({
             ...trace,
             xaxis: xRef,
-            yaxis: yRef,
+            yaxis: traceYRef,
             name: prefixedName,
             showlegend: true,
             visible: true,
@@ -3169,7 +3181,7 @@ var __app = (() => {
       "button",
       {
         onClick: () => {
-          setCompareDateRange("All");
+          setCompareDateRange("30D");
           setShowCompareView(true);
         },
         style: {
@@ -5679,7 +5691,7 @@ var __app = (() => {
     const hasCheckedInitialLoadRef = React.useRef(false);
     const [compareCards, setCompareCards] = React.useState([]);
     const [showCompareView, setShowCompareView] = React.useState(false);
-    const [compareDateRange, setCompareDateRange] = React.useState("All");
+    const [compareDateRange, setCompareDateRange] = React.useState("30D");
     const [traceVisibility, setTraceVisibility] = React.useState({});
     const chartRef = React.useRef(null);
     const [showGuide, setShowGuide] = React.useState(false);

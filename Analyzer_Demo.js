@@ -1380,7 +1380,7 @@ export function render() {
   // Compare dock bar state
   const [compareCards, setCompareCards] = React.useState([]);
   const [showCompareView, setShowCompareView] = React.useState(false);
-  const [compareDateRange, setCompareDateRange] = React.useState("All");
+  const [compareDateRange, setCompareDateRange] = React.useState("30D");
 
   // Legend visibility state - tracks which traces are visible/hidden after user interactions
   const [traceVisibility, setTraceVisibility] = React.useState({});
