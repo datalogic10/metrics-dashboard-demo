@@ -2,3 +2,7 @@ node_modules/
 .DS_Store
 .dev.vars
 .wrangler/
+
+# dash-api (Python backend — deployed via ash-infra)
+dash-api/**/__pycache__/
+dash-api/**/*.pyc
