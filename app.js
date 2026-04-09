@@ -1045,7 +1045,6 @@ var __app = (() => {
       if (params.p_top_n) body.top_n = params.p_top_n;
       if (params.p_rank_by) body.rank_by = params.p_rank_by;
       if (params.p_date_from) body.date_from = params.p_date_from;
-      if (params.p_date_to) body.date_to = params.p_date_to;
       return fetch(apiUrl + "/query", {
         method: "POST",
         headers: {
@@ -4658,12 +4657,12 @@ var __app = (() => {
   // Analyzer_Demo.js
   var SERVER_DATE_WINDOW_YEARS = 5;
   function computeServerDateWindow(liveMetricConfig) {
-    if (!liveMetricConfig || !liveMetricConfig.dateColumn) return { from: null, to: null };
+    if (!liveMetricConfig || !liveMetricConfig.dateColumn) return { from: null };
     const now = /* @__PURE__ */ new Date();
     const from = new Date(now);
     from.setFullYear(from.getFullYear() - SERVER_DATE_WINDOW_YEARS);
     const fmt = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
-    return { from: fmt(from), to: fmt(now) };
+    return { from: fmt(from) };
   }
   function render() {
     const [isDarkMode, setIsDarkMode] = React.useState(false);
@@ -6607,8 +6606,7 @@ var __app = (() => {
         p_date_column: dateCol,
         p_metrics: rpcMetrics,
         p_filters: pFilters,
-        ...serverWindow.from ? { p_date_from: serverWindow.from } : {},
-        ...serverWindow.to ? { p_date_to: serverWindow.to } : {}
+        ...serverWindow.from ? { p_date_from: serverWindow.from } : {}
       }, { signal: controller.signal });
       const dimPromise = dimColumn ? cachedQuery("data", {
         p_time_grain: grain,
@@ -6617,8 +6615,7 @@ var __app = (() => {
         p_metrics: rpcMetrics,
         p_filters: pFilters,
         ...topX > 0 ? { p_top_n: topX } : {},
-        ...serverWindow.from ? { p_date_from: serverWindow.from } : {},
-        ...serverWindow.to ? { p_date_to: serverWindow.to } : {}
+        ...serverWindow.from ? { p_date_from: serverWindow.from } : {}
         // p_rank_by omitted — requires updated query_dataset RPC (migration 015)
       }, { signal: controller.signal }) : Promise.resolve(null);
       const hasMetric3 = !!liveMetricConfig.derivedAggType || liveMetricConfig.derivedMode === "formula";
@@ -6711,8 +6708,7 @@ var __app = (() => {
         p_group_by: [col],
         p_metrics: rpcMetrics,
         p_filters: pFilters,
-        ...serverWindow.from ? { p_date_from: serverWindow.from } : {},
-        ...serverWindow.to ? { p_date_to: serverWindow.to } : {}
+        ...serverWindow.from ? { p_date_from: serverWindow.from } : {}
       }, { signal: controller.signal }).then((data) => {
         const aggs = transformToDimensionAggregates(data.rows || [], col, hasMetric3, formulaConfigsArg, liveBooleanColumns);
         Object.keys(aggs).forEach((key) => {

@@ -66,15 +66,16 @@ import { DATE_RANGES, GUIDE_STEPS, PRO_TIPS } from './src/constants.js';
 
 // Default server-side fetch window when connecting to a live Postgres source.
 // Bounds the query to the last N years so huge datasets (e.g. a 10y prices table)
-// don't force a full scan on every load. The client still crops within this
-// window using the dateRange control, and DoD/WoW/YoY lookups stay correct
-// because the fetched history is larger than the visible range.
+// don't force a full scan on every load. Only a lower bound is applied — an
+// upper bound would silently truncate forecast/target/budget tables that
+// legitimately have rows dated in the future, and wouldn't reduce scan work
+// anyway once the lower bound has pruned the index range.
 const SERVER_DATE_WINDOW_YEARS = 5;
 
 function computeServerDateWindow(liveMetricConfig) {
   // Only apply when we know which column to bound on. Without a date column
-  // the RPC ignores p_date_from/p_date_to anyway.
-  if (!liveMetricConfig || !liveMetricConfig.dateColumn) return { from: null, to: null };
+  // the RPC ignores p_date_from anyway.
+  if (!liveMetricConfig || !liveMetricConfig.dateColumn) return { from: null };
   const now = new Date();
   const from = new Date(now);
   from.setFullYear(from.getFullYear() - SERVER_DATE_WINDOW_YEARS);
@@ -82,7 +83,7 @@ function computeServerDateWindow(liveMetricConfig) {
     d.getFullYear() + '-' +
     String(d.getMonth() + 1).padStart(2, '0') + '-' +
     String(d.getDate()).padStart(2, '0');
-  return { from: fmt(from), to: fmt(now) };
+  return { from: fmt(from) };
 }
 
 export function render() {
@@ -2468,7 +2469,6 @@ export function render() {
       p_metrics: rpcMetrics,
       p_filters: pFilters,
       ...(serverWindow.from ? { p_date_from: serverWindow.from } : {}),
-      ...(serverWindow.to ? { p_date_to: serverWindow.to } : {}),
     }, { signal: controller.signal });
 
     // Call 2: Dimension aggregates (only if a dimension is selected)
@@ -2482,7 +2482,6 @@ export function render() {
           p_filters: pFilters,
           ...(topX > 0 ? { p_top_n: topX } : {}),
           ...(serverWindow.from ? { p_date_from: serverWindow.from } : {}),
-          ...(serverWindow.to ? { p_date_to: serverWindow.to } : {}),
           // p_rank_by omitted — requires updated query_dataset RPC (migration 015)
         }, { signal: controller.signal })
       : Promise.resolve(null);
@@ -2604,7 +2603,6 @@ export function render() {
         p_metrics: rpcMetrics,
         p_filters: pFilters,
         ...(serverWindow.from ? { p_date_from: serverWindow.from } : {}),
-        ...(serverWindow.to ? { p_date_to: serverWindow.to } : {}),
       }, { signal: controller.signal }).then(data => {
         const aggs = transformToDimensionAggregates(data.rows || [], col, hasMetric3, formulaConfigsArg, liveBooleanColumns);
         Object.keys(aggs).forEach(key => {

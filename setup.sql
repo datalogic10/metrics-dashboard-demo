@@ -10,6 +10,7 @@
 DROP FUNCTION IF EXISTS public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer);
 DROP FUNCTION IF EXISTS public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer, integer);
 DROP FUNCTION IF EXISTS public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer, integer, text);
+DROP FUNCTION IF EXISTS public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer, integer, text, text);
 
 CREATE OR REPLACE FUNCTION public.query_dataset(
   p_table text,                       -- dataset name (mapped to actual table internally)
@@ -24,8 +25,8 @@ CREATE OR REPLACE FUNCTION public.query_dataset(
   p_limit integer DEFAULT 10000,
   p_top_n integer DEFAULT NULL,       -- top N categories for first group_by column; rest bucketed as 'Rest Combined'
   p_rank_by text DEFAULT NULL,        -- metric alias to rank top-N by (defaults to first metric)
-  p_date_from text DEFAULT NULL,      -- inclusive lower bound (YYYY-MM-DD) applied to p_date_column
-  p_date_to text DEFAULT NULL         -- inclusive upper bound (YYYY-MM-DD) applied to p_date_column
+  p_date_from text DEFAULT NULL,      -- inclusive lower bound (YYYY-MM-DD) on p_date_column
+  p_date_to text DEFAULT NULL         -- inclusive upper bound (YYYY-MM-DD) on p_date_column (through end of day)
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -284,9 +285,20 @@ BEGIN
       END IF;
     END LOOP;
 
-    -- Date range bounds (applied to p_date_column). Lets the client pull a
-    -- sensible default window (e.g. last 5y) instead of the entire table.
-    -- Validates YYYY-MM-DD to prevent injection, since values are inlined.
+    -- Date range bounds on p_date_column. Both are optional; omitting either
+    -- side means "no bound" on that side. In particular, omitting p_date_to
+    -- is the correct default for forecast/target/budget tables whose rows
+    -- legitimately extend past today.
+    --
+    -- The upper bound is expressed as a half-open interval
+    --   p_date_column < (p_date_to + 1 day)
+    -- rather than a closed `<= p_date_to::date`. For a timestamp/timestamptz
+    -- column, `ts <= '2026-04-09'::date` silently becomes
+    -- `ts <= '2026-04-09 00:00:00'`, dropping every row on the upper-bound
+    -- day that has a non-midnight time. The half-open form is correct for
+    -- both date and timestamp[tz] columns and stays index-friendly.
+    --
+    -- YYYY-MM-DD format is validated because values are inlined via format().
     IF p_date_column IS NOT NULL THEN
       IF p_date_from IS NOT NULL AND p_date_from ~ '^\d{4}-\d{2}-\d{2}$' THEN
         v_where_parts := array_append(v_where_parts,
@@ -294,7 +306,7 @@ BEGIN
       END IF;
       IF p_date_to IS NOT NULL AND p_date_to ~ '^\d{4}-\d{2}-\d{2}$' THEN
         v_where_parts := array_append(v_where_parts,
-          format('%I <= %L::date', p_date_column, p_date_to));
+          format('%I < (%L::date + INTERVAL ''1 day'')', p_date_column, p_date_to));
       END IF;
     END IF;
 
