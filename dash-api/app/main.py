@@ -3,7 +3,6 @@
 Serves as the backend for metrics-dashboard-demo, replacing the need for
 Supabase PostgREST RPC when connecting to non-Supabase databases.
 """
-# HOTRELOAD-SMOKETEST: verify watchfiles triggers on pull
 
 import logging
 from contextlib import asynccontextmanager
