@@ -18,6 +18,21 @@ An interactive metrics analytics dashboard for exploring revenue, growth, and se
 - **Light/Dark theme** — Toggle between color modes
 - **Fully client-side** — Runs entirely in the browser with synthetic demo data; no backend required
 
+## Connecting to a Database
+
+The dashboard supports two connection types via the "Connect Database" modal:
+
+| Type | Backend | Use case |
+|------|---------|----------|
+| **Supabase** | Supabase PostgREST RPC | Databases with Supabase PostgREST (requires `query_dataset` function from `setup.sql`) |
+| **Direct Postgres** | [dash-api](https://github.com/datalogic10/ash-infra/tree/main/dash-api) FastAPI proxy | Any Postgres database via named connections |
+
+**Direct Postgres** requires a running `dash-api` instance (see [ash-infra](https://github.com/datalogic10/ash-infra)). Connection fields:
+- **API URL** — dash-api base URL (e.g., `https://your-server.com/dash-api`)
+- **API Secret** — Bearer token configured in dash-api
+- **Connection Name** — Named connection (e.g., `zbt`)
+- **Table** — Full `schema.table` name (e.g., `analytics.signals`)
+
 ## Tech Stack
 
 - **React 18** — UI framework (loaded via CDN)
