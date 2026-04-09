@@ -127,6 +127,8 @@ export function createFastApiCaller(connectionParams) {
     if (params.p_limit) body.limit = params.p_limit;
     if (params.p_top_n) body.top_n = params.p_top_n;
     if (params.p_rank_by) body.rank_by = params.p_rank_by;
+    if (params.p_date_from) body.date_from = params.p_date_from;
+    if (params.p_date_to) body.date_to = params.p_date_to;
     return fetch(apiUrl + '/query', {
       method: 'POST',
       headers: {

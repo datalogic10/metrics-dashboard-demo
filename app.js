@@ -1043,6 +1043,8 @@ var __app = (() => {
       if (params.p_limit) body.limit = params.p_limit;
       if (params.p_top_n) body.top_n = params.p_top_n;
       if (params.p_rank_by) body.rank_by = params.p_rank_by;
+      if (params.p_date_from) body.date_from = params.p_date_from;
+      if (params.p_date_to) body.date_to = params.p_date_to;
       return fetch(apiUrl + "/query", {
         method: "POST",
         headers: {
@@ -4652,6 +4654,15 @@ var __app = (() => {
   ];
 
   // Analyzer_Demo.js
+  var SERVER_DATE_WINDOW_YEARS = 5;
+  function computeServerDateWindow(liveMetricConfig) {
+    if (!liveMetricConfig || !liveMetricConfig.dateColumn) return { from: null, to: null };
+    const now = /* @__PURE__ */ new Date();
+    const from = new Date(now);
+    from.setFullYear(from.getFullYear() - SERVER_DATE_WINDOW_YEARS);
+    const fmt = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    return { from: fmt(from), to: fmt(now) };
+  }
   function render() {
     const [isDarkMode, setIsDarkMode] = React.useState(false);
     const theme = isDarkMode ? THEME_CONFIG.dark : THEME_CONFIG.light;
@@ -4893,6 +4904,7 @@ var __app = (() => {
       if (loadedDatasetsRef.current.has(connectionParams.dataset) && liveColumnMeta) return;
       setLiveDataLoading(true);
       setLiveDataError(null);
+      distinctTouchedRef.current = /* @__PURE__ */ new Set();
       const { dataset } = connectionParams;
       callQueryDataset("schema", {}).then((schemaData) => {
         const columns = schemaData.columns || [];
@@ -4940,31 +4952,7 @@ var __app = (() => {
           const grainToFreq = { day: "Daily", week: "Weekly", month: "Monthly", quarter: "Quarterly", year: "Yearly" };
           setDataFrequency(grainToFreq[config.defaultGrain] || "Monthly");
         }
-        const dateCol = config.dateColumn || columns.find((c) => c.udt === "date" || c.name.includes("_dt"))?.name;
-        const dimCols = columns.filter((c) => {
-          if (c.name === dateCol) return false;
-          if (c.udt === "int4" || c.udt === "int8" || c.udt === "float4" || c.udt === "float8" || c.udt === "numeric") return false;
-          return true;
-        });
-        const boolCols = new Set(columns.filter((c) => c.udt === "bool").map((c) => c.name));
-        return Promise.all(
-          dimCols.map(
-            (c) => cachedQuery("distinct", { p_column: c.name }).then((r) => ({ column: c.name, values: r.values || [], isBool: boolCols.has(c.name) })).catch(() => ({ column: c.name, values: [], isBool: boolCols.has(c.name) }))
-          )
-        );
-      }).then((distinctResults) => {
-        const filterOpts = {};
-        distinctResults.forEach((r) => {
-          if (r.isBool) {
-            filterOpts[r.column] = r.values.map((v) => r.column + "_" + String(v).toLowerCase());
-          } else {
-            filterOpts[r.column] = r.values;
-          }
-        });
-        setLiveFilterOptions(filterOpts);
-        setLiveSchemaReady(true);
-        setLiveDataLoading(false);
-        loadedDatasetsRef.current.add(connectionParams.dataset);
+        const schemaColNames = new Set(columns.map((c) => c.name));
         if (!uiSelectionsRestoredRef.current.has(activeTabId)) {
           uiSelectionsRestoredRef.current.add(activeTabId);
           try {
@@ -4972,12 +4960,11 @@ var __app = (() => {
             const saved = storageGet(selectionsKey);
             if (saved) {
               const s = JSON.parse(saved);
-              const schemaColNames = new Set(distinctResults.map((r) => r.column));
               if (s.dataFrequency) setDataFrequency(s.dataFrequency);
               if (s.metric) setMetric(s.metric);
               if (s.view && s.view !== "Overall") {
-                const viewValid = distinctResults.some((r) => {
-                  const label = r.column.replace(/^is_/, "").replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
+                const viewValid = columns.some((c) => {
+                  const label = c.name.replace(/^is_/, "").replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
                   return label === s.view;
                 });
                 setView(viewValid ? s.view : "Overall");
@@ -5011,6 +4998,10 @@ var __app = (() => {
           } catch (e) {
           }
         }
+        setLiveFilterOptions({});
+        setLiveSchemaReady(true);
+        setLiveDataLoading(false);
+        loadedDatasetsRef.current.add(connectionParams.dataset);
       }).catch((err) => {
         setLiveDataError(err.message);
         setLiveDataLoading(false);
@@ -6191,12 +6182,33 @@ var __app = (() => {
       }, 12e4);
       return () => clearTimeout(timer);
     }, []);
+    const distinctTouchedRef = React.useRef(/* @__PURE__ */ new Set());
+    const ensureDistinctLoaded = React.useCallback((column) => {
+      if (!column) return;
+      if (dataSourceType === "csv") return;
+      if (!connectionParams) return;
+      if (distinctTouchedRef.current.has(column)) return;
+      distinctTouchedRef.current.add(column);
+      const isBool = liveBooleanColumns.has(column);
+      cachedQuery("distinct", { p_column: column }).then((r) => {
+        const raw = r.values || [];
+        const values = isBool ? raw.map((v) => column + "_" + String(v).toLowerCase()) : raw;
+        setLiveFilterOptions((prev) => ({ ...prev, [column]: values }));
+      }).catch(() => {
+        distinctTouchedRef.current.delete(column);
+        setLiveFilterOptions((prev) => ({ ...prev, [column]: [] }));
+      });
+    }, [dataSourceType, connectionParams, liveBooleanColumns, cachedQuery]);
     const toggleFilterExpansion = React.useCallback((filterName) => {
-      setExpandedFilters((prev) => ({
-        ...prev,
-        [filterName]: !prev[filterName]
-      }));
-    }, []);
+      setExpandedFilters((prev) => {
+        const next = !prev[filterName];
+        if (next && typeof filterName === "string" && filterName.startsWith("dim_") && filterName.endsWith("_filter")) {
+          const colName = filterName.slice(4, -7);
+          ensureDistinctLoaded(colName);
+        }
+        return { ...prev, [filterName]: next };
+      });
+    }, [ensureDistinctLoaded]);
     const mouseHandlers = React.useMemo(
       () => ({
         hoverEnter: (e, bgColor = "#f0f9ff", borderColor = "#6366f1") => {
@@ -6573,6 +6585,7 @@ var __app = (() => {
       const grain = frequencyToGrain[dataFrequency] || "month";
       const dateCol = liveMetricConfig.dateColumn || liveDateColumn;
       const rpcMetrics = buildRpcMetrics(liveMetricConfig);
+      const serverWindow = computeServerDateWindow(liveMetricConfig);
       const pFilters = {};
       Object.keys(dynamicFilters).forEach((filterKey) => {
         const vals = dynamicFilters[filterKey];
@@ -6593,7 +6606,9 @@ var __app = (() => {
         p_time_grain: grain,
         p_date_column: dateCol,
         p_metrics: rpcMetrics,
-        p_filters: pFilters
+        p_filters: pFilters,
+        ...serverWindow.from ? { p_date_from: serverWindow.from } : {},
+        ...serverWindow.to ? { p_date_to: serverWindow.to } : {}
       });
       const dimPromise = dimColumn ? cachedQuery("data", {
         p_time_grain: grain,
@@ -6601,7 +6616,9 @@ var __app = (() => {
         p_group_by: [dimColumn],
         p_metrics: rpcMetrics,
         p_filters: pFilters,
-        ...topX > 0 ? { p_top_n: topX } : {}
+        ...topX > 0 ? { p_top_n: topX } : {},
+        ...serverWindow.from ? { p_date_from: serverWindow.from } : {},
+        ...serverWindow.to ? { p_date_to: serverWindow.to } : {}
         // p_rank_by omitted — requires updated query_dataset RPC (migration 015)
       }) : Promise.resolve(null);
       const hasMetric3 = !!liveMetricConfig.derivedAggType || liveMetricConfig.derivedMode === "formula";
@@ -6679,6 +6696,7 @@ var __app = (() => {
       if (liveMetricConfig.revenueMode === "formula") formulaConfigs.revenue = { operator: liveMetricConfig.revenueFormulaOperator || "/" };
       if (liveMetricConfig.derivedMode === "formula") formulaConfigs.derived = { operator: liveMetricConfig.derivedFormulaOperator || "/" };
       const formulaConfigsArg = Object.keys(formulaConfigs).length > 0 ? formulaConfigs : null;
+      const serverWindow = computeServerDateWindow(liveMetricConfig);
       const CONCURRENCY = 3;
       const merged = {};
       const fetchDim = (col) => cachedQuery("data", {
@@ -6686,7 +6704,9 @@ var __app = (() => {
         p_date_column: dateCol,
         p_group_by: [col],
         p_metrics: rpcMetrics,
-        p_filters: pFilters
+        p_filters: pFilters,
+        ...serverWindow.from ? { p_date_from: serverWindow.from } : {},
+        ...serverWindow.to ? { p_date_to: serverWindow.to } : {}
       }).then((data) => {
         const aggs = transformToDimensionAggregates(data.rows || [], col, hasMetric3, formulaConfigsArg, liveBooleanColumns);
         Object.keys(aggs).forEach((key) => {

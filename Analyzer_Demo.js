@@ -64,6 +64,27 @@ import { StatusBanner } from './src/components/StatusBanner.js';
 import { buildStaticStyles } from './src/styles.js';
 import { DATE_RANGES, GUIDE_STEPS, PRO_TIPS } from './src/constants.js';
 
+// Default server-side fetch window when connecting to a live Postgres source.
+// Bounds the query to the last N years so huge datasets (e.g. a 10y prices table)
+// don't force a full scan on every load. The client still crops within this
+// window using the dateRange control, and DoD/WoW/YoY lookups stay correct
+// because the fetched history is larger than the visible range.
+const SERVER_DATE_WINDOW_YEARS = 5;
+
+function computeServerDateWindow(liveMetricConfig) {
+  // Only apply when we know which column to bound on. Without a date column
+  // the RPC ignores p_date_from/p_date_to anyway.
+  if (!liveMetricConfig || !liveMetricConfig.dateColumn) return { from: null, to: null };
+  const now = new Date();
+  const from = new Date(now);
+  from.setFullYear(from.getFullYear() - SERVER_DATE_WINDOW_YEARS);
+  const fmt = (d) =>
+    d.getFullYear() + '-' +
+    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0');
+  return { from: fmt(from), to: fmt(now) };
+}
+
 export function render() {
 
   // Theme state
@@ -365,6 +386,9 @@ export function render() {
     if (loadedDatasetsRef.current.has(connectionParams.dataset) && liveColumnMeta) return;
     setLiveDataLoading(true);
     setLiveDataError(null);
+    // Reset lazy-distinct tracking for this (re)connect — otherwise re-opened
+    // dropdowns on a reloaded dataset would silently skip the fetch.
+    distinctTouchedRef.current = new Set();
 
     const { dataset } = connectionParams;
 
@@ -420,40 +444,12 @@ export function render() {
           setDataFrequency(grainToFreq[config.defaultGrain] || 'Monthly');
         }
 
-        // Step 2: Fetch distinct values for all dimension columns
-        const dateCol = config.dateColumn || columns.find(c => c.udt === 'date' || c.name.includes('_dt'))?.name;
-        const dimCols = columns.filter(c => {
-          if (c.name === dateCol) return false;
-          if (c.udt === 'int4' || c.udt === 'int8' || c.udt === 'float4' || c.udt === 'float8' || c.udt === 'numeric') return false;
-          return true;
-        });
+        // Distinct values are now fetched lazily on first dropdown open
+        // (see ensureDistinctLoaded). Restoring saved UI selections before
+        // flipping liveSchemaReady ensures the aggregation effect runs once
+        // with the correct filters instead of twice (empty → restored).
+        const schemaColNames = new Set(columns.map(c => c.name));
 
-        // Identify boolean columns to prefix values with column name
-        const boolCols = new Set(columns.filter(c => c.udt === 'bool').map(c => c.name));
-
-        return Promise.all(
-          dimCols.map(c =>
-            cachedQuery('distinct', { p_column: c.name })
-              .then(r => ({ column: c.name, values: r.values || [], isBool: boolCols.has(c.name) }))
-              .catch(() => ({ column: c.name, values: [], isBool: boolCols.has(c.name) }))
-          )
-        );
-      })
-      .then(distinctResults => {
-        const filterOpts = {};
-        distinctResults.forEach(r => {
-          if (r.isBool) {
-            filterOpts[r.column] = r.values.map(v => r.column + '_' + String(v).toLowerCase());
-          } else {
-            filterOpts[r.column] = r.values;
-          }
-        });
-        setLiveFilterOptions(filterOpts);
-        setLiveSchemaReady(true);
-        setLiveDataLoading(false);
-        loadedDatasetsRef.current.add(connectionParams.dataset);
-
-        // Restore saved UI selections on initial page load (not tab switches)
         if (!uiSelectionsRestoredRef.current.has(activeTabId)) {
           uiSelectionsRestoredRef.current.add(activeTabId);
           try {
@@ -461,16 +457,13 @@ export function render() {
             const saved = storageGet(selectionsKey);
             if (saved) {
               const s = JSON.parse(saved);
-              // Validate saved selections against current schema columns
-              const schemaColNames = new Set(distinctResults.map(r => r.column));
               if (s.dataFrequency) setDataFrequency(s.dataFrequency);
               if (s.metric) setMetric(s.metric);
-              // Validate saved view — reset to Overall if the dimension no longer exists
+              // Validate saved view against schema columns (derive label the same
+              // way buildLiveDimensions does) — reset to Overall if the dim no longer exists
               if (s.view && s.view !== 'Overall') {
-                // View names are derived from column names (e.g. "Job Source" from "job_source")
-                // Check if any schema column could produce this view name
-                const viewValid = distinctResults.some(r => {
-                  const label = r.column.replace(/^is_/, '').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                const viewValid = columns.some(c => {
+                  const label = c.name.replace(/^is_/, '').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
                   return label === s.view;
                 });
                 setView(viewValid ? s.view : 'Overall');
@@ -494,7 +487,6 @@ export function render() {
               if (s.smaWindow) setSmaWindow(s.smaWindow);
               if (s.forecastHorizon) setForecastHorizon(s.forecastHorizon);
               if (s.activeInsightsTab !== undefined) setActiveInsightsTab(s.activeInsightsTab);
-              // Trace toggles restored via pendingTraceTogglesRef (useState declared later)
               if (s.showAllDollarTraces !== undefined || s.showAllShareTraces !== undefined || s.showAllGrowthTraces !== undefined) {
                 pendingTraceTogglesRef.current = {
                   showAllDollarTraces: s.showAllDollarTraces,
@@ -505,6 +497,11 @@ export function render() {
             }
           } catch (e) { /* config parse failure — non-critical, use defaults */ }
         }
+
+        setLiveFilterOptions({});
+        setLiveSchemaReady(true);
+        setLiveDataLoading(false);
+        loadedDatasetsRef.current.add(connectionParams.dataset);
       })
       .catch(err => {
         setLiveDataError(err.message);
@@ -1918,12 +1915,48 @@ export function render() {
   }, []);
 
   // Toggle filter expansion
+  // Tracks columns that are already loaded OR currently being fetched, so
+  // re-opens of a dropdown never duplicate the distinct RPC. Using a ref
+  // (not state) keeps ensureDistinctLoaded stable across renders.
+  const distinctTouchedRef = React.useRef(new Set());
+
+  // Lazy-load distinct values for one dimension column. Called when the user
+  // expands a filter dropdown for the first time. Replaces the old startup
+  // sweep that fired a DISTINCT full-table scan for every dimension on connect.
+  const ensureDistinctLoaded = React.useCallback((column) => {
+    if (!column) return;
+    if (dataSourceType === 'csv') return; // CSV path populates options directly
+    if (!connectionParams) return;
+    if (distinctTouchedRef.current.has(column)) return;
+    distinctTouchedRef.current.add(column);
+
+    const isBool = liveBooleanColumns.has(column);
+    cachedQuery('distinct', { p_column: column })
+      .then(r => {
+        const raw = r.values || [];
+        const values = isBool ? raw.map(v => column + '_' + String(v).toLowerCase()) : raw;
+        setLiveFilterOptions(prev => ({ ...prev, [column]: values }));
+      })
+      .catch(() => {
+        // Empty array marks "attempted but failed" so we don't spin on a broken column.
+        // Remove from touched so a later retry (e.g. schema change) can try again.
+        distinctTouchedRef.current.delete(column);
+        setLiveFilterOptions(prev => ({ ...prev, [column]: [] }));
+      });
+  }, [dataSourceType, connectionParams, liveBooleanColumns, cachedQuery]);
+
   const toggleFilterExpansion = React.useCallback((filterName) => {
-    setExpandedFilters((prev) => ({
-      ...prev,
-      [filterName]: !prev[filterName],
-    }));
-  }, []);
+    setExpandedFilters((prev) => {
+      const next = !prev[filterName];
+      // On expand, fire lazy distinct fetch for this dimension column.
+      // filterName format: "dim_<colname>_filter"
+      if (next && typeof filterName === 'string' && filterName.startsWith('dim_') && filterName.endsWith('_filter')) {
+        const colName = filterName.slice(4, -7);
+        ensureDistinctLoaded(colName);
+      }
+      return { ...prev, [filterName]: next };
+    });
+  }, [ensureDistinctLoaded]);
 
   const mouseHandlers = React.useMemo(
     () => ({
@@ -2399,6 +2432,12 @@ export function render() {
     const dateCol = liveMetricConfig.dateColumn || liveDateColumn;
     const rpcMetrics = buildRpcMetrics(liveMetricConfig);
 
+    // Default server-side fetch window: last 5 years. The UI dateRange control
+    // (7D / 30D / 1Y / ...) continues to crop client-side within this window,
+    // which keeps DoD/WoW/YoY lookups working since the client still has more
+    // history than the visible range.
+    const serverWindow = computeServerDateWindow(liveMetricConfig);
+
     // Build p_filters from dynamicFilters (strip dim_ prefix and _filter suffix to get column name)
     const pFilters = {};
     Object.keys(dynamicFilters).forEach(filterKey => {
@@ -2427,6 +2466,8 @@ export function render() {
       p_date_column: dateCol,
       p_metrics: rpcMetrics,
       p_filters: pFilters,
+      ...(serverWindow.from ? { p_date_from: serverWindow.from } : {}),
+      ...(serverWindow.to ? { p_date_to: serverWindow.to } : {}),
     });
 
     // Call 2: Dimension aggregates (only if a dimension is selected)
@@ -2439,6 +2480,8 @@ export function render() {
           p_metrics: rpcMetrics,
           p_filters: pFilters,
           ...(topX > 0 ? { p_top_n: topX } : {}),
+          ...(serverWindow.from ? { p_date_from: serverWindow.from } : {}),
+          ...(serverWindow.to ? { p_date_to: serverWindow.to } : {}),
           // p_rank_by omitted — requires updated query_dataset RPC (migration 015)
         })
       : Promise.resolve(null);
@@ -2533,6 +2576,9 @@ export function render() {
     if (liveMetricConfig.derivedMode === 'formula') formulaConfigs.derived = { operator: liveMetricConfig.derivedFormulaOperator || '/' };
     const formulaConfigsArg = Object.keys(formulaConfigs).length > 0 ? formulaConfigs : null;
 
+    // Use the same bounded server window as the primary aggregation effect
+    const serverWindow = computeServerDateWindow(liveMetricConfig);
+
     // Fetch with concurrency limit of 3 to avoid overwhelming Supabase
     const CONCURRENCY = 3;
     const merged = {};
@@ -2543,6 +2589,8 @@ export function render() {
         p_group_by: [col],
         p_metrics: rpcMetrics,
         p_filters: pFilters,
+        ...(serverWindow.from ? { p_date_from: serverWindow.from } : {}),
+        ...(serverWindow.to ? { p_date_to: serverWindow.to } : {}),
       }).then(data => {
         const aggs = transformToDimensionAggregates(data.rows || [], col, hasMetric3, formulaConfigsArg, liveBooleanColumns);
         Object.keys(aggs).forEach(key => {

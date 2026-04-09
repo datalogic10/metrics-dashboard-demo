@@ -9,6 +9,7 @@
 -- Drop old signatures to avoid ambiguity
 DROP FUNCTION IF EXISTS public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer);
 DROP FUNCTION IF EXISTS public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer, integer);
+DROP FUNCTION IF EXISTS public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer, integer, text);
 
 CREATE OR REPLACE FUNCTION public.query_dataset(
   p_table text,                       -- dataset name (mapped to actual table internally)
@@ -22,7 +23,9 @@ CREATE OR REPLACE FUNCTION public.query_dataset(
   p_order_by text DEFAULT NULL,       -- 'alias ASC/DESC'
   p_limit integer DEFAULT 10000,
   p_top_n integer DEFAULT NULL,       -- top N categories for first group_by column; rest bucketed as 'Rest Combined'
-  p_rank_by text DEFAULT NULL         -- metric alias to rank top-N by (defaults to first metric)
+  p_rank_by text DEFAULT NULL,        -- metric alias to rank top-N by (defaults to first metric)
+  p_date_from text DEFAULT NULL,      -- inclusive lower bound (YYYY-MM-DD) applied to p_date_column
+  p_date_to text DEFAULT NULL         -- inclusive upper bound (YYYY-MM-DD) applied to p_date_column
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -257,6 +260,20 @@ BEGIN
       END IF;
     END LOOP;
 
+    -- Date range bounds (applied to p_date_column). Lets the client pull a
+    -- sensible default window (e.g. last 5y) instead of the entire table.
+    -- Validates YYYY-MM-DD to prevent injection, since values are inlined.
+    IF p_date_column IS NOT NULL THEN
+      IF p_date_from IS NOT NULL AND p_date_from ~ '^\d{4}-\d{2}-\d{2}$' THEN
+        v_where_parts := array_append(v_where_parts,
+          format('%I >= %L::date', p_date_column, p_date_from));
+      END IF;
+      IF p_date_to IS NOT NULL AND p_date_to ~ '^\d{4}-\d{2}-\d{2}$' THEN
+        v_where_parts := array_append(v_where_parts,
+          format('%I <= %L::date', p_date_column, p_date_to));
+      END IF;
+    END IF;
+
     -- Build top-N CTE and CASE WHEN now that WHERE parts include all date/filter constraints.
     -- Using materialized CTEs ensures deterministic, single-evaluation ranking.
     IF v_top_n_applied THEN
@@ -345,8 +362,8 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer, integer, text) TO anon;
-GRANT EXECUTE ON FUNCTION public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer, integer, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer, integer, text, text, text) TO anon;
+GRANT EXECUTE ON FUNCTION public.query_dataset(text, text, text, jsonb, text[], jsonb, text, text, text, integer, integer, text, text, text) TO authenticated;
 
 COMMENT ON FUNCTION public.query_dataset IS
   'Generic query endpoint for the Metrics Dashboard. Actions: schema (column discovery), distinct (filter values), data (aggregated metrics).';
