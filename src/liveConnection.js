@@ -91,9 +91,14 @@ export function parseBaseConnection() {
   return null;
 }
 
-// Create an RPC caller for a given connection
+// Create an RPC caller for a given connection.
+// The optional third argument `options` accepts an AbortSignal (`options.signal`)
+// so callers can cancel stale in-flight requests. When the signal fires, fetch
+// rejects with AbortError and the underlying TCP connection closes, which
+// propagates through uvicorn → asyncpg → pg_cancel_backend to stop the query
+// server-side.
 export function createRpcCaller(connectionParams) {
-  return function callQueryDataset(action, params) {
+  return function callQueryDataset(action, params, options) {
     if (!connectionParams) return Promise.reject(new Error('No connection'));
     const { supabaseUrl, apiKey, dataset } = connectionParams;
     return fetch(supabaseUrl + '/rest/v1/rpc/query_dataset', {
@@ -104,15 +109,17 @@ export function createRpcCaller(connectionParams) {
         'Authorization': 'Bearer ' + apiKey,
       },
       body: JSON.stringify({ p_table: dataset, p_action: action, ...params }),
+      signal: options && options.signal,
     })
       .then(res => { if (!res.ok) throw new Error('RPC returned ' + res.status); return res.json(); })
       .then(data => { if (data.error) throw new Error(data.error); return data; });
   };
 }
 
-// Create an RPC caller for a FastAPI dash-api connection
+// Create an RPC caller for a FastAPI dash-api connection. Same `options.signal`
+// contract as createRpcCaller — see that comment for the cancellation chain.
 export function createFastApiCaller(connectionParams) {
-  return function callQueryDataset(action, params) {
+  return function callQueryDataset(action, params, options) {
     if (!connectionParams) return Promise.reject(new Error('No connection'));
     const { apiUrl, apiSecret, connection, dataset } = connectionParams;
     const body = { connection, table: dataset, action };
@@ -136,6 +143,7 @@ export function createFastApiCaller(connectionParams) {
         'Authorization': 'Bearer ' + apiSecret,
       },
       body: JSON.stringify(body),
+      signal: options && options.signal,
     })
       .then(res => {
         if (!res.ok) return res.json().then(d => { throw new Error(d.detail || 'Query returned ' + res.status); });

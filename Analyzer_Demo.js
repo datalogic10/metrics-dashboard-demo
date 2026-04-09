@@ -349,12 +349,14 @@ export function render() {
   // ===== QUERY CACHE (in-memory LRU) =====
   const queryCacheRef = React.useRef(createQueryCache(100));
 
-  const cachedQuery = React.useCallback((action, params) => {
+  const cachedQuery = React.useCallback((action, params, options) => {
     const cache = queryCacheRef.current;
     const key = cache.getKey(action, params);
     const cached = cache.get(key);
     if (cached) return Promise.resolve(cached);
-    return callQueryDataset(action, params).then(result => { cache.set(key, result); return result; });
+    // options.signal (AbortSignal) is passed through so effects can cancel
+    // stale in-flight requests; see the aggregation effect's cleanup function.
+    return callQueryDataset(action, params, options).then(result => { cache.set(key, result); return result; });
   }, [callQueryDataset]);
 
   // ===== BUILD COLUMNS/DIMENSIONS FROM SCHEMA =====
@@ -2419,6 +2421,12 @@ export function render() {
     }
 
     const requestId = ++liveAggRequestRef.current;
+    // AbortController so the cleanup function below can cancel stale fetches
+    // when any dependency changes (e.g. user toggles grain mid-query). The
+    // abort walks browser → uvicorn → asyncpg → pg_cancel_backend, so the
+    // Postgres query actually stops instead of burning IO on a result nobody
+    // will render.
+    const controller = new AbortController();
     setLiveAggLoading(true);
 
     const grain = frequencyToGrain[dataFrequency] || "month";
@@ -2461,7 +2469,7 @@ export function render() {
       p_filters: pFilters,
       ...(serverWindow.from ? { p_date_from: serverWindow.from } : {}),
       ...(serverWindow.to ? { p_date_to: serverWindow.to } : {}),
-    });
+    }, { signal: controller.signal });
 
     // Call 2: Dimension aggregates (only if a dimension is selected)
     // Pass p_top_n to bucket high-cardinality dimensions server-side
@@ -2476,7 +2484,7 @@ export function render() {
           ...(serverWindow.from ? { p_date_from: serverWindow.from } : {}),
           ...(serverWindow.to ? { p_date_to: serverWindow.to } : {}),
           // p_rank_by omitted — requires updated query_dataset RPC (migration 015)
-        })
+        }, { signal: controller.signal })
       : Promise.resolve(null);
 
     const hasMetric3 = !!liveMetricConfig.derivedAggType || liveMetricConfig.derivedMode === 'formula';
@@ -2487,6 +2495,7 @@ export function render() {
     const formulaConfigsArg = Object.keys(formulaConfigs).length > 0 ? formulaConfigs : null;
     Promise.all([periodPromise, dimPromise])
       .then(([periodData, dimData]) => {
+        if (controller.signal.aborted) return; // Cleanup ran during fetch — drop
         if (requestId !== liveAggRequestRef.current) return; // Stale response
         const periodAggs = transformToPeriodAggregates(periodData.rows || [], hasMetric3, formulaConfigsArg);
         setLivePeriodAggregates(periodAggs);
@@ -2504,10 +2513,18 @@ export function render() {
         setLiveAggLoading(false);
       })
       .catch(err => {
+        // AbortError is expected when the effect re-runs before the fetch
+        // completes — it's a successful cancellation, not a failure.
+        if (controller.signal.aborted || err?.name === 'AbortError') return;
         if (requestId !== liveAggRequestRef.current) return;
         logger.error('[Dashboard] Aggregation fetch error:', err);
         setLiveAggLoading(false);
       });
+
+    // Cleanup: abort in-flight fetches when deps change or the component
+    // unmounts. AbortController.abort() → fetch rejects → TCP closes →
+    // uvicorn cancels the handler → asyncpg cancels the PG query.
+    return () => { controller.abort(); };
   }, [liveSchemaReady, dataSourceType, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX, liveBooleanColumns]);
 
   // Fetch dimension aggregates for visible dimensions when insights tab is open in live mode.
@@ -2515,7 +2532,11 @@ export function render() {
   // avoid overwhelming Supabase with parallel requests.
   React.useEffect(() => {
     if (!liveSchemaReady || !activeInsightsTab || !liveMetricConfig) return;
+    // `cancelled` guards state updates; `controller` cancels in-flight HTTP
+    // fetches so the server-side Postgres queries stop too. Both are needed:
+    // the CSV branch only needs `cancelled`, the live branch needs both.
     let cancelled = false;
+    const controller = new AbortController();
 
     // CSV: client-side all-dimension aggregation
     if (dataSourceType === 'csv' && csvRowsRef.current) {
@@ -2584,11 +2605,15 @@ export function render() {
         p_filters: pFilters,
         ...(serverWindow.from ? { p_date_from: serverWindow.from } : {}),
         ...(serverWindow.to ? { p_date_to: serverWindow.to } : {}),
-      }).then(data => {
+      }, { signal: controller.signal }).then(data => {
         const aggs = transformToDimensionAggregates(data.rows || [], col, hasMetric3, formulaConfigsArg, liveBooleanColumns);
         Object.keys(aggs).forEach(key => {
           if (key !== '_categoryTotals') merged[key] = aggs[key];
         });
+      }).catch(err => {
+        // Swallow AbortError — it's an expected signal, not a failure.
+        if (controller.signal.aborted || err?.name === 'AbortError') return;
+        throw err;
       });
 
     // Process in batches of CONCURRENCY
@@ -2600,9 +2625,15 @@ export function render() {
       }
       if (!cancelled) setLiveInsightsDimAggs({ ...merged });
     };
-    processBatches();
+    processBatches().catch(err => {
+      if (controller.signal.aborted || err?.name === 'AbortError') return;
+      logger.error('[Dashboard] Insights fetch error:', err);
+    });
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [dataSourceType, activeInsightsTab, liveMetricConfig, dataFrequency, dynamicFilters,
       visibleLiveDimensions, cachedQuery, liveDateColumn, liveBooleanColumns]);
 

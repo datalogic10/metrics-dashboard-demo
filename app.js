@@ -1008,7 +1008,7 @@ var __app = (() => {
     }
   }
   function createRpcCaller(connectionParams) {
-    return function callQueryDataset(action, params) {
+    return function callQueryDataset(action, params, options) {
       if (!connectionParams) return Promise.reject(new Error("No connection"));
       const { supabaseUrl, apiKey, dataset } = connectionParams;
       return fetch(supabaseUrl + "/rest/v1/rpc/query_dataset", {
@@ -1018,7 +1018,8 @@ var __app = (() => {
           "apikey": apiKey,
           "Authorization": "Bearer " + apiKey
         },
-        body: JSON.stringify({ p_table: dataset, p_action: action, ...params })
+        body: JSON.stringify({ p_table: dataset, p_action: action, ...params }),
+        signal: options && options.signal
       }).then((res) => {
         if (!res.ok) throw new Error("RPC returned " + res.status);
         return res.json();
@@ -1029,7 +1030,7 @@ var __app = (() => {
     };
   }
   function createFastApiCaller(connectionParams) {
-    return function callQueryDataset(action, params) {
+    return function callQueryDataset(action, params, options) {
       if (!connectionParams) return Promise.reject(new Error("No connection"));
       const { apiUrl, apiSecret, connection, dataset } = connectionParams;
       const body = { connection, table: dataset, action };
@@ -1051,7 +1052,8 @@ var __app = (() => {
           "Content-Type": "application/json",
           "Authorization": "Bearer " + apiSecret
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        signal: options && options.signal
       }).then((res) => {
         if (!res.ok) return res.json().then((d) => {
           throw new Error(d.detail || "Query returned " + res.status);
@@ -4876,12 +4878,12 @@ var __app = (() => {
       return createRpcCaller(connectionParams);
     }, [connectionParams]);
     const queryCacheRef = React.useRef(createQueryCache(100));
-    const cachedQuery = React.useCallback((action, params) => {
+    const cachedQuery = React.useCallback((action, params, options) => {
       const cache = queryCacheRef.current;
       const key = cache.getKey(action, params);
       const cached = cache.get(key);
       if (cached) return Promise.resolve(cached);
-      return callQueryDataset(action, params).then((result) => {
+      return callQueryDataset(action, params, options).then((result) => {
         cache.set(key, result);
         return result;
       });
@@ -6578,6 +6580,7 @@ var __app = (() => {
         return;
       }
       const requestId = ++liveAggRequestRef.current;
+      const controller = new AbortController();
       setLiveAggLoading(true);
       const grain = frequencyToGrain[dataFrequency] || "month";
       const dateCol = liveMetricConfig.dateColumn || liveDateColumn;
@@ -6606,7 +6609,7 @@ var __app = (() => {
         p_filters: pFilters,
         ...serverWindow.from ? { p_date_from: serverWindow.from } : {},
         ...serverWindow.to ? { p_date_to: serverWindow.to } : {}
-      });
+      }, { signal: controller.signal });
       const dimPromise = dimColumn ? cachedQuery("data", {
         p_time_grain: grain,
         p_date_column: dateCol,
@@ -6617,7 +6620,7 @@ var __app = (() => {
         ...serverWindow.from ? { p_date_from: serverWindow.from } : {},
         ...serverWindow.to ? { p_date_to: serverWindow.to } : {}
         // p_rank_by omitted — requires updated query_dataset RPC (migration 015)
-      }) : Promise.resolve(null);
+      }, { signal: controller.signal }) : Promise.resolve(null);
       const hasMetric3 = !!liveMetricConfig.derivedAggType || liveMetricConfig.derivedMode === "formula";
       const formulaConfigs = {};
       if (liveMetricConfig.volumeMode === "formula") formulaConfigs.volume = { operator: liveMetricConfig.volumeFormulaOperator || "/" };
@@ -6625,6 +6628,7 @@ var __app = (() => {
       if (liveMetricConfig.derivedMode === "formula") formulaConfigs.derived = { operator: liveMetricConfig.derivedFormulaOperator || "/" };
       const formulaConfigsArg = Object.keys(formulaConfigs).length > 0 ? formulaConfigs : null;
       Promise.all([periodPromise, dimPromise]).then(([periodData, dimData]) => {
+        if (controller.signal.aborted) return;
         if (requestId !== liveAggRequestRef.current) return;
         const periodAggs = transformToPeriodAggregates(periodData.rows || [], hasMetric3, formulaConfigsArg);
         setLivePeriodAggregates(periodAggs);
@@ -6640,14 +6644,19 @@ var __app = (() => {
         }
         setLiveAggLoading(false);
       }).catch((err) => {
+        if (controller.signal.aborted || err?.name === "AbortError") return;
         if (requestId !== liveAggRequestRef.current) return;
         logger_default.error("[Dashboard] Aggregation fetch error:", err);
         setLiveAggLoading(false);
       });
+      return () => {
+        controller.abort();
+      };
     }, [liveSchemaReady, dataSourceType, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX, liveBooleanColumns]);
     React.useEffect(() => {
       if (!liveSchemaReady || !activeInsightsTab || !liveMetricConfig) return;
       let cancelled = false;
+      const controller = new AbortController();
       if (dataSourceType === "csv" && csvRowsRef.current) {
         const grain2 = frequencyToGrain[dataFrequency] || "month";
         const dateCol2 = liveMetricConfig.dateColumn || "reporting_week";
@@ -6704,11 +6713,14 @@ var __app = (() => {
         p_filters: pFilters,
         ...serverWindow.from ? { p_date_from: serverWindow.from } : {},
         ...serverWindow.to ? { p_date_to: serverWindow.to } : {}
-      }).then((data) => {
+      }, { signal: controller.signal }).then((data) => {
         const aggs = transformToDimensionAggregates(data.rows || [], col, hasMetric3, formulaConfigsArg, liveBooleanColumns);
         Object.keys(aggs).forEach((key) => {
           if (key !== "_categoryTotals") merged[key] = aggs[key];
         });
+      }).catch((err) => {
+        if (controller.signal.aborted || err?.name === "AbortError") return;
+        throw err;
       });
       const processBatches = async () => {
         for (let i = 0; i < dimCols.length; i += CONCURRENCY) {
@@ -6718,9 +6730,13 @@ var __app = (() => {
         }
         if (!cancelled) setLiveInsightsDimAggs({ ...merged });
       };
-      processBatches();
+      processBatches().catch((err) => {
+        if (controller.signal.aborted || err?.name === "AbortError") return;
+        logger_default.error("[Dashboard] Insights fetch error:", err);
+      });
       return () => {
         cancelled = true;
+        controller.abort();
       };
     }, [
       dataSourceType,
