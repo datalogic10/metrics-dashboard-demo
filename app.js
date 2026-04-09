@@ -9019,7 +9019,16 @@ var __app = (() => {
           if (!activeOverlays[overlay.id]) return;
           if (overlay.isForecast) return;
           if (overlay.isSMA) {
-            const smaData = calculateSMA(barData, smaWindow);
+            const fullHistoryForSma = sortedBaseDataPeriods.map((p) => {
+              const agg = baseDataAggregatesByPeriod[p];
+              return agg ? agg[metric] || 0 : 0;
+            });
+            const fullSma = calculateSMA(fullHistoryForSma, smaWindow);
+            const smaIndexByPeriod = new Map(sortedBaseDataPeriods.map((p, i) => [p, i]));
+            const smaData = periods.map((period) => {
+              const idx = smaIndexByPeriod.get(period);
+              return idx !== void 0 ? fullSma[idx] : null;
+            });
             overlayTraces.push({
               type: "scatter",
               mode: "lines",

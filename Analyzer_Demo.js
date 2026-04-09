@@ -5737,7 +5737,20 @@ export function render() {
         if (overlay.isForecast) return; // Handled separately below
 
         if (overlay.isSMA) {
-          const smaData = calculateSMA(barData, smaWindow);
+          // Compute SMA over the full unfiltered history (same data source as
+          // DoD/WoW/MoM/YoY overlays), then crop to the visible date range.
+          // This keeps the SMA stable when the user shrinks the date window —
+          // e.g. a 7D view still shows a meaningful SMA(30) instead of nulls.
+          const fullHistoryForSma = sortedBaseDataPeriods.map(p => {
+            const agg = baseDataAggregatesByPeriod[p];
+            return agg ? (agg[metric] || 0) : 0;
+          });
+          const fullSma = calculateSMA(fullHistoryForSma, smaWindow);
+          const smaIndexByPeriod = new Map(sortedBaseDataPeriods.map((p, i) => [p, i]));
+          const smaData = periods.map(period => {
+            const idx = smaIndexByPeriod.get(period);
+            return idx !== undefined ? fullSma[idx] : null;
+          });
           overlayTraces.push({
             type: 'scatter', mode: 'lines',
             x: periods, y: smaData,
