@@ -105,6 +105,30 @@ BEGIN
       RETURN jsonb_build_object('error', format('Column %s does not exist in %s.%s', p_column, v_schema, v_actual_table));
     END IF;
 
+    -- Fast path: pg_stats.most_common_vals, populated by ANALYZE. System
+    -- catalog lookup — no table scan, returns instantly regardless of table
+    -- size. Captures up to 100 most-frequent values per column, which is
+    -- plenty for a filter dropdown. Avoids the worst-case full Seq Scan on
+    -- large unindexed columns (e.g. a 7M-row prices_daily.source with 2
+    -- distinct values would otherwise take ~70s).
+    v_sql := format(
+      'SELECT jsonb_agg(DISTINCT val ORDER BY val) FROM (' ||
+      'SELECT unnest(most_common_vals::text::text[]) AS val ' ||
+      'FROM pg_stats WHERE schemaname = %L AND tablename = %L AND attname = %L' ||
+      ') sub',
+      v_schema, v_actual_table, p_column
+    );
+    EXECUTE v_sql INTO v_result;
+
+    IF v_result IS NOT NULL AND jsonb_array_length(v_result) > 0 THEN
+      RETURN jsonb_build_object(
+        'column', p_column,
+        'values', v_result
+      );
+    END IF;
+
+    -- Fallback: actual DISTINCT scan. Only hit when pg_stats has no entry
+    -- (e.g. table was never ANALYZEd or column is entirely NULL).
     v_sql := format(
       'SELECT jsonb_agg(val ORDER BY val) FROM (SELECT DISTINCT %I::text AS val FROM %s WHERE %I IS NOT NULL LIMIT 50) sub',
       p_column, v_fqn, p_column
