@@ -386,9 +386,6 @@ export function render() {
     if (loadedDatasetsRef.current.has(connectionParams.dataset) && liveColumnMeta) return;
     setLiveDataLoading(true);
     setLiveDataError(null);
-    // Reset lazy-distinct tracking for this (re)connect — otherwise re-opened
-    // dropdowns on a reloaded dataset would silently skip the fetch.
-    distinctTouchedRef.current = new Set();
 
     const { dataset } = connectionParams;
 
@@ -444,10 +441,9 @@ export function render() {
           setDataFrequency(grainToFreq[config.defaultGrain] || 'Monthly');
         }
 
-        // Distinct values are now fetched lazily on first dropdown open
-        // (see ensureDistinctLoaded). Restoring saved UI selections before
-        // flipping liveSchemaReady ensures the aggregation effect runs once
-        // with the correct filters instead of twice (empty → restored).
+        // Restore saved UI selections BEFORE flipping liveSchemaReady so the
+        // aggregation effect runs once with the correct filters instead of
+        // twice (empty → restored).
         const schemaColNames = new Set(columns.map(c => c.name));
 
         if (!uiSelectionsRestoredRef.current.has(activeTabId)) {
@@ -498,7 +494,40 @@ export function render() {
           } catch (e) { /* config parse failure — non-critical, use defaults */ }
         }
 
-        setLiveFilterOptions({});
+        // Fetch distinct values ONLY for dimensions the user has marked visible
+        // in Configure Metrics. On a wide table (e.g. prices_daily with many
+        // columns) this is the difference between 2-3 DISTINCT scans and a
+        // dozen. If visibleDimensions is unset (new connection), fall back to
+        // all non-numeric/non-date columns so filter dropdowns aren't empty.
+        const rawDateCol = config.dateColumn || columns.find(c => c.udt === 'date' || c.name.includes('_dt'))?.name;
+        const visibleSet = Array.isArray(config.visibleDimensions) ? new Set(config.visibleDimensions) : null;
+        const dimCols = columns.filter(c => {
+          if (c.name === rawDateCol) return false;
+          if (c.udt === 'int4' || c.udt === 'int8' || c.udt === 'float4' || c.udt === 'float8' || c.udt === 'numeric') return false;
+          return visibleSet ? visibleSet.has(c.name) : true;
+        });
+        const boolCols = new Set(columns.filter(c => c.udt === 'bool').map(c => c.name));
+
+        // Call query_dataset directly (bypassing the LRU cache) so distinct
+        // values are always fresh on reconnect. Dimension cardinality can
+        // change over time as the underlying table gets new rows.
+        return Promise.all(
+          dimCols.map(c =>
+            callQueryDataset('distinct', { p_column: c.name })
+              .then(r => ({ column: c.name, values: r.values || [], isBool: boolCols.has(c.name) }))
+              .catch(() => ({ column: c.name, values: [], isBool: boolCols.has(c.name) }))
+          )
+        );
+      })
+      .then(distinctResults => {
+        if (!distinctResults) return; // early-return path (shouldn't happen)
+        const filterOpts = {};
+        distinctResults.forEach(r => {
+          filterOpts[r.column] = r.isBool
+            ? r.values.map(v => r.column + '_' + String(v).toLowerCase())
+            : r.values;
+        });
+        setLiveFilterOptions(filterOpts);
         setLiveSchemaReady(true);
         setLiveDataLoading(false);
         loadedDatasetsRef.current.add(connectionParams.dataset);
@@ -1915,48 +1944,12 @@ export function render() {
   }, []);
 
   // Toggle filter expansion
-  // Tracks columns that are already loaded OR currently being fetched, so
-  // re-opens of a dropdown never duplicate the distinct RPC. Using a ref
-  // (not state) keeps ensureDistinctLoaded stable across renders.
-  const distinctTouchedRef = React.useRef(new Set());
-
-  // Lazy-load distinct values for one dimension column. Called when the user
-  // expands a filter dropdown for the first time. Replaces the old startup
-  // sweep that fired a DISTINCT full-table scan for every dimension on connect.
-  const ensureDistinctLoaded = React.useCallback((column) => {
-    if (!column) return;
-    if (dataSourceType === 'csv') return; // CSV path populates options directly
-    if (!connectionParams) return;
-    if (distinctTouchedRef.current.has(column)) return;
-    distinctTouchedRef.current.add(column);
-
-    const isBool = liveBooleanColumns.has(column);
-    cachedQuery('distinct', { p_column: column })
-      .then(r => {
-        const raw = r.values || [];
-        const values = isBool ? raw.map(v => column + '_' + String(v).toLowerCase()) : raw;
-        setLiveFilterOptions(prev => ({ ...prev, [column]: values }));
-      })
-      .catch(() => {
-        // Empty array marks "attempted but failed" so we don't spin on a broken column.
-        // Remove from touched so a later retry (e.g. schema change) can try again.
-        distinctTouchedRef.current.delete(column);
-        setLiveFilterOptions(prev => ({ ...prev, [column]: [] }));
-      });
-  }, [dataSourceType, connectionParams, liveBooleanColumns, cachedQuery]);
-
   const toggleFilterExpansion = React.useCallback((filterName) => {
-    setExpandedFilters((prev) => {
-      const next = !prev[filterName];
-      // On expand, fire lazy distinct fetch for this dimension column.
-      // filterName format: "dim_<colname>_filter"
-      if (next && typeof filterName === 'string' && filterName.startsWith('dim_') && filterName.endsWith('_filter')) {
-        const colName = filterName.slice(4, -7);
-        ensureDistinctLoaded(colName);
-      }
-      return { ...prev, [filterName]: next };
-    });
-  }, [ensureDistinctLoaded]);
+    setExpandedFilters((prev) => ({
+      ...prev,
+      [filterName]: !prev[filterName],
+    }));
+  }, []);
 
   const mouseHandlers = React.useMemo(
     () => ({

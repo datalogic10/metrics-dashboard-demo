@@ -4904,7 +4904,6 @@ var __app = (() => {
       if (loadedDatasetsRef.current.has(connectionParams.dataset) && liveColumnMeta) return;
       setLiveDataLoading(true);
       setLiveDataError(null);
-      distinctTouchedRef.current = /* @__PURE__ */ new Set();
       const { dataset } = connectionParams;
       callQueryDataset("schema", {}).then((schemaData) => {
         const columns = schemaData.columns || [];
@@ -4998,7 +4997,26 @@ var __app = (() => {
           } catch (e) {
           }
         }
-        setLiveFilterOptions({});
+        const rawDateCol = config.dateColumn || columns.find((c) => c.udt === "date" || c.name.includes("_dt"))?.name;
+        const visibleSet = Array.isArray(config.visibleDimensions) ? new Set(config.visibleDimensions) : null;
+        const dimCols = columns.filter((c) => {
+          if (c.name === rawDateCol) return false;
+          if (c.udt === "int4" || c.udt === "int8" || c.udt === "float4" || c.udt === "float8" || c.udt === "numeric") return false;
+          return visibleSet ? visibleSet.has(c.name) : true;
+        });
+        const boolCols = new Set(columns.filter((c) => c.udt === "bool").map((c) => c.name));
+        return Promise.all(
+          dimCols.map(
+            (c) => callQueryDataset("distinct", { p_column: c.name }).then((r) => ({ column: c.name, values: r.values || [], isBool: boolCols.has(c.name) })).catch(() => ({ column: c.name, values: [], isBool: boolCols.has(c.name) }))
+          )
+        );
+      }).then((distinctResults) => {
+        if (!distinctResults) return;
+        const filterOpts = {};
+        distinctResults.forEach((r) => {
+          filterOpts[r.column] = r.isBool ? r.values.map((v) => r.column + "_" + String(v).toLowerCase()) : r.values;
+        });
+        setLiveFilterOptions(filterOpts);
         setLiveSchemaReady(true);
         setLiveDataLoading(false);
         loadedDatasetsRef.current.add(connectionParams.dataset);
@@ -6182,33 +6200,12 @@ var __app = (() => {
       }, 12e4);
       return () => clearTimeout(timer);
     }, []);
-    const distinctTouchedRef = React.useRef(/* @__PURE__ */ new Set());
-    const ensureDistinctLoaded = React.useCallback((column) => {
-      if (!column) return;
-      if (dataSourceType === "csv") return;
-      if (!connectionParams) return;
-      if (distinctTouchedRef.current.has(column)) return;
-      distinctTouchedRef.current.add(column);
-      const isBool = liveBooleanColumns.has(column);
-      cachedQuery("distinct", { p_column: column }).then((r) => {
-        const raw = r.values || [];
-        const values = isBool ? raw.map((v) => column + "_" + String(v).toLowerCase()) : raw;
-        setLiveFilterOptions((prev) => ({ ...prev, [column]: values }));
-      }).catch(() => {
-        distinctTouchedRef.current.delete(column);
-        setLiveFilterOptions((prev) => ({ ...prev, [column]: [] }));
-      });
-    }, [dataSourceType, connectionParams, liveBooleanColumns, cachedQuery]);
     const toggleFilterExpansion = React.useCallback((filterName) => {
-      setExpandedFilters((prev) => {
-        const next = !prev[filterName];
-        if (next && typeof filterName === "string" && filterName.startsWith("dim_") && filterName.endsWith("_filter")) {
-          const colName = filterName.slice(4, -7);
-          ensureDistinctLoaded(colName);
-        }
-        return { ...prev, [filterName]: next };
-      });
-    }, [ensureDistinctLoaded]);
+      setExpandedFilters((prev) => ({
+        ...prev,
+        [filterName]: !prev[filterName]
+      }));
+    }, []);
     const mouseHandlers = React.useMemo(
       () => ({
         hoverEnter: (e, bgColor = "#f0f9ff", borderColor = "#6366f1") => {
