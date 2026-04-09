@@ -3,7 +3,6 @@
 Serves as the backend for metrics-dashboard-demo, replacing the need for
 Supabase PostgREST RPC when connecting to non-Supabase databases.
 """
-# SMOKETEST-MARKER: bind-mount restart-only deploy loop verification
 
 import logging
 from contextlib import asynccontextmanager
