@@ -1028,6 +1028,39 @@ var __app = (() => {
       });
     };
   }
+  function createFastApiCaller(connectionParams) {
+    return function callQueryDataset(action, params) {
+      if (!connectionParams) return Promise.reject(new Error("No connection"));
+      const { apiUrl, apiSecret, connection, dataset } = connectionParams;
+      const body = { connection, table: dataset, action };
+      if (params.p_column) body.column = params.p_column;
+      if (params.p_filters && Object.keys(params.p_filters).length) body.filters = params.p_filters;
+      if (params.p_group_by && params.p_group_by.length) body.group_by = params.p_group_by;
+      if (params.p_metrics && params.p_metrics.length) body.metrics = params.p_metrics;
+      if (params.p_time_grain) body.time_grain = params.p_time_grain;
+      if (params.p_date_column) body.date_column = params.p_date_column;
+      if (params.p_order_by) body.order_by = params.p_order_by;
+      if (params.p_limit) body.limit = params.p_limit;
+      if (params.p_top_n) body.top_n = params.p_top_n;
+      if (params.p_rank_by) body.rank_by = params.p_rank_by;
+      return fetch(apiUrl + "/query", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + apiSecret
+        },
+        body: JSON.stringify(body)
+      }).then((res) => {
+        if (!res.ok) return res.json().then((d) => {
+          throw new Error(d.detail || "Query returned " + res.status);
+        });
+        return res.json();
+      }).then((data) => {
+        if (data.error) throw new Error(data.error);
+        return data;
+      });
+    };
+  }
   function createQueryCache(maxSize = 100) {
     const cache = /* @__PURE__ */ new Map();
     return {
@@ -4652,7 +4685,7 @@ var __app = (() => {
     const [unlockSecret, setUnlockSecret] = React.useState("");
     const [unlockError, setUnlockError] = React.useState("");
     const [showConnectModal, setShowConnectModal] = React.useState(false);
-    const [connectForm, setConnectForm] = React.useState({ supabaseUrl: "", apiKey: "", dataset: "" });
+    const [connectForm, setConnectForm] = React.useState({ connectionType: "supabase", supabaseUrl: "", apiKey: "", dataset: "", apiUrl: "", apiSecret: "", connection: "" });
     const [connectError, setConnectError] = React.useState("");
     const [connectSaving, setConnectSaving] = React.useState(false);
     const pendingStateRef = React.useRef(urlRoute.mode === "config" ? parseStateParam() : null);
@@ -4676,7 +4709,11 @@ var __app = (() => {
           return;
         }
         const conn = config.connection_json;
-        setBaseConnection({ supabaseUrl: conn.supabaseUrl, apiKey: conn.apiKey, initialDataset: conn.dataset || null });
+        if (conn.connectionType === "fastapi") {
+          setBaseConnection({ connectionType: "fastapi", apiUrl: conn.apiUrl, apiSecret: conn.apiSecret, connection: conn.connection, initialDataset: conn.dataset || null });
+        } else {
+          setBaseConnection({ supabaseUrl: conn.supabaseUrl, apiKey: conn.apiKey, initialDataset: conn.dataset || null });
+        }
         const tabsData = config.tabs_json;
         if (Array.isArray(tabsData) && tabsData.length > 0) {
           setTabs(tabsData);
@@ -4714,6 +4751,9 @@ var __app = (() => {
     const activeTab = tabs.find((t) => t.id === activeTabId) || null;
     const connectionParams = React.useMemo(() => {
       if (!baseConnection || !activeTab || !activeTab.dataset) return null;
+      if (baseConnection.connectionType === "fastapi") {
+        return { connectionType: "fastapi", apiUrl: baseConnection.apiUrl, apiSecret: baseConnection.apiSecret, connection: baseConnection.connection, dataset: activeTab.dataset };
+      }
       return { supabaseUrl: baseConnection.supabaseUrl, apiKey: baseConnection.apiKey, dataset: activeTab.dataset };
     }, [baseConnection, activeTab]);
     const [liveDataLoading, setLiveDataLoading] = React.useState(!!connectionParams);
@@ -4819,10 +4859,11 @@ var __app = (() => {
         setMetricsEditorSuggesting(false);
       }
     }, [liveColumnMeta]);
-    const callQueryDataset = React.useMemo(
-      () => createRpcCaller(connectionParams),
-      [connectionParams]
-    );
+    const callQueryDataset = React.useMemo(() => {
+      if (!connectionParams) return () => Promise.reject(new Error("No connection"));
+      if (connectionParams.connectionType === "fastapi") return createFastApiCaller(connectionParams);
+      return createRpcCaller(connectionParams);
+    }, [connectionParams]);
     const queryCacheRef = React.useRef(createQueryCache(100));
     const cachedQuery = React.useCallback((action, params) => {
       const cache = queryCacheRef.current;
@@ -4927,7 +4968,7 @@ var __app = (() => {
         if (!uiSelectionsRestoredRef.current.has(activeTabId)) {
           uiSelectionsRestoredRef.current.add(activeTabId);
           try {
-            const selectionsKey = "uiSelections_" + connectionParams.supabaseUrl + "_" + activeTabId;
+            const selectionsKey = "uiSelections_" + (connectionParams.supabaseUrl || connectionParams.apiUrl + "/" + connectionParams.connection) + "_" + activeTabId;
             const saved = storageGet(selectionsKey);
             if (saved) {
               const s = JSON.parse(saved);
@@ -5300,7 +5341,7 @@ var __app = (() => {
       if (!connectionParams || !liveSchemaReady) return;
       clearTimeout(uiSelectionsSaveTimerRef.current);
       uiSelectionsSaveTimerRef.current = setTimeout(() => {
-        const selectionsKey = "uiSelections_" + connectionParams.supabaseUrl + "_" + activeTabId;
+        const selectionsKey = "uiSelections_" + (connectionParams.supabaseUrl || connectionParams.apiUrl + "/" + connectionParams.connection) + "_" + activeTabId;
         const selections = {
           dataFrequency,
           metric,
@@ -5663,7 +5704,7 @@ var __app = (() => {
     });
     React.useEffect(() => {
       if (!connectionParams || !liveSchemaReady || !activeTabId) return;
-      const selectionsKey = "uiSelections_" + connectionParams.supabaseUrl + "_" + activeTabId;
+      const selectionsKey = "uiSelections_" + (connectionParams.supabaseUrl || connectionParams.apiUrl + "/" + connectionParams.connection) + "_" + activeTabId;
       const existing = storageGetJSON(selectionsKey);
       if (existing) {
         existing.showAllDollarTraces = showAllDollarTraces;
@@ -11092,86 +11133,133 @@ var __app = (() => {
       return state.map(
         (val) => formatValue ? formatValue(val) : formatFilterName2(val)
       );
-    }).join(", ") || "None"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Filter Context:"), " ", getShortFilterContext()), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Market Size:"), " ", formatMetric(calculateMetric(filteredData))), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Solo Insights Found:"), " ", Object.values(displayedInsights.basicInsights).flat().length), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Data Filter Time:"), " ", filterTimeRef.current.toFixed(2), "ms"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Render Time:"), " ", (performance.now() - renderStartTime).toFixed(2), "ms"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Render Count:"), " ", renderCountRef.current), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Raw Data Rows:"), " ", cleanedQueryData.rows ? cleanedQueryData.rows.length.toLocaleString() : 0), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Filtered Rows:"), " ", filteredData.length.toLocaleString()), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Cross Insights Found:"), " ", Object.values(displayedInsights.advancedInsights).flat().length))), showConnectModal && /* @__PURE__ */ React.createElement("div", { style: styles.shareModal, onClick: (e) => {
-      if (e.target === e.currentTarget) setShowConnectModal(false);
-    } }, /* @__PURE__ */ React.createElement("div", { style: { ...styles.shareModalContent, maxWidth: "440px" } }, /* @__PURE__ */ React.createElement("div", { style: styles.shareModalHeader }, /* @__PURE__ */ React.createElement("div", { style: styles.shareModalTitle }, "Connect to Database"), /* @__PURE__ */ React.createElement("button", { style: styles.shareModalClose, onClick: () => setShowConnectModal(false) }, "\xD7")), /* @__PURE__ */ React.createElement("div", { style: { padding: "4px 0 16px" } }, /* @__PURE__ */ React.createElement("p", { style: { margin: "0 0 16px", fontSize: "12px", color: isDarkMode ? "#9ca3af" : "#6b7280" } }, "Enter your Supabase connection details. Requires the ", /* @__PURE__ */ React.createElement("code", { style: { fontSize: "11px", padding: "1px 4px", borderRadius: "3px", background: isDarkMode ? "#1f2937" : "#f3f4f6" } }, "query_dataset"), " RPC function (see setup.sql)."), [
-      { key: "supabaseUrl", label: "Supabase URL", placeholder: "https://your-project.supabase.co" },
-      { key: "apiKey", label: "API Key (anon)", placeholder: "eyJhbGciOi..." },
-      { key: "dataset", label: "Dataset (table name)", placeholder: "my_metrics_table" }
-    ].map((f) => /* @__PURE__ */ React.createElement("div", { key: f.key, style: { marginBottom: "12px" } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: "11px", fontWeight: 600, marginBottom: "4px", color: isDarkMode ? "#d1d5db" : "#374151" } }, f.label), /* @__PURE__ */ React.createElement(
-      "input",
-      {
-        type: f.key === "apiKey" ? "password" : "text",
-        value: connectForm[f.key],
-        onChange: (e) => setConnectForm((prev) => ({ ...prev, [f.key]: e.target.value })),
-        placeholder: f.placeholder,
-        style: {
-          width: "100%",
-          padding: "8px 10px",
-          borderRadius: "6px",
-          fontSize: "13px",
-          boxSizing: "border-box",
-          border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`,
-          backgroundColor: isDarkMode ? "#111827" : "#f9fafb",
-          color: isDarkMode ? "#f3f4f6" : "#111827",
-          outline: "none"
-        }
-      }
-    ))), connectError && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "12px", color: "#ef4444", marginBottom: "12px" } }, connectError), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: "8px", justifyContent: "flex-end" } }, /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        onClick: () => setShowConnectModal(false),
-        style: {
-          padding: "6px 14px",
-          borderRadius: "6px",
-          fontSize: "12px",
-          cursor: "pointer",
-          border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`,
-          background: "transparent",
-          color: isDarkMode ? "#d1d5db" : "#374151"
-        }
-      },
-      "Cancel"
-    ), /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        disabled: connectSaving || !connectForm.supabaseUrl || !connectForm.apiKey || !connectForm.dataset,
-        onClick: async () => {
-          setConnectError("");
-          setConnectSaving(true);
-          try {
-            const testRes = await fetch(connectForm.supabaseUrl.replace(/\/+$/, "") + "/rest/v1/rpc/query_dataset", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "apikey": connectForm.apiKey, "Authorization": "Bearer " + connectForm.apiKey },
-              body: JSON.stringify({ p_table: connectForm.dataset, p_action: "schema" })
-            });
-            if (!testRes.ok) throw new Error("Connection failed (HTTP " + testRes.status + "). Check your URL and API key.");
-            const testData = await testRes.json();
-            if (testData.error) throw new Error(testData.error);
-            const connectionJson = { supabaseUrl: connectForm.supabaseUrl.replace(/\/+$/, ""), apiKey: connectForm.apiKey, dataset: connectForm.dataset };
-            const tabsJson = [{ id: "tab_1", name: connectForm.dataset, dataset: connectForm.dataset, metricConfig: null }];
-            const result = await createConfig({ name: connectForm.dataset, connectionJson, tabsJson });
-            setEditSecret(result.id, result.editSecret);
-            window.location.hash = "#/" + result.id;
-            window.location.reload();
-          } catch (err) {
-            setConnectError(err.message);
+    }).join(", ") || "None"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Filter Context:"), " ", getShortFilterContext()), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Market Size:"), " ", formatMetric(calculateMetric(filteredData))), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Solo Insights Found:"), " ", Object.values(displayedInsights.basicInsights).flat().length), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Data Filter Time:"), " ", filterTimeRef.current.toFixed(2), "ms"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Render Time:"), " ", (performance.now() - renderStartTime).toFixed(2), "ms"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Render Count:"), " ", renderCountRef.current), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Raw Data Rows:"), " ", cleanedQueryData.rows ? cleanedQueryData.rows.length.toLocaleString() : 0), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Filtered Rows:"), " ", filteredData.length.toLocaleString()), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Cross Insights Found:"), " ", Object.values(displayedInsights.advancedInsights).flat().length))), showConnectModal && (() => {
+      const isSupabase = connectForm.connectionType !== "fastapi";
+      const supabaseFields = [
+        { key: "supabaseUrl", label: "Supabase URL", placeholder: "https://your-project.supabase.co" },
+        { key: "apiKey", label: "API Key (anon)", placeholder: "eyJhbGciOi...", password: true },
+        { key: "dataset", label: "Table (schema.table)", placeholder: "public_analytics.fct_job_metrics" }
+      ];
+      const fastapiFields = [
+        { key: "apiUrl", label: "API URL", placeholder: "https://your-server.com/dash-api" },
+        { key: "apiSecret", label: "API Secret", placeholder: "your-secret", password: true },
+        { key: "connection", label: "Connection Name", placeholder: "zbt" },
+        { key: "dataset", label: "Table (schema.table)", placeholder: "analytics.signals" }
+      ];
+      const fields = isSupabase ? supabaseFields : fastapiFields;
+      const canSubmit = isSupabase ? connectForm.supabaseUrl && connectForm.apiKey && connectForm.dataset : connectForm.apiUrl && connectForm.apiSecret && connectForm.connection && connectForm.dataset;
+      return /* @__PURE__ */ React.createElement("div", { style: styles.shareModal, onClick: (e) => {
+        if (e.target === e.currentTarget) setShowConnectModal(false);
+      } }, /* @__PURE__ */ React.createElement("div", { style: { ...styles.shareModalContent, maxWidth: "440px" } }, /* @__PURE__ */ React.createElement("div", { style: styles.shareModalHeader }, /* @__PURE__ */ React.createElement("div", { style: styles.shareModalTitle }, "Connect to Database"), /* @__PURE__ */ React.createElement("button", { style: styles.shareModalClose, onClick: () => setShowConnectModal(false) }, "\xD7")), /* @__PURE__ */ React.createElement("div", { style: { padding: "4px 0 16px" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: "4px", marginBottom: "16px", padding: "2px", borderRadius: "8px", background: isDarkMode ? "#1f2937" : "#f3f4f6" } }, [{ value: "supabase", label: "Supabase" }, { value: "fastapi", label: "Direct Postgres" }].map((opt) => /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          key: opt.value,
+          onClick: () => setConnectForm((prev) => ({ ...prev, connectionType: opt.value })),
+          style: {
+            flex: 1,
+            padding: "6px 12px",
+            borderRadius: "6px",
+            fontSize: "12px",
+            fontWeight: 600,
+            cursor: "pointer",
+            border: "none",
+            background: connectForm.connectionType === opt.value ? isDarkMode ? "#374151" : "#ffffff" : "transparent",
+            color: connectForm.connectionType === opt.value ? isDarkMode ? "#f3f4f6" : "#111827" : isDarkMode ? "#9ca3af" : "#6b7280",
+            boxShadow: connectForm.connectionType === opt.value ? "0 1px 2px rgba(0,0,0,0.1)" : "none"
           }
-          setConnectSaving(false);
         },
-        style: {
-          padding: "6px 14px",
-          borderRadius: "6px",
-          fontSize: "12px",
-          cursor: "pointer",
-          fontWeight: 600,
-          border: "none",
-          background: !connectForm.supabaseUrl || !connectForm.apiKey || !connectForm.dataset ? isDarkMode ? "#374151" : "#e5e7eb" : "#6366f1",
-          color: !connectForm.supabaseUrl || !connectForm.apiKey || !connectForm.dataset ? isDarkMode ? "#6b7280" : "#9ca3af" : "#ffffff"
+        opt.label
+      ))), /* @__PURE__ */ React.createElement("p", { style: { margin: "0 0 16px", fontSize: "12px", color: isDarkMode ? "#9ca3af" : "#6b7280" } }, isSupabase ? /* @__PURE__ */ React.createElement(React.Fragment, null, "Requires the ", /* @__PURE__ */ React.createElement("code", { style: { fontSize: "11px", padding: "1px 4px", borderRadius: "3px", background: isDarkMode ? "#1f2937" : "#f3f4f6" } }, "query_dataset"), " RPC function (see setup.sql).") : "Connect via dash-api proxy to any Postgres database."), fields.map((f) => /* @__PURE__ */ React.createElement("div", { key: f.key, style: { marginBottom: "12px" } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: "11px", fontWeight: 600, marginBottom: "4px", color: isDarkMode ? "#d1d5db" : "#374151" } }, f.label), /* @__PURE__ */ React.createElement(
+        "input",
+        {
+          type: f.password ? "password" : "text",
+          value: connectForm[f.key],
+          onChange: (e) => setConnectForm((prev) => ({ ...prev, [f.key]: e.target.value })),
+          placeholder: f.placeholder,
+          style: {
+            width: "100%",
+            padding: "8px 10px",
+            borderRadius: "6px",
+            fontSize: "13px",
+            boxSizing: "border-box",
+            border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`,
+            backgroundColor: isDarkMode ? "#111827" : "#f9fafb",
+            color: isDarkMode ? "#f3f4f6" : "#111827",
+            outline: "none"
+          }
         }
-      },
-      connectSaving ? "Connecting..." : "Connect & Save"
-    ))))), showShareModal && /* @__PURE__ */ React.createElement(
+      ))), connectError && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "12px", color: "#ef4444", marginBottom: "12px" } }, connectError), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: "8px", justifyContent: "flex-end" } }, /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          onClick: () => setShowConnectModal(false),
+          style: {
+            padding: "6px 14px",
+            borderRadius: "6px",
+            fontSize: "12px",
+            cursor: "pointer",
+            border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`,
+            background: "transparent",
+            color: isDarkMode ? "#d1d5db" : "#374151"
+          }
+        },
+        "Cancel"
+      ), /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          disabled: connectSaving || !canSubmit,
+          onClick: async () => {
+            setConnectError("");
+            setConnectSaving(true);
+            try {
+              let connectionJson, testData;
+              if (isSupabase) {
+                const testRes = await fetch(connectForm.supabaseUrl.replace(/\/+$/, "") + "/rest/v1/rpc/query_dataset", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", "apikey": connectForm.apiKey, "Authorization": "Bearer " + connectForm.apiKey },
+                  body: JSON.stringify({ p_table: connectForm.dataset, p_action: "schema" })
+                });
+                if (!testRes.ok) throw new Error("Connection failed (HTTP " + testRes.status + "). Check your URL and API key.");
+                testData = await testRes.json();
+                if (testData.error) throw new Error(testData.error);
+                connectionJson = { supabaseUrl: connectForm.supabaseUrl.replace(/\/+$/, ""), apiKey: connectForm.apiKey, dataset: connectForm.dataset };
+              } else {
+                const testRes = await fetch(connectForm.apiUrl.replace(/\/+$/, "") + "/query", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", "Authorization": "Bearer " + connectForm.apiSecret },
+                  body: JSON.stringify({ connection: connectForm.connection, table: connectForm.dataset, action: "schema" })
+                });
+                if (!testRes.ok) {
+                  const errBody = await testRes.json().catch(() => ({}));
+                  throw new Error(errBody.detail || "Connection failed (HTTP " + testRes.status + ")");
+                }
+                testData = await testRes.json();
+                if (testData.error) throw new Error(testData.error);
+                connectionJson = { connectionType: "fastapi", apiUrl: connectForm.apiUrl.replace(/\/+$/, ""), apiSecret: connectForm.apiSecret, connection: connectForm.connection, dataset: connectForm.dataset };
+              }
+              const tabsJson = [{ id: "tab_1", name: connectForm.dataset, dataset: connectForm.dataset, metricConfig: null }];
+              const result = await createConfig({ name: connectForm.dataset, connectionJson, tabsJson });
+              setEditSecret(result.id, result.editSecret);
+              window.location.hash = "#/" + result.id;
+              window.location.reload();
+            } catch (err) {
+              setConnectError(err.message);
+            }
+            setConnectSaving(false);
+          },
+          style: {
+            padding: "6px 14px",
+            borderRadius: "6px",
+            fontSize: "12px",
+            cursor: "pointer",
+            fontWeight: 600,
+            border: "none",
+            background: !canSubmit ? isDarkMode ? "#374151" : "#e5e7eb" : "#6366f1",
+            color: !canSubmit ? isDarkMode ? "#6b7280" : "#9ca3af" : "#ffffff"
+          }
+        },
+        connectSaving ? "Connecting..." : "Connect & Save"
+      )))));
+    })(), showShareModal && /* @__PURE__ */ React.createElement(
       "div",
       {
         style: styles.shareModal,

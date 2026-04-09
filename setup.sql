@@ -48,7 +48,6 @@ DECLARE
   v_allowed_types text[] := ARRAY['count', 'count_distinct', 'sum', 'avg', 'min', 'max', 'percentile'];
   v_top_n_col text;               -- first group_by column when p_top_n is used
   v_top_n_expr text;              -- CASE WHEN expression for top-N bucketing
-  v_first_metric_alias text;      -- unused, kept for backward compat
   v_first_metric_rank_expr text := 'COUNT(*)'; -- ranking expression for top-N CTE (default = first metric)
   v_rank_aliases text[] := '{}'; -- parallel arrays: metric alias → rank expression
   v_rank_exprs text[] := '{}';
@@ -57,24 +56,15 @@ DECLARE
   v_top_n_applied boolean := false;
 BEGIN
   -- ===== TABLE RESOLUTION =====
-  -- Map known dataset names to actual schema.table.
-  -- Add your own datasets here.
-  CASE p_table
-    WHEN 'fmc_job_metrics' THEN
-      v_schema := 'public_analytics';
-      v_actual_table := 'fct_job_metrics';
-    WHEN 'fmc_conversations' THEN
-      v_schema := 'public_analytics';
-      v_actual_table := 'fct_conversations';
-    ELSE
-      IF position('.' in p_table) > 0 THEN
-        v_schema := split_part(p_table, '.', 1);
-        v_actual_table := split_part(p_table, '.', 2);
-      ELSE
-        v_schema := 'public';
-        v_actual_table := p_table;
-      END IF;
-  END CASE;
+  -- Expects schema.table format (e.g. 'public_analytics.fct_job_metrics').
+  -- Bare table names default to 'public' schema.
+  IF position('.' in p_table) > 0 THEN
+    v_schema := split_part(p_table, '.', 1);
+    v_actual_table := split_part(p_table, '.', 2);
+  ELSE
+    v_schema := 'public';
+    v_actual_table := p_table;
+  END IF;
 
   v_fqn := quote_ident(v_schema) || '.' || quote_ident(v_actual_table);
 
@@ -228,11 +218,6 @@ BEGIN
 
       v_select_parts := array_prepend(v_time_expr || ' AS period', v_select_parts);
       v_group_parts := array_append(v_group_parts, v_time_expr);
-    END IF;
-
-    -- Capture alias of first metric for top-N ranking
-    IF jsonb_array_length(p_metrics) > 0 THEN
-      v_first_metric_alias := p_metrics->0->>'alias';
     END IF;
 
     -- Non-time GROUP BY columns (with optional top-N bucketing on first column)

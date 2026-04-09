@@ -110,6 +110,39 @@ export function createRpcCaller(connectionParams) {
   };
 }
 
+// Create an RPC caller for a FastAPI dash-api connection
+export function createFastApiCaller(connectionParams) {
+  return function callQueryDataset(action, params) {
+    if (!connectionParams) return Promise.reject(new Error('No connection'));
+    const { apiUrl, apiSecret, connection, dataset } = connectionParams;
+    const body = { connection, table: dataset, action };
+    // Map p_* prefixed params (Supabase convention) to clean names
+    if (params.p_column) body.column = params.p_column;
+    if (params.p_filters && Object.keys(params.p_filters).length) body.filters = params.p_filters;
+    if (params.p_group_by && params.p_group_by.length) body.group_by = params.p_group_by;
+    if (params.p_metrics && params.p_metrics.length) body.metrics = params.p_metrics;
+    if (params.p_time_grain) body.time_grain = params.p_time_grain;
+    if (params.p_date_column) body.date_column = params.p_date_column;
+    if (params.p_order_by) body.order_by = params.p_order_by;
+    if (params.p_limit) body.limit = params.p_limit;
+    if (params.p_top_n) body.top_n = params.p_top_n;
+    if (params.p_rank_by) body.rank_by = params.p_rank_by;
+    return fetch(apiUrl + '/query', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + apiSecret,
+      },
+      body: JSON.stringify(body),
+    })
+      .then(res => {
+        if (!res.ok) return res.json().then(d => { throw new Error(d.detail || 'Query returned ' + res.status); });
+        return res.json();
+      })
+      .then(data => { if (data.error) throw new Error(data.error); return data; });
+  };
+}
+
 // LRU cache for query results
 export function createQueryCache(maxSize = 100) {
   const cache = new Map();
