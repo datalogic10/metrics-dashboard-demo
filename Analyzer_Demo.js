@@ -939,7 +939,7 @@ export function render() {
     liveColumnMeta, liveSchemaReady, liveFilterOptions,
     livePeriodAggregates, liveDimensionAggregates, liveAggLoading,
     liveRowCount, liveDataTruncated, liveMetricConfig, liveDataError,
-    liveInsightsDimAggs,
+    liveInsightsDimAggs, truncatedFilterDims: [...truncatedFilterDims],
     // UI state
     dataFrequency, metric, view, topX, categorySelectionMode,
     selectedCategories, dynamicFilters, dateRange,
@@ -948,7 +948,7 @@ export function render() {
     liveColumnMeta, liveSchemaReady, liveFilterOptions,
     livePeriodAggregates, liveDimensionAggregates, liveAggLoading,
     liveRowCount, liveDataTruncated, liveMetricConfig, liveDataError,
-    liveInsightsDimAggs,
+    liveInsightsDimAggs, truncatedFilterDims,
     dataFrequency, metric, view, topX, categorySelectionMode,
     selectedCategories, dynamicFilters, dateRange,
     activeOverlays, smaWindow, forecastHorizon, activeInsightsTab,
@@ -960,6 +960,7 @@ export function render() {
     setLiveColumnMeta(snap.liveColumnMeta || null);
     setLiveSchemaReady(snap.liveSchemaReady || false);
     setLiveFilterOptions(snap.liveFilterOptions || {});
+    setTruncatedFilterDims(new Set(snap.truncatedFilterDims || []));
     setLivePeriodAggregates(snap.livePeriodAggregates || null);
     setLiveDimensionAggregates(snap.liveDimensionAggregates || null);
     setLiveAggLoading(snap.liveAggLoading || false);

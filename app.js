@@ -5415,6 +5415,7 @@ var __app = (() => {
       liveMetricConfig,
       liveDataError,
       liveInsightsDimAggs,
+      truncatedFilterDims: [...truncatedFilterDims],
       // UI state
       dataFrequency,
       metric,
@@ -5440,6 +5441,7 @@ var __app = (() => {
       liveMetricConfig,
       liveDataError,
       liveInsightsDimAggs,
+      truncatedFilterDims,
       dataFrequency,
       metric,
       view,
@@ -5457,6 +5459,7 @@ var __app = (() => {
       setLiveColumnMeta(snap.liveColumnMeta || null);
       setLiveSchemaReady(snap.liveSchemaReady || false);
       setLiveFilterOptions(snap.liveFilterOptions || {});
+      setTruncatedFilterDims(new Set(snap.truncatedFilterDims || []));
       setLivePeriodAggregates(snap.livePeriodAggregates || null);
       setLiveDimensionAggregates(snap.liveDimensionAggregates || null);
       setLiveAggLoading(snap.liveAggLoading || false);
