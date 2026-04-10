@@ -213,6 +213,54 @@ export function calculateSMA(barData, windowSize) {
 }
 
 /**
+ * Insert missing daily-grain periods between min and max so chart timelines
+ * show real gaps for absent dates instead of squashing adjacent points together.
+ *
+ * Modes:
+ *   - 'none'           — return periods unchanged (current behavior, default)
+ *   - 'all-days'       — fill every missing calendar day (crypto, SaaS, etc.)
+ *   - 'weekdays-only'  — fill missing Mon–Fri only; do not insert weekend
+ *                        placeholders. Existing weekend rows are still kept,
+ *                        so this works for both stocks (Mon–Fri) and mixed
+ *                        datasets that occasionally have a weekend row.
+ *
+ * Only operates on YYYY-MM-DD period strings (Daily grain). Other formats
+ * (YYYY-MM, YYYY-Wnn, YYYY-QN, YYYY) pass through untouched — coarser
+ * grains naturally aggregate gaps away.
+ *
+ * Weekend = ISO weekend (Sat/Sun). Not configurable for non-Western
+ * calendars; intentional simplicity.
+ */
+export function fillMissingPeriods(periods, fillMode) {
+  if (!fillMode || fillMode === 'none' || !periods || periods.length === 0) return periods;
+  const isDaily = /^\d{4}-\d{2}-\d{2}$/.test(periods[0]);
+  if (!isDaily) return periods;
+
+  const sorted = [...periods].sort();
+  const present = new Set(sorted);
+  // Anchor to local midnight to avoid timezone surprises across day boundaries
+  const start = new Date(sorted[0] + 'T00:00:00');
+  const end = new Date(sorted[sorted.length - 1] + 'T00:00:00');
+  const out = [];
+  const cur = new Date(start);
+  while (cur <= end) {
+    const dow = cur.getDay(); // 0=Sun, 6=Sat
+    const isWeekend = dow === 0 || dow === 6;
+    const y = cur.getFullYear();
+    const m = String(cur.getMonth() + 1).padStart(2, '0');
+    const d = String(cur.getDate()).padStart(2, '0');
+    const iso = `${y}-${m}-${d}`;
+    const shouldInclude =
+      present.has(iso) ||
+      fillMode === 'all-days' ||
+      (fillMode === 'weekdays-only' && !isWeekend);
+    if (shouldInclude) out.push(iso);
+    cur.setDate(cur.getDate() + 1);
+  }
+  return out;
+}
+
+/**
  * Z-score normalization. Returns values rescaled to mean 0, std 1.
  * Nulls and non-finite values pass through as null.
  * Degenerate cases (single value, zero variance) return zeros.

@@ -38,6 +38,7 @@ import {
   generateFuturePeriods,
   detectSeasonalPeriod,
   hexToRgba,
+  fillMissingPeriods,
 } from './src/metrics.js';
 import {
   resolveChartType as resolveChartTypeUtil,
@@ -3165,10 +3166,17 @@ export function render() {
     return map;
   }, [dimensionCategoryTotals]);
 
-  // Get unique dates/periods — always from periodAggregates (works in both modes)
+  // Get unique dates/periods — always from periodAggregates (works in both modes).
+  // When dataFrequency is Daily and the metric config specifies a timelineFillMode
+  // ('all-days' or 'weekdays-only'), missing dates are inserted as null-value
+  // placeholders so chart timelines show real gaps. Configured in the
+  // "Configure Metrics" modal, stored on liveMetricConfig.timelineFillMode.
   const periods = React.useMemo(() => {
-    return Object.keys(periodAggregates).sort();
-  }, [periodAggregates]);
+    const base = Object.keys(periodAggregates).sort();
+    if (dataFrequency !== "Daily") return base;
+    const fillMode = liveMetricConfig?.timelineFillMode || "none";
+    return fillMissingPeriods(base, fillMode);
+  }, [periodAggregates, dataFrequency, liveMetricConfig]);
 
   // Calculate metrics from rows (fallback for non-period-grouped data)
   const calculateMetricValue = React.useCallback((rows, metricName) => {
@@ -5800,10 +5808,14 @@ export function render() {
     let chartLayout = {};
 
     if (view === "Overall") {
-      // Use periodAggregates — unified path for both demo and live mode
+      // Use periodAggregates — unified path for both demo and live mode.
+      // Missing periods (e.g. inserted by timelineFillMode) become null so
+      // Plotly renders them as visible gaps instead of zero-height bars.
       const barData = periods.map((period) => {
         const agg = periodAggregates[period];
-        return agg ? (agg[metric] || 0) : 0;
+        if (!agg) return null;
+        const val = agg[metric];
+        return (val == null) ? null : val;
       });
 
       // Build overlay traces dynamically from activeOverlays
@@ -5899,13 +5911,17 @@ export function render() {
           // Track max for y-axis range
           forecastUpperMax = Math.max(forecastUpperMax, ...result.upper);
 
-          // Bridge: connect last actual value to first forecast for visual continuity
-          const lastActualValue = barData[barData.length - 1];
+          // Bridge: connect last actual value to first forecast for visual continuity.
+          // Walk back to the last non-null period (the visible chart may end on a
+          // gap-fill placeholder when timelineFillMode is enabled).
+          let lastActualIdx = barData.length - 1;
+          while (lastActualIdx >= 0 && barData[lastActualIdx] == null) lastActualIdx--;
+          const lastActualValue = lastActualIdx >= 0 ? barData[lastActualIdx] : null;
           const bridgeY = new Array(periods.length).fill(null);
-          bridgeY[periods.length - 1] = lastActualValue;
+          if (lastActualIdx >= 0) bridgeY[lastActualIdx] = lastActualValue;
           const forecastY = [...bridgeY, ...result.forecast];
           const upperY = [...bridgeY, ...result.upper];
-          const lowerY = [...new Array(periods.length).fill(null).map((_, i) => i === periods.length - 1 ? lastActualValue : null), ...result.lower];
+          const lowerY = [...new Array(periods.length).fill(null).map((_, i) => i === lastActualIdx ? lastActualValue : null), ...result.lower];
 
           const mapeLabel = result.mape > 0 ? ` (MAPE: ${result.mape.toFixed(1)}%)` : '';
 
@@ -5941,11 +5957,13 @@ export function render() {
         });
       }
 
-      // Create text annotations — show change only when exactly 1 period-change overlay active
+      // Create text annotations — show change only when exactly 1 period-change overlay active.
+      // Filled gap periods (null) get an empty annotation so the chart doesn't render "$0" labels.
       const activeChangeOverlays = OVERLAY_CONFIG.filter(o => !o.isSMA && !o.isForecast && activeOverlays[o.id]
         && !(o.minGrain && GRAIN_RANK[o.minGrain] < GRAIN_RANK[dataFrequency])
         && !(o.lookback && o.lookback[dataFrequency] && periods.length <= o.lookback[dataFrequency]));
       const textAnnotations = barData.map((value, index) => {
+        if (value == null) return '';
         let annotation = formatMetric(value);
         if (activeChangeOverlays.length === 1 && primaryOverlayData) {
           const changeVal = primaryOverlayData.data[index];
@@ -6031,8 +6049,10 @@ export function render() {
           range:
             barData.length > 0
               ? (() => {
-                  const maxValue = Math.max(...barData, forecastUpperMax);
-                  const minValue = Math.min(...barData);
+                  const finiteVals = barData.filter(v => v != null && Number.isFinite(v));
+                  if (finiteVals.length === 0) return undefined;
+                  const maxValue = Math.max(...finiteVals, forecastUpperMax);
+                  const minValue = Math.min(...finiteVals);
                   if (minValue < 0) {
                     return [minValue * 1.3, maxValue * 1.3];
                   } else if (maxValue > 0) {

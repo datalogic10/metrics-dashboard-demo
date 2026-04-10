@@ -315,7 +315,7 @@ export function MetricsEditorModal({
         })}
 
         {/* Dataset + Date Column + Default Grain + Top-N Rank By */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px', marginBottom: '16px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
           <div>
             <label style={labelStyle}>Dataset (table name)</label>
             <input style={inputStyle} value={draft.dataset || activeDataset || ''} onChange={e => updateDraft('dataset', e.target.value)} placeholder="schema.table_name" />
@@ -345,6 +345,22 @@ export function MetricsEditorModal({
               <option value="derived">Metric 3</option>
             </select>
           </div>
+        </div>
+
+        {/* Timeline gap-fill mode (Daily grain only) */}
+        <div style={{ marginBottom: '16px' }}>
+          <label style={labelStyle} title="Controls how missing dates appear on the timeline at Daily grain. Does not add or interpolate any values — only affects spacing.">
+            Show gaps on timeline for missing dates
+          </label>
+          <select
+            style={selectStyle}
+            value={draft.timelineFillMode || 'none'}
+            onChange={e => updateDraft('timelineFillMode', e.target.value)}
+          >
+            <option value="none">Off — place existing points side-by-side</option>
+            <option value="all-days">Any missing calendar day (crypto, SaaS)</option>
+            <option value="weekdays-only">Missing weekdays only — weekends not treated as gaps (stocks)</option>
+          </select>
         </div>
 
         {/* Visible Dimensions */}

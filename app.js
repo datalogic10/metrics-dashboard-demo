@@ -1655,6 +1655,29 @@ var __app = (() => {
     }
     return result;
   }
+  function fillMissingPeriods(periods, fillMode) {
+    if (!fillMode || fillMode === "none" || !periods || periods.length === 0) return periods;
+    const isDaily = /^\d{4}-\d{2}-\d{2}$/.test(periods[0]);
+    if (!isDaily) return periods;
+    const sorted = [...periods].sort();
+    const present = new Set(sorted);
+    const start = /* @__PURE__ */ new Date(sorted[0] + "T00:00:00");
+    const end = /* @__PURE__ */ new Date(sorted[sorted.length - 1] + "T00:00:00");
+    const out = [];
+    const cur = new Date(start);
+    while (cur <= end) {
+      const dow = cur.getDay();
+      const isWeekend = dow === 0 || dow === 6;
+      const y = cur.getFullYear();
+      const m = String(cur.getMonth() + 1).padStart(2, "0");
+      const d = String(cur.getDate()).padStart(2, "0");
+      const iso = `${y}-${m}-${d}`;
+      const shouldInclude = present.has(iso) || fillMode === "all-days" || fillMode === "weekdays-only" && !isWeekend;
+      if (shouldInclude) out.push(iso);
+      cur.setDate(cur.getDate() + 1);
+    }
+    return out;
+  }
   function zScore(values) {
     const valid = values.filter((v) => v != null && Number.isFinite(v));
     if (valid.length < 2) return values.map((v) => v == null || !Number.isFinite(v) ? null : 0);
@@ -2490,7 +2513,17 @@ var __app = (() => {
           opt.label
         );
       }), (draft[chartTypeKey] || "auto") === "auto" && /* @__PURE__ */ React.createElement("span", { style: { fontSize: "10px", color: isDarkMode ? "#6b7280" : "#9ca3af" } }, "(", mode === "formula" ? "line" : "stacked", ")"))));
-    }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "8px", marginBottom: "16px" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Dataset (table name)"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.dataset || activeDataset || "", onChange: (e) => updateDraft("dataset", e.target.value), placeholder: "schema.table_name" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Date Column"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.dateColumn || "", onChange: (e) => updateDraft("dateColumn", e.target.value || null) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u2014 none \u2014"), dateCols.map((c) => /* @__PURE__ */ React.createElement("option", { key: c.name, value: c.name }, c.name)))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Default Grain"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.defaultGrain || "month", onChange: (e) => updateDraft("defaultGrain", e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "day" }, "Daily"), /* @__PURE__ */ React.createElement("option", { value: "week" }, "Weekly"), /* @__PURE__ */ React.createElement("option", { value: "month" }, "Monthly"), /* @__PURE__ */ React.createElement("option", { value: "quarter" }, "Quarterly"), /* @__PURE__ */ React.createElement("option", { value: "year" }, "Yearly"))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Sort top-N by"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.topNRankBy || "volume", onChange: (e) => updateDraft("topNRankBy", e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "volume" }, "Metric 1"), /* @__PURE__ */ React.createElement("option", { value: "revenue" }, "Metric 2"), /* @__PURE__ */ React.createElement("option", { value: "derived" }, "Metric 3")))), /* @__PURE__ */ React.createElement("div", { style: sectionStyle }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "13px", fontWeight: 700, color: isDarkMode ? "#f3f4f6" : "#111827" } }, "Dimensions & Filters"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: "8px" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", schemaDimensions.map((c) => c.name)), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "All"), /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", []), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "None"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } }, schemaDimensions.map((c) => {
+    }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "8px", marginBottom: "8px" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Dataset (table name)"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.dataset || activeDataset || "", onChange: (e) => updateDraft("dataset", e.target.value), placeholder: "schema.table_name" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Date Column"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.dateColumn || "", onChange: (e) => updateDraft("dateColumn", e.target.value || null) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u2014 none \u2014"), dateCols.map((c) => /* @__PURE__ */ React.createElement("option", { key: c.name, value: c.name }, c.name)))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Default Grain"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.defaultGrain || "month", onChange: (e) => updateDraft("defaultGrain", e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "day" }, "Daily"), /* @__PURE__ */ React.createElement("option", { value: "week" }, "Weekly"), /* @__PURE__ */ React.createElement("option", { value: "month" }, "Monthly"), /* @__PURE__ */ React.createElement("option", { value: "quarter" }, "Quarterly"), /* @__PURE__ */ React.createElement("option", { value: "year" }, "Yearly"))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Sort top-N by"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.topNRankBy || "volume", onChange: (e) => updateDraft("topNRankBy", e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "volume" }, "Metric 1"), /* @__PURE__ */ React.createElement("option", { value: "revenue" }, "Metric 2"), /* @__PURE__ */ React.createElement("option", { value: "derived" }, "Metric 3")))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: "16px" } }, /* @__PURE__ */ React.createElement("label", { style: labelStyle, title: "Controls how missing dates appear on the timeline at Daily grain. Does not add or interpolate any values \u2014 only affects spacing." }, "Show gaps on timeline for missing dates"), /* @__PURE__ */ React.createElement(
+      "select",
+      {
+        style: selectStyle,
+        value: draft.timelineFillMode || "none",
+        onChange: (e) => updateDraft("timelineFillMode", e.target.value)
+      },
+      /* @__PURE__ */ React.createElement("option", { value: "none" }, "Off \u2014 place existing points side-by-side"),
+      /* @__PURE__ */ React.createElement("option", { value: "all-days" }, "Any missing calendar day (crypto, SaaS)"),
+      /* @__PURE__ */ React.createElement("option", { value: "weekdays-only" }, "Missing weekdays only \u2014 weekends not treated as gaps (stocks)")
+    )), /* @__PURE__ */ React.createElement("div", { style: sectionStyle }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "13px", fontWeight: 700, color: isDarkMode ? "#f3f4f6" : "#111827" } }, "Dimensions & Filters"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: "8px" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", schemaDimensions.map((c) => c.name)), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "All"), /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", []), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "None"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } }, schemaDimensions.map((c) => {
       const visible = draft.visibleDimensions ? draft.visibleDimensions.includes(c.name) : true;
       const label = c.name.replace(/^is_/, "").replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
       return /* @__PURE__ */ React.createElement(
@@ -7200,8 +7233,11 @@ var __app = (() => {
       return map;
     }, [dimensionCategoryTotals]);
     const periods = React.useMemo(() => {
-      return Object.keys(periodAggregates).sort();
-    }, [periodAggregates]);
+      const base = Object.keys(periodAggregates).sort();
+      if (dataFrequency !== "Daily") return base;
+      const fillMode = liveMetricConfig?.timelineFillMode || "none";
+      return fillMissingPeriods(base, fillMode);
+    }, [periodAggregates, dataFrequency, liveMetricConfig]);
     const calculateMetricValue = React.useCallback((rows, metricName) => {
       if (!rows || rows.length === 0) return 0;
       let m1 = 0;
@@ -9115,7 +9151,9 @@ var __app = (() => {
       if (view === "Overall") {
         const barData = periods.map((period) => {
           const agg = periodAggregates[period];
-          return agg ? agg[metric] || 0 : 0;
+          if (!agg) return null;
+          const val = agg[metric];
+          return val == null ? null : val;
         });
         const overlayTraces = [];
         let primaryOverlayData = null;
@@ -9190,12 +9228,14 @@ var __app = (() => {
             }
             if (!result) return;
             forecastUpperMax = Math.max(forecastUpperMax, ...result.upper);
-            const lastActualValue = barData[barData.length - 1];
+            let lastActualIdx = barData.length - 1;
+            while (lastActualIdx >= 0 && barData[lastActualIdx] == null) lastActualIdx--;
+            const lastActualValue = lastActualIdx >= 0 ? barData[lastActualIdx] : null;
             const bridgeY = new Array(periods.length).fill(null);
-            bridgeY[periods.length - 1] = lastActualValue;
+            if (lastActualIdx >= 0) bridgeY[lastActualIdx] = lastActualValue;
             const forecastY = [...bridgeY, ...result.forecast];
             const upperY = [...bridgeY, ...result.upper];
-            const lowerY = [...new Array(periods.length).fill(null).map((_, i) => i === periods.length - 1 ? lastActualValue : null), ...result.lower];
+            const lowerY = [...new Array(periods.length).fill(null).map((_, i) => i === lastActualIdx ? lastActualValue : null), ...result.lower];
             const mapeLabel = result.mape > 0 ? ` (MAPE: ${result.mape.toFixed(1)}%)` : "";
             overlayTraces.push({
               type: "scatter",
@@ -9235,6 +9275,7 @@ var __app = (() => {
         }
         const activeChangeOverlays = OVERLAY_CONFIG.filter((o) => !o.isSMA && !o.isForecast && activeOverlays[o.id] && !(o.minGrain && GRAIN_RANK[o.minGrain] < GRAIN_RANK[dataFrequency]) && !(o.lookback && o.lookback[dataFrequency] && periods.length <= o.lookback[dataFrequency]));
         const textAnnotations = barData.map((value, index) => {
+          if (value == null) return "";
           let annotation = formatMetric(value);
           if (activeChangeOverlays.length === 1 && primaryOverlayData) {
             const changeVal = primaryOverlayData.data[index];
@@ -9313,8 +9354,10 @@ var __app = (() => {
             side: "left",
             showspikes: false,
             range: barData.length > 0 ? (() => {
-              const maxValue = Math.max(...barData, forecastUpperMax);
-              const minValue = Math.min(...barData);
+              const finiteVals = barData.filter((v) => v != null && Number.isFinite(v));
+              if (finiteVals.length === 0) return void 0;
+              const maxValue = Math.max(...finiteVals, forecastUpperMax);
+              const minValue = Math.min(...finiteVals);
               if (minValue < 0) {
                 return [minValue * 1.3, maxValue * 1.3];
               } else if (maxValue > 0) {
