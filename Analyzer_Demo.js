@@ -67,21 +67,19 @@ import { StatusBanner } from './src/components/StatusBanner.js';
 import { buildStaticStyles } from './src/styles.js';
 import { DATE_RANGES, GUIDE_STEPS, PRO_TIPS } from './src/constants.js';
 
-// Default server-side fetch window when connecting to a live Postgres source.
-// Bounds the query to the last N years so huge datasets (e.g. a 10y prices table)
-// don't force a full scan on every load. Only a lower bound is applied — an
-// upper bound would silently truncate forecast/target/budget tables that
-// legitimately have rows dated in the future, and wouldn't reduce scan work
-// anyway once the lower bound has pruned the index range.
-const SERVER_DATE_WINDOW_YEARS = 5;
-
-function computeServerDateWindow(liveMetricConfig) {
-  // Only apply when we know which column to bound on. Without a date column
-  // the RPC ignores p_date_from anyway.
+// Server-side fetch window when connecting to a live Postgres source.
+// Adapts to the UI date range so large ranges (5Y, All) don't get silently
+// truncated, while smaller ranges still benefit from a bounded scan.
+//   dateRange <= 2Y  → lower bound = 2 years ago
+//   dateRange = 5Y   → lower bound = 5 years ago
+//   dateRange = All  → no lower bound (full table scan)
+function computeServerDateWindow(liveMetricConfig, dateRange) {
   if (!liveMetricConfig || !liveMetricConfig.dateColumn) return { from: null };
+  if (dateRange === 'All') return { from: null };
+  const years = dateRange === '5Y' ? 5 : 2;
   const now = new Date();
   const from = new Date(now);
-  from.setFullYear(from.getFullYear() - SERVER_DATE_WINDOW_YEARS);
+  from.setFullYear(from.getFullYear() - years);
   const fmt = (d) =>
     d.getFullYear() + '-' +
     String(d.getMonth() + 1).padStart(2, '0') + '-' +
@@ -2433,6 +2431,10 @@ export function render() {
     }
   }, [dataFrequency]);
 
+  // Only re-fetch from server when the window actually changes (2Y → 5Y → All),
+  // not on every UI date range toggle (7D → 30D stays within the 2Y window).
+  const serverDateWindowKey = dateRange === 'All' ? 'all' : dateRange === '5Y' ? '5' : '2';
+
   // ===== LIVE MODE: FETCH AGGREGATED DATA FROM RPC (or client-side for CSV) =====
   // Fires whenever controls change in live mode (frequency, view, filters)
   const liveAggRequestRef = React.useRef(0);
@@ -2479,11 +2481,9 @@ export function render() {
     const dateCol = liveMetricConfig.dateColumn || liveDateColumn;
     const rpcMetrics = buildRpcMetrics(liveMetricConfig);
 
-    // Default server-side fetch window: last 5 years. The UI dateRange control
-    // (7D / 30D / 1Y / ...) continues to crop client-side within this window,
-    // which keeps DoD/WoW/YoY lookups working since the client still has more
-    // history than the visible range.
-    const serverWindow = computeServerDateWindow(liveMetricConfig);
+    // Server-side fetch window adapts to UI date range selection.
+    // Client-side dateRange still crops within this window for chart display.
+    const serverWindow = computeServerDateWindow(liveMetricConfig, dateRange);
 
     // Build p_filters from dynamicFilters (strip dim_ prefix and _filter suffix to get column name)
     const pFilters = {};
@@ -2569,7 +2569,7 @@ export function render() {
     // unmounts. AbortController.abort() → fetch rejects → TCP closes →
     // uvicorn cancels the handler → asyncpg cancels the PG query.
     return () => { controller.abort(); };
-  }, [liveSchemaReady, dataSourceType, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX, liveBooleanColumns]);
+  }, [liveSchemaReady, dataSourceType, liveMetricConfig, dataFrequency, serverDateWindowKey, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX, liveBooleanColumns]);
 
   // Fetch dimension aggregates for visible dimensions when insights tab is open in live mode.
   // Uses only visibleDimensions (from Configure Metrics) and a concurrency limit of 3 to
@@ -2635,7 +2635,7 @@ export function render() {
     const formulaConfigsArg = Object.keys(formulaConfigs).length > 0 ? formulaConfigs : null;
 
     // Use the same bounded server window as the primary aggregation effect
-    const serverWindow = computeServerDateWindow(liveMetricConfig);
+    const serverWindow = computeServerDateWindow(liveMetricConfig, dateRange);
 
     // Fetch with concurrency limit of 3 to avoid overwhelming Supabase
     const CONCURRENCY = 3;
@@ -2677,7 +2677,7 @@ export function render() {
       cancelled = true;
       controller.abort();
     };
-  }, [dataSourceType, activeInsightsTab, liveMetricConfig, dataFrequency, dynamicFilters,
+  }, [dataSourceType, activeInsightsTab, liveMetricConfig, dataFrequency, serverDateWindowKey, dynamicFilters,
       visibleLiveDimensions, cachedQuery, liveDateColumn, liveBooleanColumns]);
 
   const periodChangeLabel = React.useMemo(() => {
@@ -2783,12 +2783,18 @@ export function render() {
         return allDates.filter((date) => periodToDateStr(date) >= computeDaysAgo(14));
       case "30D":
         return allDates.filter((date) => periodToDateStr(date) >= computeDaysAgo(30));
+      case "90D":
+        return allDates.filter((date) => periodToDateStr(date) >= computeDaysAgo(90));
       case "QTD":
         return allDates.filter((date) => periodToDateStr(date) >= computeAgo(3));
       case "YTD":
         return allDates.filter((date) => periodToDateStr(date) >= yearStart);
       case "1Y":
         return allDates.filter((date) => periodToDateStr(date) >= oneYearAgo);
+      case "2Y":
+        return allDates.filter((date) => periodToDateStr(date) >= computeAgo(24));
+      case "5Y":
+        return allDates.filter((date) => periodToDateStr(date) >= computeAgo(60));
       default:
         return allDates;
     }

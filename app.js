@@ -4660,7 +4660,7 @@ var __app = (() => {
   }
 
   // src/constants.js
-  var DATE_RANGES = ["7D", "14D", "30D", "QTD", "YTD", "1Y", "All"];
+  var DATE_RANGES = ["7D", "14D", "30D", "90D", "QTD", "YTD", "1Y", "2Y", "5Y", "All"];
   var GUIDE_STEPS = [
     {
       id: "quick-query",
@@ -4773,12 +4773,13 @@ var __app = (() => {
   ];
 
   // Analyzer_Demo.js
-  var SERVER_DATE_WINDOW_YEARS = 5;
-  function computeServerDateWindow(liveMetricConfig) {
+  function computeServerDateWindow(liveMetricConfig, dateRange) {
     if (!liveMetricConfig || !liveMetricConfig.dateColumn) return { from: null };
+    if (dateRange === "All") return { from: null };
+    const years = dateRange === "5Y" ? 5 : 2;
     const now = /* @__PURE__ */ new Date();
     const from = new Date(now);
-    from.setFullYear(from.getFullYear() - SERVER_DATE_WINDOW_YEARS);
+    from.setFullYear(from.getFullYear() - years);
     const fmt = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
     return { from: fmt(from) };
   }
@@ -6694,6 +6695,7 @@ var __app = (() => {
           return COLUMNS.REPORTING_MONTH;
       }
     }, [dataFrequency]);
+    const serverDateWindowKey = dateRange === "All" ? "all" : dateRange === "5Y" ? "5" : "2";
     const liveAggRequestRef = React.useRef(0);
     React.useEffect(() => {
       if (!liveSchemaReady || !liveMetricConfig) return;
@@ -6727,7 +6729,7 @@ var __app = (() => {
       const grain = frequencyToGrain[dataFrequency] || "month";
       const dateCol = liveMetricConfig.dateColumn || liveDateColumn;
       const rpcMetrics = buildRpcMetrics(liveMetricConfig);
-      const serverWindow = computeServerDateWindow(liveMetricConfig);
+      const serverWindow = computeServerDateWindow(liveMetricConfig, dateRange);
       const pFilters = {};
       Object.keys(dynamicFilters).forEach((filterKey) => {
         const vals = dynamicFilters[filterKey];
@@ -6792,7 +6794,7 @@ var __app = (() => {
       return () => {
         controller.abort();
       };
-    }, [liveSchemaReady, dataSourceType, liveMetricConfig, dataFrequency, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX, liveBooleanColumns]);
+    }, [liveSchemaReady, dataSourceType, liveMetricConfig, dataFrequency, serverDateWindowKey, dynamicFilters, view, VIEW_CONFIG, liveDateColumn, cachedQuery, topX, liveBooleanColumns]);
     React.useEffect(() => {
       if (!liveSchemaReady || !activeInsightsTab || !liveMetricConfig) return;
       let cancelled = false;
@@ -6842,7 +6844,7 @@ var __app = (() => {
       if (liveMetricConfig.revenueMode === "formula") formulaConfigs.revenue = { operator: liveMetricConfig.revenueFormulaOperator || "/" };
       if (liveMetricConfig.derivedMode === "formula") formulaConfigs.derived = { operator: liveMetricConfig.derivedFormulaOperator || "/" };
       const formulaConfigsArg = Object.keys(formulaConfigs).length > 0 ? formulaConfigs : null;
-      const serverWindow = computeServerDateWindow(liveMetricConfig);
+      const serverWindow = computeServerDateWindow(liveMetricConfig, dateRange);
       const CONCURRENCY = 3;
       const merged = {};
       const fetchDim = (col) => cachedQuery("data", {
@@ -6882,6 +6884,7 @@ var __app = (() => {
       activeInsightsTab,
       liveMetricConfig,
       dataFrequency,
+      serverDateWindowKey,
       dynamicFilters,
       visibleLiveDimensions,
       cachedQuery,
@@ -6959,12 +6962,18 @@ var __app = (() => {
           return allDates.filter((date) => periodToDateStr(date) >= computeDaysAgo(14));
         case "30D":
           return allDates.filter((date) => periodToDateStr(date) >= computeDaysAgo(30));
+        case "90D":
+          return allDates.filter((date) => periodToDateStr(date) >= computeDaysAgo(90));
         case "QTD":
           return allDates.filter((date) => periodToDateStr(date) >= computeAgo(3));
         case "YTD":
           return allDates.filter((date) => periodToDateStr(date) >= yearStart);
         case "1Y":
           return allDates.filter((date) => periodToDateStr(date) >= oneYearAgo);
+        case "2Y":
+          return allDates.filter((date) => periodToDateStr(date) >= computeAgo(24));
+        case "5Y":
+          return allDates.filter((date) => periodToDateStr(date) >= computeAgo(60));
         default:
           return allDates;
       }

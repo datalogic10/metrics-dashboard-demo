@@ -1,7 +1,7 @@
 // Static constants extracted from Analyzer_Demo.js.
 // No runtime dependencies — pure data.
 
-export const DATE_RANGES = ["7D", "14D", "30D", "QTD", "YTD", "1Y", "All"];
+export const DATE_RANGES = ["7D", "14D", "30D", "90D", "QTD", "YTD", "1Y", "2Y", "5Y", "All"];
 
 export const GUIDE_STEPS = [
   {
