@@ -6379,7 +6379,7 @@ var __app = (() => {
       []
     );
     const renderDropdownFilter = React.useCallback(
-      (filterName, label, options, selectedValues, onSelectionChange, formatValue = formatFilterName2, isTruncated = false) => {
+      (filterName, label, options, selectedValues, onSelectionChange, formatValue = formatFilterName2) => {
         const isExpanded = expandedFilters[filterName];
         const allSelected = selectedValues.length === 0 || selectedValues.length === options.length;
         const selectedCount = selectedValues.length;
@@ -6450,35 +6450,9 @@ var __app = (() => {
             ),
             /* @__PURE__ */ React.createElement("span", { style: styles.checkboxLabel }, formatValue(option))
           );
-        }), isTruncated && /* @__PURE__ */ React.createElement("div", { style: { padding: "6px 8px", borderTop: "1px solid " + (isDarkMode ? "#334155" : "#e2e8f0") } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "10px", color: isDarkMode ? "#64748b" : "#94a3b8", marginBottom: "4px" } }, "Not all values shown. Type exact value:"), /* @__PURE__ */ React.createElement(
-          "input",
-          {
-            type: "text",
-            placeholder: "Add custom value...",
-            style: {
-              width: "100%",
-              padding: "4px 8px",
-              fontSize: "12px",
-              border: "1px solid " + (isDarkMode ? "#475569" : "#d1d5db"),
-              borderRadius: "4px",
-              backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
-              color: isDarkMode ? "#f1f5f9" : "#1e293b",
-              outline: "none",
-              boxSizing: "border-box"
-            },
-            onKeyDown: (e) => {
-              if (e.key === "Enter" && e.target.value.trim()) {
-                const val = e.target.value.trim();
-                if (!selectedValues.includes(val)) {
-                  onSelectionChange([...selectedValues, val]);
-                }
-                e.target.value = "";
-              }
-            }
-          }
-        )))));
+        }))));
       },
-      [expandedFilters, toggleFilterExpansion, formatFilterName2, isDarkMode]
+      [expandedFilters, toggleFilterExpansion, formatFilterName2]
     );
     const renderTooltipIcon = React.useCallback(
       (categoryKey, tooltipText) => {
@@ -7048,6 +7022,17 @@ var __app = (() => {
       map.pricingTypeFilter = pricingTypes.slice(1);
       return map;
     }, [filterOptionsMap, pricingTypes]);
+    const truncatedFilterByLabel = React.useMemo(() => {
+      const map = {};
+      if (truncatedFilterDims.size === 0) return map;
+      FILTER_CONFIG_STATIC.forEach(({ key, label }) => {
+        const colName = key.replace(/^dim_/, "").replace(/_filter$/, "");
+        if (truncatedFilterDims.has(colName)) {
+          map[label] = key;
+        }
+      });
+      return map;
+    }, [truncatedFilterDims, FILTER_CONFIG_STATIC]);
     const createFilterSearchOptionsForType = React.useCallback(
       (filterType, filterKey, optionsArray, setFilterFn, formatDisplayName = formatFilterName2) => {
         return optionsArray.slice(1).map((value) => ({
@@ -9717,6 +9702,7 @@ var __app = (() => {
         return allFilterSuggestions;
       }
       const searchTerm = debouncedFilterSearchText.toLowerCase().trim();
+      const searchValue = debouncedFilterSearchText.trim();
       const filtered = {};
       Object.keys(allFilterSuggestions).forEach((type) => {
         const matchingOptions = allFilterSuggestions[type].filter((option) => {
@@ -9726,8 +9712,24 @@ var __app = (() => {
           filtered[type] = matchingOptions;
         }
       });
+      if (searchValue.length > 0) {
+        Object.entries(truncatedFilterByLabel).forEach(([label, filterKey]) => {
+          if (filtered[label]) return;
+          const setState = getFilterSetState(filterKey);
+          filtered[label] = [{
+            type: label,
+            filterKey,
+            value: searchValue,
+            displayName: searchValue + " (custom)",
+            searchText: searchValue.toLowerCase(),
+            action: () => {
+              setState((prev) => prev.includes(searchValue) ? prev : [...prev, searchValue]);
+            }
+          }];
+        });
+      }
       return filtered;
-    }, [debouncedFilterSearchText, allFilterSuggestions]);
+    }, [debouncedFilterSearchText, allFilterSuggestions, truncatedFilterByLabel, getFilterSetState]);
     const parseQuery = React.useCallback(
       (query) => {
         const metricPatterns = {
@@ -10788,16 +10790,13 @@ var __app = (() => {
     ))), /* @__PURE__ */ React.createElement("div", { style: styles.advancedFiltersContent }, /* @__PURE__ */ React.createElement("div", { style: styles.filterSection }, /* @__PURE__ */ React.createElement("button", { style: styles.modernResetButton, onClick: resetAllFilters }, "Reset All Filters")), /* @__PURE__ */ React.createElement("div", { style: styles.filterSection }, /* @__PURE__ */ React.createElement("h4", { style: styles.sectionTitle }, "Data Filters"), FILTER_CONFIG.map(
       ({ key, label, state, setState, formatValue }) => {
         const options = filterOptionsWithoutAll[key] || [];
-        const colName = key.replace(/^dim_/, "").replace(/_filter$/, "");
-        const isTruncated = truncatedFilterDims.has(colName);
         return renderDropdownFilter(
           key,
           label,
           options,
           state,
           setState,
-          formatValue || formatFilterName2,
-          isTruncated
+          formatValue || formatFilterName2
         );
       }
     )))), /* @__PURE__ */ React.createElement("div", { style: styles.proTipBanner }, /* @__PURE__ */ React.createElement("span", { style: styles.proTipLabel }, "ProTip"), /* @__PURE__ */ React.createElement("span", { style: styles.proTipIcon }, PRO_TIPS[currentTipIndex].icon), /* @__PURE__ */ React.createElement("div", { style: styles.proTipContent }, /* @__PURE__ */ React.createElement("span", { style: styles.proTipTitle }, PRO_TIPS[currentTipIndex].title, ":"), /* @__PURE__ */ React.createElement("span", { style: styles.proTipText }, PRO_TIPS[currentTipIndex].text)), /* @__PURE__ */ React.createElement("div", { style: styles.proTipNavigation }, /* @__PURE__ */ React.createElement(

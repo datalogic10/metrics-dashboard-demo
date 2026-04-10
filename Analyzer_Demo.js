@@ -2034,8 +2034,7 @@ export function render() {
       options,
       selectedValues,
       onSelectionChange,
-      formatValue = formatFilterName,
-      isTruncated = false
+      formatValue = formatFilterName
     ) => {
       const isExpanded = expandedFilters[filterName];
       const allSelected =
@@ -2127,44 +2126,13 @@ export function render() {
                     </div>
                   );
                 })}
-                {isTruncated && (
-                  <div style={{ padding: "6px 8px", borderTop: "1px solid " + (isDarkMode ? "#334155" : "#e2e8f0") }}>
-                    <div style={{ fontSize: "10px", color: isDarkMode ? "#64748b" : "#94a3b8", marginBottom: "4px" }}>
-                      Not all values shown. Type exact value:
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="Add custom value..."
-                      style={{
-                        width: "100%",
-                        padding: "4px 8px",
-                        fontSize: "12px",
-                        border: "1px solid " + (isDarkMode ? "#475569" : "#d1d5db"),
-                        borderRadius: "4px",
-                        backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
-                        color: isDarkMode ? "#f1f5f9" : "#1e293b",
-                        outline: "none",
-                        boxSizing: "border-box",
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && e.target.value.trim()) {
-                          const val = e.target.value.trim();
-                          if (!selectedValues.includes(val)) {
-                            onSelectionChange([...selectedValues, val]);
-                          }
-                          e.target.value = '';
-                        }
-                      }}
-                    />
-                  </div>
-                )}
               </div>
             )}
           </div>
         </div>
       );
     },
-    [expandedFilters, toggleFilterExpansion, formatFilterName, isDarkMode]
+    [expandedFilters, toggleFilterExpansion, formatFilterName]
   );
 
   // Helper function to render tooltip icon
@@ -2888,6 +2856,19 @@ export function render() {
     map.pricingTypeFilter = pricingTypes.slice(1);
     return map;
   }, [filterOptionsMap, pricingTypes]);
+
+  // Map filter labels to their filterKey for truncated dimensions (used in search dropdown)
+  const truncatedFilterByLabel = React.useMemo(() => {
+    const map = {};
+    if (truncatedFilterDims.size === 0) return map;
+    FILTER_CONFIG_STATIC.forEach(({ key, label }) => {
+      const colName = key.replace(/^dim_/, '').replace(/_filter$/, '');
+      if (truncatedFilterDims.has(colName)) {
+        map[label] = key;
+      }
+    });
+    return map;
+  }, [truncatedFilterDims, FILTER_CONFIG_STATIC]);
 
   // Helper function to create filter search options for a filter type
   // NOTE: No longer includes isSelected - that's looked up at render time for better performance
@@ -6470,6 +6451,7 @@ export function render() {
 
     // Simple client-side filtering (very fast on pre-grouped data)
     const searchTerm = debouncedFilterSearchText.toLowerCase().trim();
+    const searchValue = debouncedFilterSearchText.trim();
     const filtered = {};
 
     Object.keys(allFilterSuggestions).forEach((type) => {
@@ -6486,8 +6468,27 @@ export function render() {
       }
     });
 
+    // For truncated dimensions with no matches, offer the search text as a custom value
+    if (searchValue.length > 0) {
+      Object.entries(truncatedFilterByLabel).forEach(([label, filterKey]) => {
+        // Skip if this group already has matches (user's text matched existing values)
+        if (filtered[label]) return;
+        const setState = getFilterSetState(filterKey);
+        filtered[label] = [{
+          type: label,
+          filterKey,
+          value: searchValue,
+          displayName: searchValue + ' (custom)',
+          searchText: searchValue.toLowerCase(),
+          action: () => {
+            setState((prev) => prev.includes(searchValue) ? prev : [...prev, searchValue]);
+          },
+        }];
+      });
+    }
+
     return filtered;
-  }, [debouncedFilterSearchText, allFilterSuggestions]);
+  }, [debouncedFilterSearchText, allFilterSuggestions, truncatedFilterByLabel, getFilterSetState]);
 
   // Simplified query parser
   const parseQuery = React.useCallback(
@@ -7697,17 +7698,13 @@ export function render() {
               ({ key, label, state, setState, formatValue }) => {
                 // OPTIMIZATION: Use pre-sliced options to avoid array creation on every render
                 const options = filterOptionsWithoutAll[key] || [];
-                // Check if this dimension was truncated by the server
-                const colName = key.replace(/^dim_/, '').replace(/_filter$/, '');
-                const isTruncated = truncatedFilterDims.has(colName);
                 return renderDropdownFilter(
                   key,
                   label,
                   options,
                   state,
                   setState,
-                  formatValue || formatFilterName,
-                  isTruncated
+                  formatValue || formatFilterName
                 );
               }
             )}
