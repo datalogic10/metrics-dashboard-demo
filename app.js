@@ -1678,6 +1678,22 @@ var __app = (() => {
     }
     return out;
   }
+  var METRIC_OVERLAY_PALETTE = ["#0891b2", "#ca8a04", "#7c3aed", "#be123c"];
+  function minMaxRescale(values, targetMin, targetMax) {
+    const valid = values.filter((v) => v != null && Number.isFinite(v));
+    if (valid.length === 0) return values.map(() => null);
+    const srcMin = Math.min(...valid);
+    const srcMax = Math.max(...valid);
+    if (srcMax === srcMin) {
+      const mid = (targetMin + targetMax) / 2;
+      return values.map((v) => v == null || !Number.isFinite(v) ? null : mid);
+    }
+    const span = targetMax - targetMin;
+    return values.map((v) => {
+      if (v == null || !Number.isFinite(v)) return null;
+      return targetMin + (v - srcMin) / (srcMax - srcMin) * span;
+    });
+  }
   function zScore(values) {
     const valid = values.filter((v) => v != null && Number.isFinite(v));
     if (valid.length < 2) return values.map((v) => v == null || !Number.isFinite(v) ? null : 0);
@@ -5290,6 +5306,7 @@ var __app = (() => {
     const [metric, setMetric] = React.useState("metric2");
     const [activePeriodComparison, setActivePeriodComparison] = React.useState("YoY");
     const [activeOverlays, setActiveOverlays] = React.useState({ yoy: true, forecast_linear: true });
+    const [metricOverlays, setMetricOverlays] = React.useState([]);
     const [smaWindow, setSmaWindow] = React.useState(3);
     const [forecastHorizon, setForecastHorizon] = React.useState(3);
     const [showOverlayMenu, setShowOverlayMenu] = React.useState(false);
@@ -5317,6 +5334,16 @@ var __app = (() => {
       if (metric === "metric2" && !m2Enabled) setMetric("metric1");
       if (metric === "metric3" && !m3Enabled) setMetric(m2Enabled ? "metric2" : "metric1");
     }, [liveMetricConfig, metric]);
+    const availableBaseMetrics = React.useMemo(() => {
+      const list = ["metric1"];
+      if (liveMetricConfig?.revenueAggType || liveMetricConfig?.revenueMode === "formula") {
+        list.push("metric2");
+      }
+      return list;
+    }, [liveMetricConfig]);
+    React.useEffect(() => {
+      setMetricOverlays((prev) => prev.filter((m) => availableBaseMetrics.includes(m)));
+    }, [availableBaseMetrics]);
     const [view, setView] = React.useState("Overall");
     const [topX, setTopX] = React.useState(3);
     const [categorySelectionMode, setCategorySelectionMode] = React.useState("topX");
@@ -5922,6 +5949,8 @@ var __app = (() => {
         // Compare cards state
         compareCards,
         compareNormalize,
+        // Metric overlays on Overall view (e.g. ['metric2'])
+        metricOverlays: [...metricOverlays],
         // Legend visibility state
         traceVisibility: { ...traceVisibility },
         // 🆕 Investigation context state
@@ -5945,6 +5974,7 @@ var __app = (() => {
       showAllDollarTraces,
       compareCards,
       compareNormalize,
+      metricOverlays,
       traceVisibility,
       insightContext,
       FILTER_CONFIG
@@ -5983,6 +6013,11 @@ var __app = (() => {
         }
         if (snapshot.compareNormalize !== void 0) {
           setCompareNormalize(snapshot.compareNormalize);
+        }
+        if (Array.isArray(snapshot.metricOverlays)) {
+          setMetricOverlays([...snapshot.metricOverlays]);
+        } else {
+          setMetricOverlays([]);
         }
         if (snapshot.traceVisibility !== void 0) {
           setTraceVisibility({ ...snapshot.traceVisibility });
@@ -9155,8 +9190,36 @@ var __app = (() => {
           const val = agg[metric];
           return val == null ? null : val;
         });
+        const primaryFinite = barData.filter((v) => v != null && Number.isFinite(v));
+        const primaryMin = primaryFinite.length ? Math.min(...primaryFinite) : 0;
+        const primaryMax = primaryFinite.length ? Math.max(...primaryFinite) : 1;
         const overlayTraces = [];
         let primaryOverlayData = null;
+        const activeMetricOverlays = metricOverlays.filter((m) => m !== metric && availableBaseMetrics.includes(m));
+        activeMetricOverlays.forEach((overlayMetric, idx) => {
+          const rawValues = periods.map((p) => {
+            const agg = periodAggregates[p];
+            if (!agg) return null;
+            const v = agg[overlayMetric];
+            return v == null ? null : v;
+          });
+          const normalized = minMaxRescale(rawValues, primaryMin, primaryMax);
+          const overlayLabel = METRIC_LABELS[overlayMetric] || overlayMetric;
+          const color = METRIC_OVERLAY_PALETTE[idx % METRIC_OVERLAY_PALETTE.length];
+          overlayTraces.push({
+            type: "scatter",
+            mode: "lines",
+            x: periods,
+            y: normalized,
+            name: `${overlayLabel} (overlay)`,
+            yaxis: "y",
+            line: { color, width: 2, shape: "spline", smoothing: 0.3 },
+            marker: { size: 0 },
+            customdata: rawValues.map((v) => v != null ? formatMetricValue2(v, overlayMetric) : "N/A"),
+            hovertemplate: `${overlayLabel}: %{customdata}<extra></extra>`,
+            connectgaps: false
+          });
+        });
         OVERLAY_CONFIG.forEach((overlay) => {
           if (!activeOverlays[overlay.id]) return;
           if (overlay.isForecast) return;
@@ -9345,7 +9408,7 @@ var __app = (() => {
           },
           yaxis: {
             title: {
-              text: METRIC_LABELS[metric] || metric,
+              text: (METRIC_LABELS[metric] || metric) + (activeMetricOverlays.length > 0 ? "  (overlays normalized)" : ""),
               font: { size: 14, color: "#374151" }
             },
             tickfont: { color: "#6b7280" },
@@ -9462,6 +9525,8 @@ var __app = (() => {
       theme,
       periodAggregates,
       activeOverlays,
+      metricOverlays,
+      availableBaseMetrics,
       smaWindow,
       forecastHorizon,
       sortedBaseDataPeriods,
@@ -11169,9 +11234,75 @@ var __app = (() => {
       border: `1px solid ${isDarkMode ? "#374151" : "#e5e7eb"}`,
       borderRadius: "8px",
       padding: "4px 0",
-      minWidth: "160px",
+      minWidth: "200px",
       boxShadow: "0 4px 12px rgba(0,0,0,0.15)"
-    } }, OVERLAY_CONFIG.map((overlay) => {
+    } }, (() => {
+      const candidates = availableBaseMetrics.filter((m) => m !== metric);
+      if (candidates.length === 0) return null;
+      return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: {
+        padding: "6px 12px 4px",
+        fontSize: "10px",
+        fontWeight: 700,
+        textTransform: "uppercase",
+        color: isDarkMode ? "#9ca3af" : "#6b7280",
+        letterSpacing: "0.05em"
+      } }, "Overlay Metrics"), candidates.map((overlayMetric, idx) => {
+        const isActive = metricOverlays.includes(overlayMetric);
+        const color = METRIC_OVERLAY_PALETTE[idx % METRIC_OVERLAY_PALETTE.length];
+        return /* @__PURE__ */ React.createElement("div", { key: overlayMetric, style: { padding: "0 4px" } }, /* @__PURE__ */ React.createElement(
+          "label",
+          {
+            style: {
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              padding: "6px 8px",
+              cursor: "pointer",
+              borderRadius: "4px",
+              fontSize: "12px",
+              fontWeight: 500,
+              color: isDarkMode ? "#e5e7eb" : "#374151",
+              backgroundColor: "transparent",
+              transition: "background-color 0.1s"
+            },
+            onMouseEnter: (e) => {
+              e.currentTarget.style.backgroundColor = isDarkMode ? "#374151" : "#f3f4f6";
+            },
+            onMouseLeave: (e) => {
+              e.currentTarget.style.backgroundColor = "transparent";
+            }
+          },
+          /* @__PURE__ */ React.createElement(
+            "input",
+            {
+              type: "checkbox",
+              checked: isActive,
+              onChange: () => setMetricOverlays(
+                (prev) => prev.includes(overlayMetric) ? prev.filter((m) => m !== overlayMetric) : [...prev, overlayMetric]
+              ),
+              style: { accentColor: color, cursor: "pointer" }
+            }
+          ),
+          /* @__PURE__ */ React.createElement("span", { style: {
+            width: "10px",
+            height: "10px",
+            borderRadius: "50%",
+            backgroundColor: color,
+            flexShrink: 0
+          } }),
+          /* @__PURE__ */ React.createElement("span", null, METRIC_LABELS[overlayMetric] || overlayMetric)
+        ));
+      }), /* @__PURE__ */ React.createElement("div", { style: {
+        padding: "2px 12px 6px",
+        fontSize: "10px",
+        fontStyle: "italic",
+        color: isDarkMode ? "#6b7280" : "#9ca3af"
+      } }, "Rescaled to primary metric; hover shows real values"), /* @__PURE__ */ React.createElement("div", { style: {
+        height: "1px",
+        margin: "4px 8px",
+        backgroundColor: isDarkMode ? "#374151" : "#e5e7eb"
+      } }));
+    })(), OVERLAY_CONFIG.map((overlay) => {
       const isActive = !!activeOverlays[overlay.id];
       const grainTooCoarse = overlay.minGrain && GRAIN_RANK[overlay.minGrain] < GRAIN_RANK[dataFrequency];
       const lookbackNeeded = overlay.lookback && overlay.lookback[dataFrequency];

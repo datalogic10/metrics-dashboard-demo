@@ -261,6 +261,40 @@ export function fillMissingPeriods(periods, fillMode) {
 }
 
 /**
+ * Color palette for metric overlays on the Overall view. Deliberately distinct
+ * from OVERLAY_CONFIG colors (DoD/WoW/SMA/etc) and MODERN_COLOR_PALETTE[0]
+ * so overlaid metrics don't visually collide with existing traces.
+ */
+export const METRIC_OVERLAY_PALETTE = ['#0891b2', '#ca8a04', '#7c3aed', '#be123c'];
+
+/**
+ * Linearly rescale values into the [targetMin, targetMax] range. Used to fit
+ * overlay-metric traces into the primary metric's visible y-range so two
+ * metrics with very different magnitudes (e.g. price $150 vs RSI 0–100) can
+ * share a single y-axis and be visually compared for correlation-of-movements.
+ *
+ * Degenerate cases:
+ *   - all nulls / empty → all nulls
+ *   - all source values equal → all centered at midpoint of target range
+ *   - null / non-finite entries pass through as null
+ */
+export function minMaxRescale(values, targetMin, targetMax) {
+  const valid = values.filter(v => v != null && Number.isFinite(v));
+  if (valid.length === 0) return values.map(() => null);
+  const srcMin = Math.min(...valid);
+  const srcMax = Math.max(...valid);
+  if (srcMax === srcMin) {
+    const mid = (targetMin + targetMax) / 2;
+    return values.map(v => (v == null || !Number.isFinite(v) ? null : mid));
+  }
+  const span = targetMax - targetMin;
+  return values.map(v => {
+    if (v == null || !Number.isFinite(v)) return null;
+    return targetMin + ((v - srcMin) / (srcMax - srcMin)) * span;
+  });
+}
+
+/**
  * Z-score normalization. Returns values rescaled to mean 0, std 1.
  * Nulls and non-finite values pass through as null.
  * Degenerate cases (single value, zero variance) return zeros.

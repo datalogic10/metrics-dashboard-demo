@@ -39,6 +39,8 @@ import {
   detectSeasonalPeriod,
   hexToRgba,
   fillMissingPeriods,
+  minMaxRescale,
+  METRIC_OVERLAY_PALETTE,
 } from './src/metrics.js';
 import {
   resolveChartType as resolveChartTypeUtil,
@@ -787,6 +789,13 @@ export function render() {
   const [activePeriodComparison, setActivePeriodComparison] =
     React.useState("YoY"); // YoY, MoM, QoQ, WoW (stat boxes)
   const [activeOverlays, setActiveOverlays] = React.useState({ yoy: true, forecast_linear: true }); // chart overlay toggles
+  // Base metrics to overlay on top of the primary chart trace. Array of metric
+  // keys (e.g. ['metric2']). Each overlay trace is min-max rescaled into the
+  // primary metric's visible range so correlation-of-movements is visible
+  // regardless of absolute scale. Only base metrics (metric1, metric2) are
+  // allowed — metric3 (derived) is excluded. The current primary metric is
+  // excluded automatically.
+  const [metricOverlays, setMetricOverlays] = React.useState([]);
   const [smaWindow, setSmaWindow] = React.useState(3);
   const [forecastHorizon, setForecastHorizon] = React.useState(3);
   const [showOverlayMenu, setShowOverlayMenu] = React.useState(false);
@@ -816,6 +825,25 @@ export function render() {
     if (metric === 'metric2' && !m2Enabled) setMetric('metric1');
     if (metric === 'metric3' && !m3Enabled) setMetric(m2Enabled ? 'metric2' : 'metric1');
   }, [liveMetricConfig, metric]);
+
+  // Base metrics (metric1, metric2) available on the current tab — metric3 is
+  // derived and intentionally excluded from overlay candidates.
+  const availableBaseMetrics = React.useMemo(() => {
+    const list = ['metric1'];
+    if (liveMetricConfig?.revenueAggType || liveMetricConfig?.revenueMode === 'formula') {
+      list.push('metric2');
+    }
+    return list;
+  }, [liveMetricConfig]);
+
+  // Prune overlays that are no longer available (e.g. metric2 just got
+  // disabled in the metric config). We deliberately do NOT drop overlays
+  // when the primary metric changes — that's filtered out at render time
+  // instead, so switching primary back restores the previous overlay set
+  // (matches how activeOverlays works for DoD/SMA/etc).
+  React.useEffect(() => {
+    setMetricOverlays(prev => prev.filter(m => availableBaseMetrics.includes(m)));
+  }, [availableBaseMetrics]);
 
   const [view, setView] = React.useState("Overall");
   const [topX, setTopX] = React.useState(3);
@@ -1466,6 +1494,8 @@ export function render() {
       // Compare cards state
       compareCards,
       compareNormalize,
+      // Metric overlays on Overall view (e.g. ['metric2'])
+      metricOverlays: [...metricOverlays],
       // Legend visibility state
       traceVisibility: { ...traceVisibility },
       // 🆕 Investigation context state
@@ -1489,6 +1519,7 @@ export function render() {
     showAllDollarTraces,
     compareCards,
     compareNormalize,
+    metricOverlays,
     traceVisibility,
     insightContext,
     FILTER_CONFIG,
@@ -1529,6 +1560,11 @@ export function render() {
       }
       if (snapshot.compareNormalize !== undefined) {
         setCompareNormalize(snapshot.compareNormalize);
+      }
+      if (Array.isArray(snapshot.metricOverlays)) {
+        setMetricOverlays([...snapshot.metricOverlays]);
+      } else {
+        setMetricOverlays([]);
       }
       // Restore legend visibility state
       if (snapshot.traceVisibility !== undefined) {
@@ -5818,9 +5854,44 @@ export function render() {
         return (val == null) ? null : val;
       });
 
+      // Precompute primary metric's visible range — overlay metric traces are
+      // min-max rescaled into this range so they share the primary's y1 axis.
+      const primaryFinite = barData.filter(v => v != null && Number.isFinite(v));
+      const primaryMin = primaryFinite.length ? Math.min(...primaryFinite) : 0;
+      const primaryMax = primaryFinite.length ? Math.max(...primaryFinite) : 1;
+
       // Build overlay traces dynamically from activeOverlays
       const overlayTraces = [];
       let primaryOverlayData = null; // For bar text annotations
+
+      // Metric overlays — other base metrics rendered as reference traces on y1,
+      // normalized to the primary metric's visible range. Hover shows original
+      // formatted values via customdata.
+      const activeMetricOverlays = metricOverlays.filter(m => m !== metric && availableBaseMetrics.includes(m));
+      activeMetricOverlays.forEach((overlayMetric, idx) => {
+        const rawValues = periods.map(p => {
+          const agg = periodAggregates[p];
+          if (!agg) return null;
+          const v = agg[overlayMetric];
+          return (v == null) ? null : v;
+        });
+        const normalized = minMaxRescale(rawValues, primaryMin, primaryMax);
+        const overlayLabel = METRIC_LABELS[overlayMetric] || overlayMetric;
+        const color = METRIC_OVERLAY_PALETTE[idx % METRIC_OVERLAY_PALETTE.length];
+        overlayTraces.push({
+          type: 'scatter',
+          mode: 'lines',
+          x: periods,
+          y: normalized,
+          name: `${overlayLabel} (overlay)`,
+          yaxis: 'y',
+          line: { color, width: 2, shape: 'spline', smoothing: 0.3 },
+          marker: { size: 0 },
+          customdata: rawValues.map(v => v != null ? formatMetricValue(v, overlayMetric) : 'N/A'),
+          hovertemplate: `${overlayLabel}: %{customdata}<extra></extra>`,
+          connectgaps: false,
+        });
+      });
 
       OVERLAY_CONFIG.forEach(overlay => {
         if (!activeOverlays[overlay.id]) return;
@@ -6038,7 +6109,7 @@ export function render() {
         },
         yaxis: {
           title: {
-            text: METRIC_LABELS[metric] || metric,
+            text: (METRIC_LABELS[metric] || metric) + (activeMetricOverlays.length > 0 ? '  (overlays normalized)' : ''),
             font: { size: 14, color: "#374151" },
           },
           tickfont: { color: "#6b7280" },
@@ -6170,6 +6241,8 @@ export function render() {
     theme,
     periodAggregates,
     activeOverlays,
+    metricOverlays,
+    availableBaseMetrics,
     smaWindow,
     forecastHorizon,
     sortedBaseDataPeriods,
@@ -8187,9 +8260,72 @@ export function render() {
                     position: 'absolute', top: '100%', right: 0, zIndex: 1000, marginTop: '4px',
                     backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
                     border: `1px solid ${isDarkMode ? '#374151' : '#e5e7eb'}`,
-                    borderRadius: '8px', padding: '4px 0', minWidth: '160px',
+                    borderRadius: '8px', padding: '4px 0', minWidth: '200px',
                     boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
                   }}>
+                    {/* Metric overlays section — base metrics other than the primary */}
+                    {(() => {
+                      const candidates = availableBaseMetrics.filter(m => m !== metric);
+                      if (candidates.length === 0) return null;
+                      return (
+                        <>
+                          <div style={{
+                            padding: '6px 12px 4px',
+                            fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
+                            color: isDarkMode ? '#9ca3af' : '#6b7280',
+                            letterSpacing: '0.05em',
+                          }}>
+                            Overlay Metrics
+                          </div>
+                          {candidates.map((overlayMetric, idx) => {
+                            const isActive = metricOverlays.includes(overlayMetric);
+                            const color = METRIC_OVERLAY_PALETTE[idx % METRIC_OVERLAY_PALETTE.length];
+                            return (
+                              <div key={overlayMetric} style={{ padding: '0 4px' }}>
+                                <label style={{
+                                  display: 'flex', alignItems: 'center', gap: '8px',
+                                  padding: '6px 8px', cursor: 'pointer', borderRadius: '4px',
+                                  fontSize: '12px', fontWeight: 500,
+                                  color: isDarkMode ? '#e5e7eb' : '#374151',
+                                  backgroundColor: 'transparent',
+                                  transition: 'background-color 0.1s',
+                                }}
+                                  onMouseEnter={e => { e.currentTarget.style.backgroundColor = isDarkMode ? '#374151' : '#f3f4f6'; }}
+                                  onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={isActive}
+                                    onChange={() => setMetricOverlays(prev =>
+                                      prev.includes(overlayMetric)
+                                        ? prev.filter(m => m !== overlayMetric)
+                                        : [...prev, overlayMetric]
+                                    )}
+                                    style={{ accentColor: color, cursor: 'pointer' }}
+                                  />
+                                  <span style={{
+                                    width: '10px', height: '10px', borderRadius: '50%',
+                                    backgroundColor: color, flexShrink: 0,
+                                  }} />
+                                  <span>{METRIC_LABELS[overlayMetric] || overlayMetric}</span>
+                                </label>
+                              </div>
+                            );
+                          })}
+                          <div style={{
+                            padding: '2px 12px 6px',
+                            fontSize: '10px', fontStyle: 'italic',
+                            color: isDarkMode ? '#6b7280' : '#9ca3af',
+                          }}>
+                            Rescaled to primary metric; hover shows real values
+                          </div>
+                          <div style={{
+                            height: '1px', margin: '4px 8px',
+                            backgroundColor: isDarkMode ? '#374151' : '#e5e7eb',
+                          }} />
+                        </>
+                      );
+                    })()}
                     {OVERLAY_CONFIG.map(overlay => {
                       const isActive = !!activeOverlays[overlay.id];
                       // Determine if overlay is disabled (grain too coarse or insufficient data)
