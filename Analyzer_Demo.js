@@ -1419,6 +1419,9 @@ export function render() {
   const [compareCards, setCompareCards] = React.useState([]);
   const [showCompareView, setShowCompareView] = React.useState(false);
   const [compareDateRange, setCompareDateRange] = React.useState("30D");
+  // 'off' | 'zscore' | 'minmax' — rescales y1 traces in compare view so
+  // metrics with different magnitudes can be compared for correlation-of-movements.
+  const [compareNormalize, setCompareNormalize] = React.useState("off");
 
   // Legend visibility state - tracks which traces are visible/hidden after user interactions
   const [traceVisibility, setTraceVisibility] = React.useState({});
@@ -1461,6 +1464,7 @@ export function render() {
       showAllDollarTraces,
       // Compare cards state
       compareCards,
+      compareNormalize,
       // Legend visibility state
       traceVisibility: { ...traceVisibility },
       // 🆕 Investigation context state
@@ -1483,6 +1487,7 @@ export function render() {
     showAllGrowthTraces,
     showAllDollarTraces,
     compareCards,
+    compareNormalize,
     traceVisibility,
     insightContext,
     FILTER_CONFIG,
@@ -1520,6 +1525,9 @@ export function render() {
       // Restore compare cards state
       if (snapshot.compareCards !== undefined) {
         setCompareCards(snapshot.compareCards);
+      }
+      if (snapshot.compareNormalize !== undefined) {
+        setCompareNormalize(snapshot.compareNormalize);
       }
       // Restore legend visibility state
       if (snapshot.traceVisibility !== undefined) {
@@ -8853,6 +8861,8 @@ export function render() {
         setShowCompareView={setShowCompareView}
         compareDateRange={compareDateRange}
         setCompareDateRange={setCompareDateRange}
+        compareNormalize={compareNormalize}
+        setCompareNormalize={setCompareNormalize}
         buildComparisonChart={buildComparisonChart}
         dateRanges={DATE_RANGES}
       />

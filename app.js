@@ -1655,6 +1655,23 @@ var __app = (() => {
     }
     return result;
   }
+  function zScore(values) {
+    const valid = values.filter((v) => v != null && Number.isFinite(v));
+    if (valid.length < 2) return values.map((v) => v == null || !Number.isFinite(v) ? null : 0);
+    const mean = valid.reduce((a, b) => a + b, 0) / valid.length;
+    const variance = valid.reduce((s, v) => s + (v - mean) ** 2, 0) / valid.length;
+    const std = Math.sqrt(variance);
+    if (std === 0) return values.map((v) => v == null || !Number.isFinite(v) ? null : 0);
+    return values.map((v) => v == null || !Number.isFinite(v) ? null : (v - mean) / std);
+  }
+  function minMaxNormalize(values) {
+    const valid = values.filter((v) => v != null && Number.isFinite(v));
+    if (valid.length === 0) return values.map(() => null);
+    const min = Math.min(...valid);
+    const max = Math.max(...valid);
+    if (max === min) return values.map((v) => v == null || !Number.isFinite(v) ? null : 0.5);
+    return values.map((v) => v == null || !Number.isFinite(v) ? null : (v - min) / (max - min));
+  }
   function hexToRgba(hex, alpha) {
     const r = parseInt(hex.slice(1, 3), 16);
     const g = parseInt(hex.slice(3, 5), 16);
@@ -2732,7 +2749,18 @@ var __app = (() => {
     result._categoryTotals = categoryTotals;
     return result;
   }
-  function buildCardTraces(card, dateRange) {
+  function normalizeTraceInPlace(trace, normalizeMode) {
+    if (normalizeMode === "off" || !trace || !Array.isArray(trace.y)) return;
+    if (!Array.isArray(trace.customdata) || trace.customdata.length !== trace.y.length) {
+      trace.customdata = trace.y.map((v) => v == null || !Number.isFinite(v) ? "N/A" : String(v));
+    }
+    if (normalizeMode === "zscore") {
+      trace.y = zScore(trace.y);
+    } else if (normalizeMode === "minmax") {
+      trace.y = minMaxNormalize(trace.y);
+    }
+  }
+  function buildCardTraces(card, dateRange, normalizeMode = "off") {
     const {
       metric,
       view,
@@ -2983,12 +3011,18 @@ var __app = (() => {
         });
       }
     }
+    if (normalizeMode !== "off") {
+      traces.forEach((trace) => {
+        if (trace.yaxis !== "y2") normalizeTraceInPlace(trace, normalizeMode);
+      });
+    }
     return {
       traces,
       periods,
       chartType,
       hasY2: traces.some((t) => t.yaxis === "y2"),
-      yAxisTitle: labels[metric] || metric
+      yAxisTitle: labels[metric] || metric,
+      normalizeMode
     };
   }
   var COMPARE_CARD_COLORS = ["#3b82f6", "#10b981", "#f59e0b"];
@@ -2999,9 +3033,10 @@ var __app = (() => {
     const factor = total <= 1 ? 0 : index / (total + 1);
     return `rgb(${Math.round(baseRgb[0] + (255 - baseRgb[0]) * factor * 0.6)},${Math.round(baseRgb[1] + (255 - baseRgb[1]) * factor * 0.6)},${Math.round(baseRgb[2] + (255 - baseRgb[2]) * factor * 0.6)})`;
   }
-  function buildComparisonChart(cards, compareDateRange, isDarkMode) {
+  function buildComparisonChart(cards, compareDateRange, isDarkMode, normalizeMode = "off") {
     const isSideBySide = cards.length === 3;
-    const cardResults = cards.map((card) => buildCardTraces(card, compareDateRange));
+    const cardResults = cards.map((card) => buildCardTraces(card, compareDateRange, normalizeMode));
+    const normalizeSuffix = normalizeMode === "zscore" ? " (z-score)" : normalizeMode === "minmax" ? " (0\u20131)" : "";
     let traces = [];
     const baseLayout = buildBaseChartLayout(isDarkMode);
     const layout = {
@@ -3025,7 +3060,7 @@ var __app = (() => {
         const yRef = primaryYIdx === 1 ? "y" : `y${primaryYIdx}`;
         const xRef = i === 0 ? "x" : `x${i + 1}`;
         layout[xKey] = { domain: domains[i], anchor: yRef, type: "category", tickangle: -45, tickfont: { size: 10, color: baseLayout._textSecondary } };
-        layout[yKey] = { anchor: xRef, title: { text: result.yAxisTitle, font: { size: 11 } }, tickfont: { size: 10, color: baseLayout._textSecondary }, gridcolor: baseLayout._gridcolor };
+        layout[yKey] = { anchor: xRef, title: { text: result.yAxisTitle + normalizeSuffix, font: { size: 11 } }, tickfont: { size: 10, color: baseLayout._textSecondary }, gridcolor: baseLayout._gridcolor };
         if (result.hasY2) {
           layout[`yaxis${overlayYIdx}`] = {
             anchor: xRef,
@@ -3067,7 +3102,7 @@ var __app = (() => {
       const anyHasY2 = cardResults.some((r) => r.hasY2);
       layout.xaxis = { type: "category", tickangle: -45, tickfont: { size: 10, color: baseLayout._textSecondary } };
       layout.yaxis = {
-        title: { text: [...new Set(cardResults.map((r) => r.yAxisTitle))].join(" / "), font: { size: 11 } },
+        title: { text: [...new Set(cardResults.map((r) => r.yAxisTitle))].join(" / ") + normalizeSuffix, font: { size: 11 } },
         tickfont: { size: 10, color: baseLayout._textSecondary },
         gridcolor: baseLayout._gridcolor
       };
@@ -3297,12 +3332,14 @@ var __app = (() => {
     setShowCompareView,
     compareDateRange,
     setCompareDateRange,
+    compareNormalize,
+    setCompareNormalize,
     buildComparisonChart: buildComparisonChart2,
     dateRanges
   }) {
     const { traces: comparisonTraces, layout: comparisonLayout } = React.useMemo(
-      () => showCompareView && compareCards.length >= 2 ? buildComparisonChart2(compareCards, compareDateRange, isDarkMode) : { traces: [], layout: {} },
-      [compareCards, compareDateRange, isDarkMode, showCompareView, buildComparisonChart2]
+      () => showCompareView && compareCards.length >= 2 ? buildComparisonChart2(compareCards, compareDateRange, isDarkMode, compareNormalize || "off") : { traces: [], layout: {} },
+      [compareCards, compareDateRange, isDarkMode, compareNormalize, showCompareView, buildComparisonChart2]
     );
     if (!showCompareView || compareCards.length < 2) return null;
     return /* @__PURE__ */ React.createElement(
@@ -3347,7 +3384,7 @@ var __app = (() => {
         fontSize: "12px",
         fontWeight: "500",
         color: COMPARE_CARD_COLORS[i]
-      } }, /* @__PURE__ */ React.createElement("span", { style: { width: 8, height: 8, borderRadius: "50%", backgroundColor: COMPARE_CARD_COLORS[i] } }), card.label))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "4px" } }, dateRanges.map((range) => /* @__PURE__ */ React.createElement(
+      } }, /* @__PURE__ */ React.createElement("span", { style: { width: 8, height: 8, borderRadius: "50%", backgroundColor: COMPARE_CARD_COLORS[i] } }), card.label))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "12px" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "4px" } }, dateRanges.map((range) => /* @__PURE__ */ React.createElement(
         "button",
         {
           key: range,
@@ -3364,7 +3401,39 @@ var __app = (() => {
           }
         },
         range
-      ))), /* @__PURE__ */ React.createElement(
+      ))), setCompareNormalize && /* @__PURE__ */ React.createElement(
+        "div",
+        {
+          style: { display: "flex", alignItems: "center", gap: "4px" },
+          title: "Rescale y1 traces for visual comparison of ups and downs. y2 (WoW/DoD/%Share) is untouched. Hover shows original values."
+        },
+        /* @__PURE__ */ React.createElement("span", { style: { fontSize: "10px", fontWeight: "600", color: isDarkMode ? "#94a3b8" : "#64748b", textTransform: "uppercase" } }, "Normalize"),
+        [
+          { id: "off", label: "Off" },
+          { id: "zscore", label: "Z-score" },
+          { id: "minmax", label: "Min-max" }
+        ].map((opt) => {
+          const active = (compareNormalize || "off") === opt.id;
+          return /* @__PURE__ */ React.createElement(
+            "button",
+            {
+              key: opt.id,
+              onClick: () => setCompareNormalize(opt.id),
+              style: {
+                padding: "4px 10px",
+                fontSize: "11px",
+                fontWeight: active ? "700" : "500",
+                color: active ? "#ffffff" : isDarkMode ? "#94a3b8" : "#64748b",
+                backgroundColor: active ? "#8b5cf6" : isDarkMode ? "#334155" : "#f1f5f9",
+                border: `1px solid ${active ? "#8b5cf6" : isDarkMode ? "#475569" : "#e2e8f0"}`,
+                borderRadius: "4px",
+                cursor: "pointer"
+              }
+            },
+            opt.label
+          );
+        })
+      )), /* @__PURE__ */ React.createElement(
         "button",
         {
           onClick: () => setShowCompareView(false),
@@ -5787,6 +5856,7 @@ var __app = (() => {
     const [compareCards, setCompareCards] = React.useState([]);
     const [showCompareView, setShowCompareView] = React.useState(false);
     const [compareDateRange, setCompareDateRange] = React.useState("30D");
+    const [compareNormalize, setCompareNormalize] = React.useState("off");
     const [traceVisibility, setTraceVisibility] = React.useState({});
     const chartRef = React.useRef(null);
     const [showGuide, setShowGuide] = React.useState(false);
@@ -5818,6 +5888,7 @@ var __app = (() => {
         showAllDollarTraces,
         // Compare cards state
         compareCards,
+        compareNormalize,
         // Legend visibility state
         traceVisibility: { ...traceVisibility },
         // 🆕 Investigation context state
@@ -5840,6 +5911,7 @@ var __app = (() => {
       showAllGrowthTraces,
       showAllDollarTraces,
       compareCards,
+      compareNormalize,
       traceVisibility,
       insightContext,
       FILTER_CONFIG
@@ -5875,6 +5947,9 @@ var __app = (() => {
         }
         if (snapshot.compareCards !== void 0) {
           setCompareCards(snapshot.compareCards);
+        }
+        if (snapshot.compareNormalize !== void 0) {
+          setCompareNormalize(snapshot.compareNormalize);
         }
         if (snapshot.traceVisibility !== void 0) {
           setTraceVisibility({ ...snapshot.traceVisibility });
@@ -11627,6 +11702,8 @@ var __app = (() => {
         setShowCompareView,
         compareDateRange,
         setCompareDateRange,
+        compareNormalize,
+        setCompareNormalize,
         buildComparisonChart,
         dateRanges: DATE_RANGES
       }

@@ -213,6 +213,34 @@ export function calculateSMA(barData, windowSize) {
 }
 
 /**
+ * Z-score normalization. Returns values rescaled to mean 0, std 1.
+ * Nulls and non-finite values pass through as null.
+ * Degenerate cases (single value, zero variance) return zeros.
+ */
+export function zScore(values) {
+  const valid = values.filter(v => v != null && Number.isFinite(v));
+  if (valid.length < 2) return values.map(v => (v == null || !Number.isFinite(v) ? null : 0));
+  const mean = valid.reduce((a, b) => a + b, 0) / valid.length;
+  const variance = valid.reduce((s, v) => s + (v - mean) ** 2, 0) / valid.length;
+  const std = Math.sqrt(variance);
+  if (std === 0) return values.map(v => (v == null || !Number.isFinite(v) ? null : 0));
+  return values.map(v => (v == null || !Number.isFinite(v) ? null : (v - mean) / std));
+}
+
+/**
+ * Min-max normalization to [0, 1]. Nulls pass through.
+ * Degenerate case (all values equal) returns 0.5.
+ */
+export function minMaxNormalize(values) {
+  const valid = values.filter(v => v != null && Number.isFinite(v));
+  if (valid.length === 0) return values.map(() => null);
+  const min = Math.min(...valid);
+  const max = Math.max(...valid);
+  if (max === min) return values.map(v => (v == null || !Number.isFinite(v) ? null : 0.5));
+  return values.map(v => (v == null || !Number.isFinite(v) ? null : (v - min) / (max - min)));
+}
+
+/**
  * Convert hex color to rgba string.
  */
 export function hexToRgba(hex, alpha) {

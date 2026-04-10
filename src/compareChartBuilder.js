@@ -21,6 +21,8 @@ import {
   GRAIN_RANK,
   calculatePeriodChange,
   calculateSMA,
+  zScore,
+  minMaxNormalize,
 } from './metrics.js';
 import { getCategoryColor } from './theme.js';
 import { resolveChartType, isFormulaMetric, formatMetricValue, getMetricLabels, resolveBarmode, buildBaseChartLayout } from './chartUtils.js';
@@ -95,12 +97,31 @@ function filterDimensionAggregates(baseDimAggs, periodsSet) {
 // --- Card trace builder (mirrors main chart pipeline) ---
 
 /**
+ * Apply normalize mode to a trace's y values in place, preserving
+ * original values in customdata for hover. Non-finite and null
+ * entries pass through unchanged. Only intended for y1 traces.
+ */
+function normalizeTraceInPlace(trace, normalizeMode) {
+  if (normalizeMode === 'off' || !trace || !Array.isArray(trace.y)) return;
+  // Preserve original values for hover if not already in customdata-friendly form
+  if (!Array.isArray(trace.customdata) || trace.customdata.length !== trace.y.length) {
+    trace.customdata = trace.y.map(v => (v == null || !Number.isFinite(v) ? 'N/A' : String(v)));
+  }
+  if (normalizeMode === 'zscore') {
+    trace.y = zScore(trace.y);
+  } else if (normalizeMode === 'minmax') {
+    trace.y = minMaxNormalize(trace.y);
+  }
+}
+
+/**
  * Build chart traces for a single compare card.
  * @param {Object} card - Compare card with config + base data
  * @param {string} dateRange - Date range to filter periods
+ * @param {string} [normalizeMode='off'] - 'off' | 'zscore' | 'minmax' — rescales y1 traces
  * @returns {{ traces: Array, periods: Array, chartType: string, yAxisTitle: string }}
  */
-export function buildCardTraces(card, dateRange) {
+export function buildCardTraces(card, dateRange, normalizeMode = 'off') {
   const { metric, view, topX, selectedCategories, dataFrequency,
     metricConfig, viewConfig, categoryColorMap: cardColorMap,
     activeOverlays, smaWindow,
@@ -355,12 +376,22 @@ export function buildCardTraces(card, dateRange) {
     }
   }
 
+  // Apply normalize mode to y1 traces only. y2 traces (period-change %, %Share,
+  // %Growth YoY) stay in their original units — they're already meaningful
+  // as percentages on a separate axis.
+  if (normalizeMode !== 'off') {
+    traces.forEach(trace => {
+      if (trace.yaxis !== 'y2') normalizeTraceInPlace(trace, normalizeMode);
+    });
+  }
+
   return {
     traces,
     periods,
     chartType,
     hasY2: traces.some(t => t.yaxis === 'y2'),
     yAxisTitle: labels[metric] || metric,
+    normalizeMode,
   };
 }
 
@@ -382,13 +413,19 @@ function makeShade(baseRgb, index, total) {
  * @param {Array} cards - Compare cards
  * @param {string} compareDateRange - Date range filter for comparison
  * @param {boolean} isDarkMode
+ * @param {string} [normalizeMode='off'] - 'off' | 'zscore' | 'minmax' — rescales y1 traces
  * @returns {{ traces: Array, layout: Object }}
  */
-export function buildComparisonChart(cards, compareDateRange, isDarkMode) {
+export function buildComparisonChart(cards, compareDateRange, isDarkMode, normalizeMode = 'off') {
   const isSideBySide = cards.length === 3;
 
   // Build per-card traces
-  const cardResults = cards.map(card => buildCardTraces(card, compareDateRange));
+  const cardResults = cards.map(card => buildCardTraces(card, compareDateRange, normalizeMode));
+
+  // Suffix for y1 axis titles when normalized — makes axis numbers interpretable
+  const normalizeSuffix = normalizeMode === 'zscore' ? ' (z-score)'
+    : normalizeMode === 'minmax' ? ' (0–1)'
+    : '';
 
   let traces = [];
   const baseLayout = buildBaseChartLayout(isDarkMode);
@@ -422,7 +459,7 @@ export function buildComparisonChart(cards, compareDateRange, isDarkMode) {
 
       // Anchor x and y axes to each other so each subplot is self-contained
       layout[xKey] = { domain: domains[i], anchor: yRef, type: 'category', tickangle: -45, tickfont: { size: 10, color: baseLayout._textSecondary } };
-      layout[yKey] = { anchor: xRef, title: { text: result.yAxisTitle, font: { size: 11 } }, tickfont: { size: 10, color: baseLayout._textSecondary }, gridcolor: baseLayout._gridcolor };
+      layout[yKey] = { anchor: xRef, title: { text: result.yAxisTitle + normalizeSuffix, font: { size: 11 } }, tickfont: { size: 10, color: baseLayout._textSecondary }, gridcolor: baseLayout._gridcolor };
 
       // Y2 overlay for each subplot if needed
       if (result.hasY2) {
@@ -458,7 +495,7 @@ export function buildComparisonChart(cards, compareDateRange, isDarkMode) {
 
     layout.xaxis = { type: 'category', tickangle: -45, tickfont: { size: 10, color: baseLayout._textSecondary } };
     layout.yaxis = {
-      title: { text: [...new Set(cardResults.map(r => r.yAxisTitle))].join(' / '), font: { size: 11 } },
+      title: { text: [...new Set(cardResults.map(r => r.yAxisTitle))].join(' / ') + normalizeSuffix, font: { size: 11 } },
       tickfont: { size: 10, color: baseLayout._textSecondary },
       gridcolor: baseLayout._gridcolor,
     };

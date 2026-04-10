@@ -165,15 +165,17 @@ export function CompareOverlay({
   setShowCompareView,
   compareDateRange,
   setCompareDateRange,
+  compareNormalize,
+  setCompareNormalize,
   buildComparisonChart,
   dateRanges,
 }) {
   // Memoize chart computation to prevent Plotly from resetting legend toggle state on parent re-renders
   const { traces: comparisonTraces, layout: comparisonLayout } = React.useMemo(
     () => showCompareView && compareCards.length >= 2
-      ? buildComparisonChart(compareCards, compareDateRange, isDarkMode)
+      ? buildComparisonChart(compareCards, compareDateRange, isDarkMode, compareNormalize || 'off')
       : { traces: [], layout: {} },
-    [compareCards, compareDateRange, isDarkMode, showCompareView, buildComparisonChart]
+    [compareCards, compareDateRange, isDarkMode, compareNormalize, showCompareView, buildComparisonChart]
   );
 
   if (!showCompareView || compareCards.length < 2) return null;
@@ -223,23 +225,56 @@ export function CompareOverlay({
               </span>
             ))}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-            {dateRanges.map(range => (
-              <button
-                key={range}
-                onClick={() => setCompareDateRange(range)}
-                style={{
-                  padding: "4px 10px",
-                  fontSize: "11px",
-                  fontWeight: compareDateRange === range ? "700" : "500",
-                  color: compareDateRange === range ? "#ffffff" : (isDarkMode ? "#94a3b8" : "#64748b"),
-                  backgroundColor: compareDateRange === range ? "#3b82f6" : (isDarkMode ? "#334155" : "#f1f5f9"),
-                  border: `1px solid ${compareDateRange === range ? '#3b82f6' : (isDarkMode ? '#475569' : '#e2e8f0')}`,
-                  borderRadius: "4px",
-                  cursor: "pointer",
-                }}
-              >{range}</button>
-            ))}
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+              {dateRanges.map(range => (
+                <button
+                  key={range}
+                  onClick={() => setCompareDateRange(range)}
+                  style={{
+                    padding: "4px 10px",
+                    fontSize: "11px",
+                    fontWeight: compareDateRange === range ? "700" : "500",
+                    color: compareDateRange === range ? "#ffffff" : (isDarkMode ? "#94a3b8" : "#64748b"),
+                    backgroundColor: compareDateRange === range ? "#3b82f6" : (isDarkMode ? "#334155" : "#f1f5f9"),
+                    border: `1px solid ${compareDateRange === range ? '#3b82f6' : (isDarkMode ? '#475569' : '#e2e8f0')}`,
+                    borderRadius: "4px",
+                    cursor: "pointer",
+                  }}
+                >{range}</button>
+              ))}
+            </div>
+            {setCompareNormalize && (
+              <div
+                style={{ display: "flex", alignItems: "center", gap: "4px" }}
+                title="Rescale y1 traces for visual comparison of ups and downs. y2 (WoW/DoD/%Share) is untouched. Hover shows original values."
+              >
+                <span style={{ fontSize: "10px", fontWeight: "600", color: isDarkMode ? "#94a3b8" : "#64748b", textTransform: "uppercase" }}>Normalize</span>
+                {[
+                  { id: 'off', label: 'Off' },
+                  { id: 'zscore', label: 'Z-score' },
+                  { id: 'minmax', label: 'Min-max' },
+                ].map(opt => {
+                  const active = (compareNormalize || 'off') === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      onClick={() => setCompareNormalize(opt.id)}
+                      style={{
+                        padding: "4px 10px",
+                        fontSize: "11px",
+                        fontWeight: active ? "700" : "500",
+                        color: active ? "#ffffff" : (isDarkMode ? "#94a3b8" : "#64748b"),
+                        backgroundColor: active ? "#8b5cf6" : (isDarkMode ? "#334155" : "#f1f5f9"),
+                        border: `1px solid ${active ? '#8b5cf6' : (isDarkMode ? '#475569' : '#e2e8f0')}`,
+                        borderRadius: "4px",
+                        cursor: "pointer",
+                      }}
+                    >{opt.label}</button>
+                  );
+                })}
+              </div>
+            )}
           </div>
           <button
             onClick={() => setShowCompareView(false)}
