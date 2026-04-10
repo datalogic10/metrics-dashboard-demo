@@ -4892,6 +4892,7 @@ var __app = (() => {
     const [liveColumnMeta, setLiveColumnMeta] = React.useState(null);
     const [liveSchemaReady, setLiveSchemaReady] = React.useState(false);
     const [liveFilterOptions, setLiveFilterOptions] = React.useState({});
+    const [truncatedFilterDims, setTruncatedFilterDims] = React.useState(/* @__PURE__ */ new Set());
     const [livePeriodAggregates, setLivePeriodAggregates] = React.useState(null);
     const [liveDimensionAggregates, setLiveDimensionAggregates] = React.useState(null);
     const [liveInsightsDimAggs, setLiveInsightsDimAggs] = React.useState({});
@@ -5127,16 +5128,19 @@ var __app = (() => {
         const boolCols = new Set(columns.filter((c) => c.udt === "bool").map((c) => c.name));
         return Promise.all(
           dimCols.map(
-            (c) => callQueryDataset("distinct", { p_column: c.name }).then((r) => ({ column: c.name, values: r.values || [], isBool: boolCols.has(c.name) })).catch(() => ({ column: c.name, values: [], isBool: boolCols.has(c.name) }))
+            (c) => callQueryDataset("distinct", { p_column: c.name }).then((r) => ({ column: c.name, values: r.values || [], isBool: boolCols.has(c.name), truncated: !!r.truncated })).catch(() => ({ column: c.name, values: [], isBool: boolCols.has(c.name), truncated: false }))
           )
         );
       }).then((distinctResults) => {
         if (!distinctResults) return;
         const filterOpts = {};
+        const truncatedCols = /* @__PURE__ */ new Set();
         distinctResults.forEach((r) => {
           filterOpts[r.column] = r.isBool ? r.values.map((v) => r.column + "_" + String(v).toLowerCase()) : r.values;
+          if (r.truncated) truncatedCols.add(r.column);
         });
         setLiveFilterOptions(filterOpts);
+        setTruncatedFilterDims(truncatedCols);
         setLiveSchemaReady(true);
         setLiveDataLoading(false);
         loadedDatasetsRef.current.add(connectionParams.dataset);
@@ -6375,7 +6379,7 @@ var __app = (() => {
       []
     );
     const renderDropdownFilter = React.useCallback(
-      (filterName, label, options, selectedValues, onSelectionChange, formatValue = formatFilterName2) => {
+      (filterName, label, options, selectedValues, onSelectionChange, formatValue = formatFilterName2, isTruncated = false) => {
         const isExpanded = expandedFilters[filterName];
         const allSelected = selectedValues.length === 0 || selectedValues.length === options.length;
         const selectedCount = selectedValues.length;
@@ -6446,9 +6450,35 @@ var __app = (() => {
             ),
             /* @__PURE__ */ React.createElement("span", { style: styles.checkboxLabel }, formatValue(option))
           );
-        }))));
+        }), isTruncated && /* @__PURE__ */ React.createElement("div", { style: { padding: "6px 8px", borderTop: "1px solid " + (isDarkMode ? "#334155" : "#e2e8f0") } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "10px", color: isDarkMode ? "#64748b" : "#94a3b8", marginBottom: "4px" } }, "Not all values shown. Type exact value:"), /* @__PURE__ */ React.createElement(
+          "input",
+          {
+            type: "text",
+            placeholder: "Add custom value...",
+            style: {
+              width: "100%",
+              padding: "4px 8px",
+              fontSize: "12px",
+              border: "1px solid " + (isDarkMode ? "#475569" : "#d1d5db"),
+              borderRadius: "4px",
+              backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
+              color: isDarkMode ? "#f1f5f9" : "#1e293b",
+              outline: "none",
+              boxSizing: "border-box"
+            },
+            onKeyDown: (e) => {
+              if (e.key === "Enter" && e.target.value.trim()) {
+                const val = e.target.value.trim();
+                if (!selectedValues.includes(val)) {
+                  onSelectionChange([...selectedValues, val]);
+                }
+                e.target.value = "";
+              }
+            }
+          }
+        )))));
       },
-      [expandedFilters, toggleFilterExpansion, formatFilterName2]
+      [expandedFilters, toggleFilterExpansion, formatFilterName2, isDarkMode]
     );
     const renderTooltipIcon = React.useCallback(
       (categoryKey, tooltipText) => {
@@ -10758,13 +10788,16 @@ var __app = (() => {
     ))), /* @__PURE__ */ React.createElement("div", { style: styles.advancedFiltersContent }, /* @__PURE__ */ React.createElement("div", { style: styles.filterSection }, /* @__PURE__ */ React.createElement("button", { style: styles.modernResetButton, onClick: resetAllFilters }, "Reset All Filters")), /* @__PURE__ */ React.createElement("div", { style: styles.filterSection }, /* @__PURE__ */ React.createElement("h4", { style: styles.sectionTitle }, "Data Filters"), FILTER_CONFIG.map(
       ({ key, label, state, setState, formatValue }) => {
         const options = filterOptionsWithoutAll[key] || [];
+        const colName = key.replace(/^dim_/, "").replace(/_filter$/, "");
+        const isTruncated = truncatedFilterDims.has(colName);
         return renderDropdownFilter(
           key,
           label,
           options,
           state,
           setState,
-          formatValue || formatFilterName2
+          formatValue || formatFilterName2,
+          isTruncated
         );
       }
     )))), /* @__PURE__ */ React.createElement("div", { style: styles.proTipBanner }, /* @__PURE__ */ React.createElement("span", { style: styles.proTipLabel }, "ProTip"), /* @__PURE__ */ React.createElement("span", { style: styles.proTipIcon }, PRO_TIPS[currentTipIndex].icon), /* @__PURE__ */ React.createElement("div", { style: styles.proTipContent }, /* @__PURE__ */ React.createElement("span", { style: styles.proTipTitle }, PRO_TIPS[currentTipIndex].title, ":"), /* @__PURE__ */ React.createElement("span", { style: styles.proTipText }, PRO_TIPS[currentTipIndex].text)), /* @__PURE__ */ React.createElement("div", { style: styles.proTipNavigation }, /* @__PURE__ */ React.createElement(

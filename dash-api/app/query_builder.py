@@ -90,18 +90,24 @@ async def _handle_distinct(conn: asyncpg.Connection, schema: str, table: str, re
         "WHERE schemaname = $1 AND tablename = $2 AND attname = $3",
         schema, table, req.column,
     )
+    DISTINCT_LIMIT = 20
+
     if stats_row and stats_row["vals"]:
-        vals = sorted(stats_row["vals"])[:50]
-        return {"column": req.column, "values": vals}
+        vals = sorted(stats_row["vals"])
+        truncated = len(vals) > DISTINCT_LIMIT
+        return {"column": req.column, "values": vals[:DISTINCT_LIMIT], "truncated": truncated}
 
     # Fallback: actual DISTINCT scan. Slow on big unindexed columns, but the
     # only option if the table has never been ANALYZEd (e.g. freshly created)
     # or the column is entirely NULL so pg_stats has no entry.
     fqn = _quote_ident(schema) + "." + _quote_ident(table)
     col = _quote_ident(req.column)
-    sql = f"SELECT DISTINCT {col}::text AS val FROM {fqn} WHERE {col} IS NOT NULL ORDER BY val LIMIT 50"
+    # Fetch LIMIT+1 to detect truncation without an extra COUNT query
+    sql = f"SELECT DISTINCT {col}::text AS val FROM {fqn} WHERE {col} IS NOT NULL ORDER BY val LIMIT {DISTINCT_LIMIT + 1}"
     rows = await conn.fetch(sql)
-    return {"column": req.column, "values": [r["val"] for r in rows]}
+    vals = [r["val"] for r in rows]
+    truncated = len(vals) > DISTINCT_LIMIT
+    return {"column": req.column, "values": vals[:DISTINCT_LIMIT], "truncated": truncated}
 
 
 async def _handle_data(conn: asyncpg.Connection, schema: str, table: str, req: QueryRequest) -> dict:

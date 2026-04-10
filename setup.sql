@@ -124,21 +124,28 @@ BEGIN
     IF v_result IS NOT NULL AND jsonb_array_length(v_result) > 0 THEN
       RETURN jsonb_build_object(
         'column', p_column,
-        'values', v_result
+        'values', CASE WHEN jsonb_array_length(v_result) > 20
+                       THEN (SELECT jsonb_agg(val) FROM (SELECT val FROM jsonb_array_elements(v_result) AS val LIMIT 20) sub2)
+                       ELSE v_result END,
+        'truncated', jsonb_array_length(v_result) > 20
       );
     END IF;
 
     -- Fallback: actual DISTINCT scan. Only hit when pg_stats has no entry
     -- (e.g. table was never ANALYZEd or column is entirely NULL).
+    -- Fetch 21 to detect truncation without an extra COUNT query.
     v_sql := format(
-      'SELECT jsonb_agg(val ORDER BY val) FROM (SELECT DISTINCT %I::text AS val FROM %s WHERE %I IS NOT NULL LIMIT 50) sub',
+      'SELECT jsonb_agg(val ORDER BY val) FROM (SELECT DISTINCT %I::text AS val FROM %s WHERE %I IS NOT NULL LIMIT 21) sub',
       p_column, v_fqn, p_column
     );
     EXECUTE v_sql INTO v_result;
 
     RETURN jsonb_build_object(
       'column', p_column,
-      'values', COALESCE(v_result, '[]'::jsonb)
+      'values', CASE WHEN v_result IS NOT NULL AND jsonb_array_length(COALESCE(v_result, '[]'::jsonb)) > 20
+                     THEN (SELECT jsonb_agg(val) FROM (SELECT val FROM jsonb_array_elements(v_result) AS val LIMIT 20) sub2)
+                     ELSE COALESCE(v_result, '[]'::jsonb) END,
+      'truncated', COALESCE(v_result IS NOT NULL AND jsonb_array_length(COALESCE(v_result, '[]'::jsonb)) > 20, false)
     );
 
   -- ===== DATA ACTION =====
