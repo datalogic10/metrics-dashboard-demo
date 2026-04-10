@@ -9697,15 +9697,42 @@ var __app = (() => {
         (category) => formatFilterName2(category).toLowerCase().includes(searchTerm) || category.toLowerCase().includes(searchTerm)
       );
     }, [getAvailableCategoriesForView, categorySearchText, formatFilterName2]);
+    const customFilterSuggestions = React.useMemo(() => {
+      const customs = {};
+      Object.entries(truncatedFilterByLabel).forEach(([label, filterKey]) => {
+        const selected = getFilterState(filterKey);
+        const knownValues = allFilterSuggestions[label] ? new Set(allFilterSuggestions[label].map((s) => s.value)) : /* @__PURE__ */ new Set();
+        const customValues = selected.filter((v) => !knownValues.has(v));
+        if (customValues.length > 0) {
+          customs[label] = customValues.map((val) => ({
+            type: label,
+            filterKey,
+            value: val,
+            displayName: val + " (custom)",
+            searchText: `${label} ${val}`.toLowerCase().replace(/_/g, " "),
+            action: () => {
+              getFilterSetState(filterKey)(
+                (prev) => prev.includes(val) ? prev.filter((v) => v !== val) : [...prev, val]
+              );
+            }
+          }));
+        }
+      });
+      return customs;
+    }, [truncatedFilterByLabel, getFilterState, getFilterSetState, allFilterSuggestions]);
     const currentFilterSuggestions = React.useMemo(() => {
+      const mergedAll = { ...allFilterSuggestions };
+      Object.entries(customFilterSuggestions).forEach(([label, customs]) => {
+        mergedAll[label] = [...customs, ...mergedAll[label] || []];
+      });
       if (!debouncedFilterSearchText || debouncedFilterSearchText.trim().length === 0) {
-        return allFilterSuggestions;
+        return mergedAll;
       }
       const searchTerm = debouncedFilterSearchText.toLowerCase().trim();
       const searchValue = debouncedFilterSearchText.trim();
       const filtered = {};
-      Object.keys(allFilterSuggestions).forEach((type) => {
-        const matchingOptions = allFilterSuggestions[type].filter((option) => {
+      Object.keys(mergedAll).forEach((type) => {
+        const matchingOptions = mergedAll[type].filter((option) => {
           return option.displayName.toLowerCase().includes(searchTerm) || option.searchText.includes(searchTerm) || type.toLowerCase().includes(searchTerm);
         });
         if (matchingOptions.length > 0) {
@@ -9715,7 +9742,6 @@ var __app = (() => {
       if (searchValue.length > 0) {
         Object.entries(truncatedFilterByLabel).forEach(([label, filterKey]) => {
           if (filtered[label]) return;
-          const setState = getFilterSetState(filterKey);
           filtered[label] = [{
             type: label,
             filterKey,
@@ -9723,13 +9749,15 @@ var __app = (() => {
             displayName: searchValue + " (custom)",
             searchText: searchValue.toLowerCase(),
             action: () => {
-              setState((prev) => prev.includes(searchValue) ? prev : [...prev, searchValue]);
+              getFilterSetState(filterKey)(
+                (prev) => prev.includes(searchValue) ? prev.filter((v) => v !== searchValue) : [...prev, searchValue]
+              );
             }
           }];
         });
       }
       return filtered;
-    }, [debouncedFilterSearchText, allFilterSuggestions, truncatedFilterByLabel, getFilterSetState]);
+    }, [debouncedFilterSearchText, allFilterSuggestions, customFilterSuggestions, truncatedFilterByLabel, getFilterSetState]);
     const parseQuery = React.useCallback(
       (query) => {
         const metricPatterns = {

@@ -6440,13 +6440,48 @@ export function render() {
     );
   }, [getAvailableCategoriesForView, categorySearchText, formatFilterName]);
 
+  // Build suggestion entries for custom-selected values in truncated dimensions
+  // so they appear in the dropdown and can be unchecked
+  const customFilterSuggestions = React.useMemo(() => {
+    const customs = {};
+    Object.entries(truncatedFilterByLabel).forEach(([label, filterKey]) => {
+      const selected = getFilterState(filterKey);
+      // Find values that were selected but aren't in the known options
+      const knownValues = allFilterSuggestions[label]
+        ? new Set(allFilterSuggestions[label].map(s => s.value))
+        : new Set();
+      const customValues = selected.filter(v => !knownValues.has(v));
+      if (customValues.length > 0) {
+        customs[label] = customValues.map(val => ({
+          type: label,
+          filterKey,
+          value: val,
+          displayName: val + ' (custom)',
+          searchText: `${label} ${val}`.toLowerCase().replace(/_/g, ' '),
+          action: () => {
+            getFilterSetState(filterKey)((prev) =>
+              prev.includes(val) ? prev.filter(v => v !== val) : [...prev, val]
+            );
+          },
+        }));
+      }
+    });
+    return customs;
+  }, [truncatedFilterByLabel, getFilterState, getFilterSetState, allFilterSuggestions]);
+
   const currentFilterSuggestions = React.useMemo(() => {
-    // If no search text, show all options
+    // Merge known suggestions with custom-value suggestions
+    const mergedAll = { ...allFilterSuggestions };
+    Object.entries(customFilterSuggestions).forEach(([label, customs]) => {
+      mergedAll[label] = [...(customs), ...(mergedAll[label] || [])];
+    });
+
+    // If no search text, show all options (including custom values)
     if (
       !debouncedFilterSearchText ||
       debouncedFilterSearchText.trim().length === 0
     ) {
-      return allFilterSuggestions;
+      return mergedAll;
     }
 
     // Simple client-side filtering (very fast on pre-grouped data)
@@ -6454,8 +6489,8 @@ export function render() {
     const searchValue = debouncedFilterSearchText.trim();
     const filtered = {};
 
-    Object.keys(allFilterSuggestions).forEach((type) => {
-      const matchingOptions = allFilterSuggestions[type].filter((option) => {
+    Object.keys(mergedAll).forEach((type) => {
+      const matchingOptions = mergedAll[type].filter((option) => {
         return (
           option.displayName.toLowerCase().includes(searchTerm) ||
           option.searchText.includes(searchTerm) ||
@@ -6473,7 +6508,6 @@ export function render() {
       Object.entries(truncatedFilterByLabel).forEach(([label, filterKey]) => {
         // Skip if this group already has matches (user's text matched existing values)
         if (filtered[label]) return;
-        const setState = getFilterSetState(filterKey);
         filtered[label] = [{
           type: label,
           filterKey,
@@ -6481,14 +6515,16 @@ export function render() {
           displayName: searchValue + ' (custom)',
           searchText: searchValue.toLowerCase(),
           action: () => {
-            setState((prev) => prev.includes(searchValue) ? prev : [...prev, searchValue]);
+            getFilterSetState(filterKey)((prev) =>
+              prev.includes(searchValue) ? prev.filter(v => v !== searchValue) : [...prev, searchValue]
+            );
           },
         }];
       });
     }
 
     return filtered;
-  }, [debouncedFilterSearchText, allFilterSuggestions, truncatedFilterByLabel, getFilterSetState]);
+  }, [debouncedFilterSearchText, allFilterSuggestions, customFilterSuggestions, truncatedFilterByLabel, getFilterSetState]);
 
   // Simplified query parser
   const parseQuery = React.useCallback(
