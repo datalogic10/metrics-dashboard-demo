@@ -530,7 +530,7 @@ export function render() {
         const truncatedCols = new Set();
         distinctResults.forEach(r => {
           filterOpts[r.column] = r.isBool
-            ? r.values.map(v => r.column + '_' + String(v).toLowerCase())
+            ? r.values.map(v => r.column + '_' + (/^(t|true|1|yes)$/i.test(String(v)) ? 'true' : 'false'))
             : r.values;
           if (r.truncated) truncatedCols.add(r.column);
         });

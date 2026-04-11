@@ -1236,7 +1236,7 @@ var __app = (() => {
       const row = rows[i];
       const period = row.period;
       const rawCat = row[dimColumn];
-      const category = rawCat == null ? "Unknown" : isBoolDim ? dimColumn + "_" + String(rawCat).toLowerCase() : rawCat || "Unknown";
+      const category = rawCat == null ? "Unknown" : isBoolDim ? dimColumn + "_" + (/^(t|true|1|yes)$/i.test(String(rawCat)) ? "true" : "false") : rawCat || "Unknown";
       const vol = resolveMetric(row, "volume", formulaConfigs);
       const rev = resolveMetric(row, "revenue", formulaConfigs);
       const m3 = computeMetric3(row, vol, rev, hasMetric3, formulaConfigs);
@@ -5136,7 +5136,7 @@ var __app = (() => {
         const filterOpts = {};
         const truncatedCols = /* @__PURE__ */ new Set();
         distinctResults.forEach((r) => {
-          filterOpts[r.column] = r.isBool ? r.values.map((v) => r.column + "_" + String(v).toLowerCase()) : r.values;
+          filterOpts[r.column] = r.isBool ? r.values.map((v) => r.column + "_" + (/^(t|true|1|yes)$/i.test(String(v)) ? "true" : "false")) : r.values;
           if (r.truncated) truncatedCols.add(r.column);
         });
         setLiveFilterOptions(filterOpts);

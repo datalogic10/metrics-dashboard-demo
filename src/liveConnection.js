@@ -344,7 +344,7 @@ export function transformToDimensionAggregates(rows, dimColumn, hasMetric3, form
     const period = row.period;
     const rawCat = row[dimColumn];
     const category = rawCat == null ? "Unknown"
-      : isBoolDim ? dimColumn + '_' + String(rawCat).toLowerCase()
+      : isBoolDim ? dimColumn + '_' + (/^(t|true|1|yes)$/i.test(String(rawCat)) ? 'true' : 'false')
       : rawCat || "Unknown";
     const vol = resolveMetric(row, 'volume', formulaConfigs);
     const rev = resolveMetric(row, 'revenue', formulaConfigs);
