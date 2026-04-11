@@ -298,7 +298,108 @@ function usMarketHolidays(year) {
   return holidays;
 }
 
-export function fillMissingPeriods(periods, fillMode) {
+// ---------------------------------------------------------------------------
+// Tradier market-calendar integration
+// Stale-while-revalidate: localStorage gives instant load, Tradier refreshes
+// in the background. Past years refresh weekly, current year refreshes daily.
+// Falls back to static usMarketHolidays() if no cached or fetched data.
+// ---------------------------------------------------------------------------
+const LS_KEY = 'tradier_market_closures';   // localStorage key
+const STALE_PAST_MS = 7 * 24 * 3600_000;   // past years: refresh weekly
+const STALE_CURRENT_MS = 24 * 3600_000;     // current year: refresh daily
+
+function loadClosuresFromStorage() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    return raw ? JSON.parse(raw) : {};       // { year: { dates: [...], fetchedAt: ms } }
+  } catch { return {}; }
+}
+
+function saveClosuresToStorage(store) {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(store)); } catch {}
+}
+
+const _tradierInFlight = {};           // year → Promise<Set>
+
+function fetchTradierYearClosures(year) {
+  if (_tradierInFlight[year]) return _tradierInFlight[year];
+
+  const months = Array.from({ length: 12 }, (_, i) => i + 1);
+  _tradierInFlight[year] = Promise.all(
+    months.map(month =>
+      fetch(`https://api.tradier.com/v1/markets/calendar?month=${month}&year=${year}`, {
+        headers: { Accept: 'application/json' },
+      })
+        .then(r => r.ok ? r.json() : null)
+        .catch(() => null)
+    )
+  ).then(results => {
+    const closed = [];
+    for (const res of results) {
+      if (!res?.calendar?.days?.day) continue;
+      for (const d of res.calendar.days.day) {
+        if (d.status === 'closed') closed.push(d.date);
+      }
+    }
+    delete _tradierInFlight[year];
+    if (closed.length === 0) return null;
+
+    // Persist to localStorage
+    const store = loadClosuresFromStorage();
+    store[year] = { dates: closed, fetchedAt: Date.now() };
+    saveClosuresToStorage(store);
+    return new Set(closed);
+  });
+
+  return _tradierInFlight[year];
+}
+
+function isStale(entry, year) {
+  if (!entry?.fetchedAt) return true;
+  const maxAge = year === new Date().getFullYear() ? STALE_CURRENT_MS : STALE_PAST_MS;
+  return Date.now() - entry.fetchedAt > maxAge;
+}
+
+/**
+ * Read cached market closures synchronously (localStorage + static fallback).
+ * Pure read — no network requests. Safe to call in useMemo / render.
+ */
+export function getCachedMarketClosures(startYear, endYear) {
+  const store = loadClosuresFromStorage();
+  const closures = new Set();
+  for (let y = startYear; y <= endYear; y++) {
+    const entry = store[y];
+    if (entry?.dates?.length > 0) {
+      for (const d of entry.dates) closures.add(d);
+    } else {
+      for (const d of usMarketHolidays(y)) closures.add(d);
+    }
+  }
+  return closures;
+}
+
+/**
+ * Refresh stale years from Tradier in the background.
+ * Only fires network requests for years whose cache has expired
+ * (past years: weekly, current year: daily). Calls onUpdate with
+ * the full refreshed Set if any new data arrived.
+ */
+export function refreshMarketClosures(startYear, endYear, onUpdate) {
+  const store = loadClosuresFromStorage();
+  const staleYears = [];
+  for (let y = startYear; y <= endYear; y++) {
+    if (isStale(store[y], y)) staleYears.push(y);
+  }
+  if (staleYears.length === 0) return;   // everything fresh — no network
+
+  Promise.all(staleYears.map(y => fetchTradierYearClosures(y))).then(results => {
+    if (results.some(r => r != null)) {
+      onUpdate(getCachedMarketClosures(startYear, endYear));
+    }
+  });
+}
+
+export function fillMissingPeriods(periods, fillMode, marketClosures) {
   if (!fillMode || fillMode === 'none' || !periods || periods.length === 0) return periods;
   const isDaily = /^\d{4}-\d{2}-\d{2}$/.test(periods[0]);
   if (!isDaily) return periods;
@@ -309,12 +410,16 @@ export function fillMissingPeriods(periods, fillMode) {
   const start = new Date(sorted[0] + 'T00:00:00');
   const end = new Date(sorted[sorted.length - 1] + 'T00:00:00');
 
-  // Pre-compute market holidays for all years in range
+  // Use provided closures, or fall back to static computation
   let marketHolidays = null;
   if (fillMode === 'trading-days') {
-    marketHolidays = new Set();
-    for (let y = start.getFullYear(); y <= end.getFullYear(); y++) {
-      for (const h of usMarketHolidays(y)) marketHolidays.add(h);
+    if (marketClosures && marketClosures.size > 0) {
+      marketHolidays = marketClosures;
+    } else {
+      marketHolidays = new Set();
+      for (let y = start.getFullYear(); y <= end.getFullYear(); y++) {
+        for (const h of usMarketHolidays(y)) marketHolidays.add(h);
+      }
     }
   }
 

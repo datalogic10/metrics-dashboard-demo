@@ -1702,7 +1702,82 @@ var __app = (() => {
     holidays.add(fmt(observe(11, 25)));
     return holidays;
   }
-  function fillMissingPeriods(periods, fillMode) {
+  var LS_KEY = "tradier_market_closures";
+  var STALE_PAST_MS = 7 * 24 * 36e5;
+  var STALE_CURRENT_MS = 24 * 36e5;
+  function loadClosuresFromStorage() {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  }
+  function saveClosuresToStorage(store) {
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify(store));
+    } catch {
+    }
+  }
+  var _tradierInFlight = {};
+  function fetchTradierYearClosures(year) {
+    if (_tradierInFlight[year]) return _tradierInFlight[year];
+    const months = Array.from({ length: 12 }, (_, i) => i + 1);
+    _tradierInFlight[year] = Promise.all(
+      months.map(
+        (month) => fetch(`https://api.tradier.com/v1/markets/calendar?month=${month}&year=${year}`, {
+          headers: { Accept: "application/json" }
+        }).then((r) => r.ok ? r.json() : null).catch(() => null)
+      )
+    ).then((results) => {
+      const closed = [];
+      for (const res of results) {
+        if (!res?.calendar?.days?.day) continue;
+        for (const d of res.calendar.days.day) {
+          if (d.status === "closed") closed.push(d.date);
+        }
+      }
+      delete _tradierInFlight[year];
+      if (closed.length === 0) return null;
+      const store = loadClosuresFromStorage();
+      store[year] = { dates: closed, fetchedAt: Date.now() };
+      saveClosuresToStorage(store);
+      return new Set(closed);
+    });
+    return _tradierInFlight[year];
+  }
+  function isStale(entry, year) {
+    if (!entry?.fetchedAt) return true;
+    const maxAge = year === (/* @__PURE__ */ new Date()).getFullYear() ? STALE_CURRENT_MS : STALE_PAST_MS;
+    return Date.now() - entry.fetchedAt > maxAge;
+  }
+  function getCachedMarketClosures(startYear, endYear) {
+    const store = loadClosuresFromStorage();
+    const closures = /* @__PURE__ */ new Set();
+    for (let y = startYear; y <= endYear; y++) {
+      const entry = store[y];
+      if (entry?.dates?.length > 0) {
+        for (const d of entry.dates) closures.add(d);
+      } else {
+        for (const d of usMarketHolidays(y)) closures.add(d);
+      }
+    }
+    return closures;
+  }
+  function refreshMarketClosures(startYear, endYear, onUpdate) {
+    const store = loadClosuresFromStorage();
+    const staleYears = [];
+    for (let y = startYear; y <= endYear; y++) {
+      if (isStale(store[y], y)) staleYears.push(y);
+    }
+    if (staleYears.length === 0) return;
+    Promise.all(staleYears.map((y) => fetchTradierYearClosures(y))).then((results) => {
+      if (results.some((r) => r != null)) {
+        onUpdate(getCachedMarketClosures(startYear, endYear));
+      }
+    });
+  }
+  function fillMissingPeriods(periods, fillMode, marketClosures) {
     if (!fillMode || fillMode === "none" || !periods || periods.length === 0) return periods;
     const isDaily = /^\d{4}-\d{2}-\d{2}$/.test(periods[0]);
     if (!isDaily) return periods;
@@ -1712,9 +1787,13 @@ var __app = (() => {
     const end = /* @__PURE__ */ new Date(sorted[sorted.length - 1] + "T00:00:00");
     let marketHolidays = null;
     if (fillMode === "trading-days") {
-      marketHolidays = /* @__PURE__ */ new Set();
-      for (let y = start.getFullYear(); y <= end.getFullYear(); y++) {
-        for (const h of usMarketHolidays(y)) marketHolidays.add(h);
+      if (marketClosures && marketClosures.size > 0) {
+        marketHolidays = marketClosures;
+      } else {
+        marketHolidays = /* @__PURE__ */ new Set();
+        for (let y = start.getFullYear(); y <= end.getFullYear(); y++) {
+          for (const h of usMarketHolidays(y)) marketHolidays.add(h);
+        }
       }
     }
     const out = [];
@@ -7349,12 +7428,31 @@ var __app = (() => {
       });
       return map;
     }, [dimensionCategoryTotals]);
+    const [closureVersion, setClosureVersion] = React.useState(0);
+    const fillMode = dataFrequency === "Daily" && liveMetricConfig?.timelineFillMode || "all-days";
+    const periodKeys = React.useMemo(() => Object.keys(periodAggregates).sort(), [periodAggregates]);
+    const marketClosures = React.useMemo(() => {
+      if (fillMode !== "trading-days" || periodKeys.length === 0) return null;
+      const startYear = (/* @__PURE__ */ new Date(periodKeys[0] + "T00:00:00")).getFullYear();
+      const endYear = (/* @__PURE__ */ new Date(periodKeys[periodKeys.length - 1] + "T00:00:00")).getFullYear();
+      return getCachedMarketClosures(startYear, endYear);
+    }, [fillMode, periodKeys, closureVersion]);
+    React.useEffect(() => {
+      if (fillMode !== "trading-days" || periodKeys.length === 0) return;
+      const startYear = (/* @__PURE__ */ new Date(periodKeys[0] + "T00:00:00")).getFullYear();
+      const endYear = (/* @__PURE__ */ new Date(periodKeys[periodKeys.length - 1] + "T00:00:00")).getFullYear();
+      let cancelled = false;
+      refreshMarketClosures(startYear, endYear, () => {
+        if (!cancelled) setClosureVersion((n) => n + 1);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, [fillMode, periodKeys]);
     const periods = React.useMemo(() => {
-      const base = Object.keys(periodAggregates).sort();
-      if (dataFrequency !== "Daily") return base;
-      const fillMode = liveMetricConfig?.timelineFillMode || "all-days";
-      return fillMissingPeriods(base, fillMode);
-    }, [periodAggregates, dataFrequency, liveMetricConfig]);
+      if (dataFrequency !== "Daily") return periodKeys;
+      return fillMissingPeriods(periodKeys, fillMode, marketClosures);
+    }, [periodKeys, dataFrequency, fillMode, marketClosures]);
     const calculateMetricValue = React.useCallback((rows, metricName) => {
       if (!rows || rows.length === 0) return 0;
       let m1 = 0;

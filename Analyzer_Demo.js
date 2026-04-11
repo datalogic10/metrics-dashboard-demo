@@ -38,7 +38,7 @@ import {
   generateFuturePeriods,
   detectSeasonalPeriod,
   hexToRgba,
-  fillMissingPeriods,
+  fillMissingPeriods, getCachedMarketClosures, refreshMarketClosures,
   minMaxRescale,
   METRIC_OVERLAY_PALETTE,
 } from './src/metrics.js';
@@ -3226,17 +3226,41 @@ export function render() {
     return map;
   }, [dimensionCategoryTotals]);
 
+  // Market closures: two-phase approach
+  // 1. useMemo reads localStorage synchronously (instant, no flash)
+  // 2. useEffect refreshes only stale years from Tradier (no network if cache is fresh)
+  const [closureVersion, setClosureVersion] = React.useState(0);
+  const fillMode = (dataFrequency === "Daily" && liveMetricConfig?.timelineFillMode) || "all-days";
+  const periodKeys = React.useMemo(() => Object.keys(periodAggregates).sort(), [periodAggregates]);
+
+  const marketClosures = React.useMemo(() => {
+    if (fillMode !== 'trading-days' || periodKeys.length === 0) return null;
+    const startYear = new Date(periodKeys[0] + 'T00:00:00').getFullYear();
+    const endYear = new Date(periodKeys[periodKeys.length - 1] + 'T00:00:00').getFullYear();
+    return getCachedMarketClosures(startYear, endYear);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fillMode, periodKeys, closureVersion]);
+
+  React.useEffect(() => {
+    if (fillMode !== 'trading-days' || periodKeys.length === 0) return;
+    const startYear = new Date(periodKeys[0] + 'T00:00:00').getFullYear();
+    const endYear = new Date(periodKeys[periodKeys.length - 1] + 'T00:00:00').getFullYear();
+    let cancelled = false;
+    refreshMarketClosures(startYear, endYear, () => {
+      if (!cancelled) setClosureVersion(n => n + 1);
+    });
+    return () => { cancelled = true; };
+  }, [fillMode, periodKeys]);
+
   // Get unique dates/periods — always from periodAggregates (works in both modes).
   // When dataFrequency is Daily and the metric config specifies a timelineFillMode
   // ('all-days' or 'weekdays-only'), missing dates are inserted as null-value
   // placeholders so chart timelines show real gaps. Configured in the
   // "Configure Metrics" modal, stored on liveMetricConfig.timelineFillMode.
   const periods = React.useMemo(() => {
-    const base = Object.keys(periodAggregates).sort();
-    if (dataFrequency !== "Daily") return base;
-    const fillMode = liveMetricConfig?.timelineFillMode || "all-days";
-    return fillMissingPeriods(base, fillMode);
-  }, [periodAggregates, dataFrequency, liveMetricConfig]);
+    if (dataFrequency !== "Daily") return periodKeys;
+    return fillMissingPeriods(periodKeys, fillMode, marketClosures);
+  }, [periodKeys, dataFrequency, fillMode, marketClosures]);
 
   // Calculate metrics from rows (fallback for non-period-grouped data)
   const calculateMetricValue = React.useCallback((rows, metricName) => {
