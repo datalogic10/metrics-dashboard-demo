@@ -1655,6 +1655,53 @@ var __app = (() => {
     }
     return result;
   }
+  function usMarketHolidays(year) {
+    const holidays = /* @__PURE__ */ new Set();
+    const observe = (m2, d2) => {
+      const dt = new Date(year, m2, d2);
+      const dow = dt.getDay();
+      if (dow === 6) dt.setDate(d2 - 1);
+      else if (dow === 0) dt.setDate(d2 + 1);
+      return dt;
+    };
+    const nthWeekday = (m2, weekday, n) => {
+      const first = new Date(year, m2, 1);
+      let d2 = 1 + (weekday - first.getDay() + 7) % 7;
+      d2 += (n - 1) * 7;
+      return new Date(year, m2, d2);
+    };
+    const lastMonday = (m2) => {
+      const last = new Date(year, m2 + 1, 0);
+      const d2 = last.getDate() - (last.getDay() + 6) % 7;
+      return new Date(year, m2, d2);
+    };
+    const a = year % 19, b = Math.floor(year / 100), c = year % 100;
+    const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);
+    const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;
+    const i = Math.floor(c / 4), k = c % 4;
+    const l = (32 + 2 * e + 2 * i - h - k) % 7;
+    const m = Math.floor((a + 11 * h + 22 * l) / 451);
+    const easterMonth = Math.floor((h + l - 7 * m + 114) / 31) - 1;
+    const easterDay = (h + l - 7 * m + 114) % 31 + 1;
+    const goodFriday = new Date(year, easterMonth, easterDay - 2);
+    const fmt = (dt) => {
+      const yy = dt.getFullYear();
+      const mm = String(dt.getMonth() + 1).padStart(2, "0");
+      const dd = String(dt.getDate()).padStart(2, "0");
+      return `${yy}-${mm}-${dd}`;
+    };
+    holidays.add(fmt(observe(0, 1)));
+    holidays.add(fmt(nthWeekday(0, 1, 3)));
+    holidays.add(fmt(nthWeekday(1, 1, 3)));
+    holidays.add(fmt(goodFriday));
+    holidays.add(fmt(lastMonday(4)));
+    holidays.add(fmt(observe(5, 19)));
+    holidays.add(fmt(observe(6, 4)));
+    holidays.add(fmt(nthWeekday(8, 1, 1)));
+    holidays.add(fmt(nthWeekday(10, 4, 4)));
+    holidays.add(fmt(observe(11, 25)));
+    return holidays;
+  }
   function fillMissingPeriods(periods, fillMode) {
     if (!fillMode || fillMode === "none" || !periods || periods.length === 0) return periods;
     const isDaily = /^\d{4}-\d{2}-\d{2}$/.test(periods[0]);
@@ -1663,6 +1710,13 @@ var __app = (() => {
     const present = new Set(sorted);
     const start = /* @__PURE__ */ new Date(sorted[0] + "T00:00:00");
     const end = /* @__PURE__ */ new Date(sorted[sorted.length - 1] + "T00:00:00");
+    let marketHolidays = null;
+    if (fillMode === "trading-days") {
+      marketHolidays = /* @__PURE__ */ new Set();
+      for (let y = start.getFullYear(); y <= end.getFullYear(); y++) {
+        for (const h of usMarketHolidays(y)) marketHolidays.add(h);
+      }
+    }
     const out = [];
     const cur = new Date(start);
     while (cur <= end) {
@@ -1672,7 +1726,7 @@ var __app = (() => {
       const m = String(cur.getMonth() + 1).padStart(2, "0");
       const d = String(cur.getDate()).padStart(2, "0");
       const iso = `${y}-${m}-${d}`;
-      const shouldInclude = present.has(iso) || fillMode === "all-days" || fillMode === "weekdays-only" && !isWeekend;
+      const shouldInclude = present.has(iso) || fillMode === "all-days" || fillMode === "weekdays-only" && !isWeekend || fillMode === "trading-days" && !isWeekend && !marketHolidays.has(iso);
       if (shouldInclude) out.push(iso);
       cur.setDate(cur.getDate() + 1);
     }
@@ -2529,16 +2583,17 @@ var __app = (() => {
           opt.label
         );
       }), (draft[chartTypeKey] || "auto") === "auto" && /* @__PURE__ */ React.createElement("span", { style: { fontSize: "10px", color: isDarkMode ? "#6b7280" : "#9ca3af" } }, "(", mode === "formula" ? "line" : "stacked", ")"))));
-    }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "8px", marginBottom: "8px" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Dataset (table name)"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.dataset || activeDataset || "", onChange: (e) => updateDraft("dataset", e.target.value), placeholder: "schema.table_name" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Date Column"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.dateColumn || "", onChange: (e) => updateDraft("dateColumn", e.target.value || null) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u2014 none \u2014"), dateCols.map((c) => /* @__PURE__ */ React.createElement("option", { key: c.name, value: c.name }, c.name)))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Default Grain"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.defaultGrain || "month", onChange: (e) => updateDraft("defaultGrain", e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "day" }, "Daily"), /* @__PURE__ */ React.createElement("option", { value: "week" }, "Weekly"), /* @__PURE__ */ React.createElement("option", { value: "month" }, "Monthly"), /* @__PURE__ */ React.createElement("option", { value: "quarter" }, "Quarterly"), /* @__PURE__ */ React.createElement("option", { value: "year" }, "Yearly"))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Sort top-N by"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.topNRankBy || "volume", onChange: (e) => updateDraft("topNRankBy", e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "volume" }, "Metric 1"), /* @__PURE__ */ React.createElement("option", { value: "revenue" }, "Metric 2"), /* @__PURE__ */ React.createElement("option", { value: "derived" }, "Metric 3")))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: "16px" } }, /* @__PURE__ */ React.createElement("label", { style: labelStyle, title: "Controls how missing dates appear on the timeline at Daily grain. Does not add or interpolate any values \u2014 only affects spacing." }, "Show gaps on timeline for missing dates"), /* @__PURE__ */ React.createElement(
+    }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "8px", marginBottom: "8px" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Dataset (table name)"), /* @__PURE__ */ React.createElement("input", { style: inputStyle, value: draft.dataset || activeDataset || "", onChange: (e) => updateDraft("dataset", e.target.value), placeholder: "schema.table_name" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Date Column"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.dateColumn || "", onChange: (e) => updateDraft("dateColumn", e.target.value || null) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u2014 none \u2014"), dateCols.map((c) => /* @__PURE__ */ React.createElement("option", { key: c.name, value: c.name }, c.name)))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Default Grain"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.defaultGrain || "month", onChange: (e) => updateDraft("defaultGrain", e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "day" }, "Daily"), /* @__PURE__ */ React.createElement("option", { value: "week" }, "Weekly"), /* @__PURE__ */ React.createElement("option", { value: "month" }, "Monthly"), /* @__PURE__ */ React.createElement("option", { value: "quarter" }, "Quarterly"), /* @__PURE__ */ React.createElement("option", { value: "year" }, "Yearly"))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "Sort top-N by"), /* @__PURE__ */ React.createElement("select", { style: selectStyle, value: draft.topNRankBy || "volume", onChange: (e) => updateDraft("topNRankBy", e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "volume" }, "Metric 1"), /* @__PURE__ */ React.createElement("option", { value: "revenue" }, "Metric 2"), /* @__PURE__ */ React.createElement("option", { value: "derived" }, "Metric 3")))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: "16px" } }, /* @__PURE__ */ React.createElement("label", { style: labelStyle, title: "Controls how missing dates appear on the timeline at Daily grain. Does not add or interpolate any values \u2014 only affects spacing." }, "Ignore gaps on"), /* @__PURE__ */ React.createElement(
       "select",
       {
         style: selectStyle,
-        value: draft.timelineFillMode || "none",
+        value: draft.timelineFillMode || "all-days",
         onChange: (e) => updateDraft("timelineFillMode", e.target.value)
       },
-      /* @__PURE__ */ React.createElement("option", { value: "none" }, "Off \u2014 place existing points side-by-side"),
-      /* @__PURE__ */ React.createElement("option", { value: "all-days" }, "Any missing calendar day (crypto, SaaS)"),
-      /* @__PURE__ */ React.createElement("option", { value: "weekdays-only" }, "Missing weekdays only \u2014 weekends not treated as gaps (stocks)")
+      /* @__PURE__ */ React.createElement("option", { value: "all-days" }, "None \u2014 show all missing dates (Crypto, SaaS)"),
+      /* @__PURE__ */ React.createElement("option", { value: "weekdays-only" }, "Weekends (Retail)"),
+      /* @__PURE__ */ React.createElement("option", { value: "trading-days" }, "Weekends + US Holidays (Stocks)"),
+      /* @__PURE__ */ React.createElement("option", { value: "none" }, "All \u2014 only show available data")
     )), /* @__PURE__ */ React.createElement("div", { style: sectionStyle }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "13px", fontWeight: 700, color: isDarkMode ? "#f3f4f6" : "#111827" } }, "Dimensions & Filters"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: "8px" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", schemaDimensions.map((c) => c.name)), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "All"), /* @__PURE__ */ React.createElement("button", { onClick: () => updateDraft("visibleDimensions", []), style: { fontSize: "11px", padding: "2px 8px", borderRadius: "4px", border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`, background: "transparent", color: isDarkMode ? "#9ca3af" : "#6b7280", cursor: "pointer" } }, "None"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } }, schemaDimensions.map((c) => {
       const visible = draft.visibleDimensions ? draft.visibleDimensions.includes(c.name) : true;
       const label = c.name.replace(/^is_/, "").replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
@@ -7297,7 +7352,7 @@ var __app = (() => {
     const periods = React.useMemo(() => {
       const base = Object.keys(periodAggregates).sort();
       if (dataFrequency !== "Daily") return base;
-      const fillMode = liveMetricConfig?.timelineFillMode || "none";
+      const fillMode = liveMetricConfig?.timelineFillMode || "all-days";
       return fillMissingPeriods(base, fillMode);
     }, [periodAggregates, dataFrequency, liveMetricConfig]);
     const calculateMetricValue = React.useCallback((rows, metricName) => {
@@ -9123,9 +9178,9 @@ var __app = (() => {
                 minStackedNegative = Math.min(minStackedNegative, negativeSum);
               }
               if (minStackedNegative < 0) {
-                return [minStackedNegative * 1.3, maxStackedPositive * 1.3];
+                return [minStackedNegative * 1.1, maxStackedPositive * 1.1];
               } else if (maxStackedPositive > 0) {
-                return [0, maxStackedPositive * 1.3];
+                return [0, maxStackedPositive * 1.1];
               }
               return void 0;
             })()
@@ -9448,12 +9503,8 @@ var __app = (() => {
               if (finiteVals.length === 0) return void 0;
               const maxValue = Math.max(...finiteVals, forecastUpperMax);
               const minValue = Math.min(...finiteVals);
-              if (minValue < 0) {
-                return [minValue * 1.3, maxValue * 1.3];
-              } else if (maxValue > 0) {
-                return [0, maxValue * 1.3];
-              }
-              return void 0;
+              const padding = (maxValue - minValue) * 0.1 || maxValue * 0.1;
+              return [minValue - padding, maxValue + padding];
             })() : void 0
           },
           // Vertical separator at forecast boundary

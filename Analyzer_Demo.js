@@ -3234,7 +3234,7 @@ export function render() {
   const periods = React.useMemo(() => {
     const base = Object.keys(periodAggregates).sort();
     if (dataFrequency !== "Daily") return base;
-    const fillMode = liveMetricConfig?.timelineFillMode || "none";
+    const fillMode = liveMetricConfig?.timelineFillMode || "all-days";
     return fillMissingPeriods(base, fillMode);
   }, [periodAggregates, dataFrequency, liveMetricConfig]);
 
@@ -5768,10 +5768,10 @@ export function render() {
 
             if (minStackedNegative < 0) {
               // Include negative values with individual padding
-              return [minStackedNegative * 1.3, maxStackedPositive * 1.3];
+              return [minStackedNegative * 1.1, maxStackedPositive * 1.1];
             } else if (maxStackedPositive > 0) {
               // Only positive values
-              return [0, maxStackedPositive * 1.3];
+              return [0, maxStackedPositive * 1.1];
             }
             return undefined;
           })(),
@@ -6148,12 +6148,8 @@ export function render() {
                   if (finiteVals.length === 0) return undefined;
                   const maxValue = Math.max(...finiteVals, forecastUpperMax);
                   const minValue = Math.min(...finiteVals);
-                  if (minValue < 0) {
-                    return [minValue * 1.3, maxValue * 1.3];
-                  } else if (maxValue > 0) {
-                    return [0, maxValue * 1.3];
-                  }
-                  return undefined;
+                  const padding = (maxValue - minValue) * 0.1 || maxValue * 0.1;
+                  return [minValue - padding, maxValue + padding];
                 })()
               : undefined,
         },

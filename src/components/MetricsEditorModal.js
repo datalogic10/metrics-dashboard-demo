@@ -350,16 +350,17 @@ export function MetricsEditorModal({
         {/* Timeline gap-fill mode (Daily grain only) */}
         <div style={{ marginBottom: '16px' }}>
           <label style={labelStyle} title="Controls how missing dates appear on the timeline at Daily grain. Does not add or interpolate any values — only affects spacing.">
-            Show gaps on timeline for missing dates
+            Ignore gaps on
           </label>
           <select
             style={selectStyle}
-            value={draft.timelineFillMode || 'none'}
+            value={draft.timelineFillMode || 'all-days'}
             onChange={e => updateDraft('timelineFillMode', e.target.value)}
           >
-            <option value="none">Off — place existing points side-by-side</option>
-            <option value="all-days">Any missing calendar day (crypto, SaaS)</option>
-            <option value="weekdays-only">Missing weekdays only — weekends not treated as gaps (stocks)</option>
+            <option value="all-days">None — show all missing dates (Crypto, SaaS)</option>
+            <option value="weekdays-only">Weekends (Retail)</option>
+            <option value="trading-days">Weekends + US Holidays (Stocks)</option>
+            <option value="none">All — only show available data</option>
           </select>
         </div>
 

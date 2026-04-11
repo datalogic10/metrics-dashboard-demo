@@ -231,6 +231,73 @@ export function calculateSMA(barData, windowSize) {
  * Weekend = ISO weekend (Sat/Sun). Not configurable for non-Western
  * calendars; intentional simplicity.
  */
+/**
+ * Compute the set of US stock market holidays (NYSE/NASDAQ) for a given year.
+ * Returns a Set of 'YYYY-MM-DD' strings.
+ *
+ * Covers: New Year's, MLK Day, Presidents' Day, Good Friday, Memorial Day,
+ * Juneteenth, Independence Day, Labor Day, Thanksgiving, Christmas.
+ * Weekend-observed rules: if a holiday falls on Saturday → Friday off;
+ * if on Sunday → Monday off.
+ */
+function usMarketHolidays(year) {
+  const holidays = new Set();
+
+  const observe = (m, d) => {
+    const dt = new Date(year, m, d);
+    const dow = dt.getDay();
+    if (dow === 6) dt.setDate(d - 1);      // Sat → Fri
+    else if (dow === 0) dt.setDate(d + 1);  // Sun → Mon
+    return dt;
+  };
+
+  // Nth weekday of month (weekday: 1=Mon)
+  const nthWeekday = (m, weekday, n) => {
+    const first = new Date(year, m, 1);
+    let d = 1 + ((weekday - first.getDay() + 7) % 7);
+    d += (n - 1) * 7;
+    return new Date(year, m, d);
+  };
+
+  // Last Monday of month
+  const lastMonday = (m) => {
+    const last = new Date(year, m + 1, 0); // last day of month
+    const d = last.getDate() - ((last.getDay() + 6) % 7);
+    return new Date(year, m, d);
+  };
+
+  // Easter (Anonymous Gregorian algorithm) → Good Friday = Easter - 2
+  const a = year % 19, b = Math.floor(year / 100), c = year % 100;
+  const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4), k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const easterMonth = Math.floor((h + l - 7 * m + 114) / 31) - 1; // 0-indexed
+  const easterDay = ((h + l - 7 * m + 114) % 31) + 1;
+  const goodFriday = new Date(year, easterMonth, easterDay - 2);
+
+  const fmt = (dt) => {
+    const yy = dt.getFullYear();
+    const mm = String(dt.getMonth() + 1).padStart(2, '0');
+    const dd = String(dt.getDate()).padStart(2, '0');
+    return `${yy}-${mm}-${dd}`;
+  };
+
+  holidays.add(fmt(observe(0, 1)));           // New Year's Day
+  holidays.add(fmt(nthWeekday(0, 1, 3)));     // MLK Day (3rd Mon Jan)
+  holidays.add(fmt(nthWeekday(1, 1, 3)));     // Presidents' Day (3rd Mon Feb)
+  holidays.add(fmt(goodFriday));              // Good Friday
+  holidays.add(fmt(lastMonday(4)));           // Memorial Day (last Mon May)
+  holidays.add(fmt(observe(5, 19)));          // Juneteenth
+  holidays.add(fmt(observe(6, 4)));           // Independence Day
+  holidays.add(fmt(nthWeekday(8, 1, 1)));     // Labor Day (1st Mon Sep)
+  holidays.add(fmt(nthWeekday(10, 4, 4)));    // Thanksgiving (4th Thu Nov)
+  holidays.add(fmt(observe(11, 25)));         // Christmas
+
+  return holidays;
+}
+
 export function fillMissingPeriods(periods, fillMode) {
   if (!fillMode || fillMode === 'none' || !periods || periods.length === 0) return periods;
   const isDaily = /^\d{4}-\d{2}-\d{2}$/.test(periods[0]);
@@ -241,6 +308,16 @@ export function fillMissingPeriods(periods, fillMode) {
   // Anchor to local midnight to avoid timezone surprises across day boundaries
   const start = new Date(sorted[0] + 'T00:00:00');
   const end = new Date(sorted[sorted.length - 1] + 'T00:00:00');
+
+  // Pre-compute market holidays for all years in range
+  let marketHolidays = null;
+  if (fillMode === 'trading-days') {
+    marketHolidays = new Set();
+    for (let y = start.getFullYear(); y <= end.getFullYear(); y++) {
+      for (const h of usMarketHolidays(y)) marketHolidays.add(h);
+    }
+  }
+
   const out = [];
   const cur = new Date(start);
   while (cur <= end) {
@@ -253,7 +330,8 @@ export function fillMissingPeriods(periods, fillMode) {
     const shouldInclude =
       present.has(iso) ||
       fillMode === 'all-days' ||
-      (fillMode === 'weekdays-only' && !isWeekend);
+      (fillMode === 'weekdays-only' && !isWeekend) ||
+      (fillMode === 'trading-days' && !isWeekend && !marketHolidays.has(iso));
     if (shouldInclude) out.push(iso);
     cur.setDate(cur.getDate() + 1);
   }
