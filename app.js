@@ -3678,7 +3678,9 @@ var __app = (() => {
       borderRadius: "8px",
       marginBottom: "12px",
       fontSize: "12px",
-      color: c.text
+      color: c.text,
+      transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease",
+      animation: "bannerFadeIn 0.25s ease"
     } }, children);
   }
   function Spinner() {
@@ -3745,6 +3747,950 @@ var __app = (() => {
       },
       "Connect to Database"
     ))));
+  }
+
+  // src/components/ProTipBanner.js
+  var navHover = {
+    onMouseEnter: (e) => {
+      e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.9)";
+      e.currentTarget.style.transform = "scale(1.1)";
+    },
+    onMouseLeave: (e) => {
+      e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.6)";
+      e.currentTarget.style.transform = "scale(1)";
+    }
+  };
+  function ProTipBanner({ styles, PRO_TIPS: PRO_TIPS2, currentTipIndex, setCurrentTipIndex }) {
+    const tip = PRO_TIPS2[currentTipIndex];
+    return /* @__PURE__ */ React.createElement("div", { style: styles.proTipBanner }, /* @__PURE__ */ React.createElement("span", { style: styles.proTipLabel }, "ProTip"), /* @__PURE__ */ React.createElement("span", { style: styles.proTipIcon }, tip.icon), /* @__PURE__ */ React.createElement("div", { style: styles.proTipContent }, /* @__PURE__ */ React.createElement("span", { style: styles.proTipTitle }, tip.title, ":"), /* @__PURE__ */ React.createElement("span", { style: styles.proTipText }, tip.text)), /* @__PURE__ */ React.createElement("div", { style: styles.proTipNavigation }, /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        style: styles.proTipNavButton,
+        onClick: () => setCurrentTipIndex(
+          (prev) => prev === 0 ? PRO_TIPS2.length - 1 : prev - 1
+        ),
+        ...navHover,
+        title: "Previous tip"
+      },
+      "\u2039"
+    ), /* @__PURE__ */ React.createElement("span", { style: styles.proTipCounter }, currentTipIndex + 1, "/", PRO_TIPS2.length), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        style: styles.proTipNavButton,
+        onClick: () => setCurrentTipIndex((prev) => (prev + 1) % PRO_TIPS2.length),
+        ...navHover,
+        title: "Next tip"
+      },
+      "\u203A"
+    )));
+  }
+
+  // src/filterUtils.js
+  function buildPFilters(dynamicFilters, booleanColumns) {
+    const out = {};
+    Object.keys(dynamicFilters).forEach((filterKey) => {
+      const vals = dynamicFilters[filterKey];
+      if (!vals || vals.length === 0) return;
+      const colName = filterKey.replace(/^dim_/, "").replace(/_filter$/, "");
+      if (booleanColumns && booleanColumns.has(colName)) {
+        out[colName] = vals.map((v) => {
+          const suffix = v.replace(colName + "_", "");
+          return suffix === "true" ? true : suffix === "false" ? false : v;
+        });
+      } else {
+        out[colName] = vals;
+      }
+    });
+    return out;
+  }
+  function getActiveViewConfig(view, VIEW_CONFIG) {
+    return view !== "Overall" ? VIEW_CONFIG[view] : null;
+  }
+  var tabIconHover = {
+    onMouseEnter: (e) => {
+      e.target.style.opacity = 1;
+    },
+    onMouseLeave: (e) => {
+      e.target.style.opacity = 0.6;
+    }
+  };
+
+  // src/components/TabBar.js
+  function TabBar({
+    // data
+    tabs,
+    activeTabId,
+    activeTab,
+    configId,
+    liveMetricConfig,
+    liveRowCount,
+    liveDataTruncated,
+    liveDataLoading,
+    liveDataError,
+    isDarkMode,
+    isCreatorMode,
+    // transient UI state
+    renamingTabId,
+    renameText,
+    showAddTab,
+    newTabDataset,
+    showUnlockPrompt,
+    unlockSecret,
+    unlockError,
+    // setters
+    setRenamingTabId,
+    setRenameText,
+    setShowAddTab,
+    setNewTabDataset,
+    setShowUnlockPrompt,
+    setUnlockSecret,
+    setUnlockError,
+    setIsCreatorMode,
+    setShowMetricsEditor,
+    setMetricsEditorDraft,
+    setMetricsEditorError,
+    setExpandedMetricSlot,
+    // callbacks
+    switchTab,
+    addTab,
+    removeTab,
+    renameTab,
+    moveTab,
+    // refs
+    creatorTimerRef
+  }) {
+    return /* @__PURE__ */ React.createElement("div", { style: {
+      display: "flex",
+      alignItems: "center",
+      gap: "0",
+      marginBottom: "12px",
+      borderBottom: `2px solid ${isDarkMode ? "#374151" : "#e5e7eb"}`
+    } }, tabs.map((tab) => {
+      const isActive = tab.id === activeTabId;
+      const isRenaming = renamingTabId === tab.id;
+      return /* @__PURE__ */ React.createElement(
+        "div",
+        {
+          key: tab.id,
+          style: {
+            display: "flex",
+            alignItems: "center",
+            gap: "4px",
+            padding: "8px 16px",
+            fontSize: "13px",
+            fontWeight: isActive ? 600 : 400,
+            cursor: "pointer",
+            userSelect: "none",
+            position: "relative",
+            color: isActive ? isDarkMode ? "#f3f4f6" : "#111827" : isDarkMode ? "#9ca3af" : "#6b7280",
+            backgroundColor: isActive ? isDarkMode ? "rgba(99,102,241,0.1)" : "rgba(99,102,241,0.05)" : "transparent",
+            borderBottom: isActive ? `2px solid ${isDarkMode ? "#818cf8" : "#6366f1"}` : "2px solid transparent",
+            marginBottom: "-2px",
+            borderRadius: "6px 6px 0 0",
+            transition: "all 0.15s ease"
+          },
+          onClick: () => {
+            if (!isRenaming) switchTab(tab.id);
+          },
+          onDoubleClick: () => {
+            if (isCreatorMode || !configId) {
+              setRenamingTabId(tab.id);
+              setRenameText(tab.name);
+            }
+          }
+        },
+        isActive && /* @__PURE__ */ React.createElement("span", { style: {
+          width: "6px",
+          height: "6px",
+          borderRadius: "50%",
+          backgroundColor: liveDataLoading ? "#818cf8" : liveDataError ? "#ef4444" : "#10b981",
+          display: "inline-block",
+          flexShrink: 0,
+          transition: "background-color 0.2s ease"
+        } }),
+        isRenaming ? /* @__PURE__ */ React.createElement(
+          "input",
+          {
+            autoFocus: true,
+            value: renameText,
+            onChange: (e) => setRenameText(e.target.value),
+            onBlur: () => {
+              if (renameText.trim()) renameTab(tab.id, renameText.trim());
+              setRenamingTabId(null);
+            },
+            onKeyDown: (e) => {
+              if (e.key === "Enter") {
+                if (renameText.trim()) renameTab(tab.id, renameText.trim());
+                setRenamingTabId(null);
+              }
+              if (e.key === "Escape") setRenamingTabId(null);
+            },
+            onClick: (e) => e.stopPropagation(),
+            style: {
+              background: "transparent",
+              border: "none",
+              borderBottom: `1px solid ${isDarkMode ? "#818cf8" : "#6366f1"}`,
+              color: "inherit",
+              fontSize: "13px",
+              fontWeight: 600,
+              padding: "0 2px",
+              width: Math.max(60, renameText.length * 8) + "px",
+              outline: "none"
+            }
+          }
+        ) : /* @__PURE__ */ React.createElement("span", null, tab.name),
+        isActive && liveRowCount > 0 && !liveDataLoading && /* @__PURE__ */ React.createElement("span", { style: { fontSize: "11px", color: isDarkMode ? "#6b7280" : "#9ca3af", marginLeft: "4px" } }, "(", liveRowCount.toLocaleString(), liveDataTruncated ? "!" : "", ")"),
+        tabs.length > 1 && isActive && (isCreatorMode || !configId) && /* @__PURE__ */ React.createElement(React.Fragment, null, tabs.indexOf(tab) > 0 && /* @__PURE__ */ React.createElement(
+          "button",
+          {
+            onClick: (e) => {
+              e.stopPropagation();
+              moveTab(tab.id, -1);
+            },
+            style: { background: "none", border: "none", color: isDarkMode ? "#6b7280" : "#9ca3af", cursor: "pointer", fontSize: "10px", lineHeight: 1, padding: "0 1px", marginLeft: "4px", opacity: 0.6, transition: "opacity 0.15s ease" },
+            ...tabIconHover,
+            title: "Move left"
+          },
+          "\u25C0"
+        ), tabs.indexOf(tab) < tabs.length - 1 && /* @__PURE__ */ React.createElement(
+          "button",
+          {
+            onClick: (e) => {
+              e.stopPropagation();
+              moveTab(tab.id, 1);
+            },
+            style: { background: "none", border: "none", color: isDarkMode ? "#6b7280" : "#9ca3af", cursor: "pointer", fontSize: "10px", lineHeight: 1, padding: "0 1px", opacity: 0.6, transition: "opacity 0.15s ease" },
+            ...tabIconHover,
+            title: "Move right"
+          },
+          "\u25B6"
+        )),
+        tabs.length > 1 && (isCreatorMode || !configId) && /* @__PURE__ */ React.createElement(
+          "button",
+          {
+            onClick: (e) => {
+              e.stopPropagation();
+              removeTab(tab.id);
+            },
+            style: {
+              background: "none",
+              border: "none",
+              color: isDarkMode ? "#6b7280" : "#9ca3af",
+              cursor: "pointer",
+              fontSize: "14px",
+              lineHeight: 1,
+              padding: "0 2px",
+              marginLeft: "4px",
+              opacity: 0.6,
+              display: "flex",
+              alignItems: "center",
+              transition: "opacity 0.15s ease"
+            },
+            ...tabIconHover
+          },
+          "\xD7"
+        )
+      );
+    }), (isCreatorMode || !configId) && /* @__PURE__ */ React.createElement("div", { style: { position: "relative" }, "data-add-tab": true }, /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: () => setShowAddTab(!showAddTab),
+        style: {
+          background: "none",
+          border: "none",
+          color: isDarkMode ? "#6b7280" : "#9ca3af",
+          cursor: "pointer",
+          fontSize: "18px",
+          lineHeight: 1,
+          padding: "6px 12px",
+          display: "flex",
+          alignItems: "center"
+        },
+        title: "Add dataset tab"
+      },
+      "+"
+    ), showAddTab && /* @__PURE__ */ React.createElement("div", { style: {
+      position: "absolute",
+      top: "100%",
+      left: 0,
+      zIndex: 100,
+      backgroundColor: isDarkMode ? "#1f2937" : "#ffffff",
+      border: `1px solid ${isDarkMode ? "#374151" : "#e5e7eb"}`,
+      borderRadius: "8px",
+      padding: "12px",
+      boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+      minWidth: "200px"
+    } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "12px", fontWeight: 600, marginBottom: "8px", color: isDarkMode ? "#d1d5db" : "#374151" } }, "New Tab"), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        autoFocus: true,
+        placeholder: "Tab name",
+        value: newTabDataset,
+        onChange: (e) => setNewTabDataset(e.target.value),
+        onKeyDown: (e) => {
+          if (e.key === "Enter" && newTabDataset.trim()) {
+            addTab(newTabDataset.trim());
+            setNewTabDataset("");
+            setShowAddTab(false);
+          }
+          if (e.key === "Escape") {
+            setShowAddTab(false);
+            setNewTabDataset("");
+          }
+        },
+        style: {
+          width: "100%",
+          padding: "6px 10px",
+          borderRadius: "6px",
+          fontSize: "13px",
+          border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`,
+          backgroundColor: isDarkMode ? "#111827" : "#f9fafb",
+          color: isDarkMode ? "#f3f4f6" : "#111827",
+          outline: "none",
+          boxSizing: "border-box"
+        }
+      }
+    ), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", color: isDarkMode ? "#6b7280" : "#9ca3af", marginTop: "6px" } }, "Name your tab, then set dataset in Configure Metrics"))), (isCreatorMode || !configId) && /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: () => {
+          setMetricsEditorDraft({ ...liveMetricConfig || {}, dataset: activeTab?.dataset || "" });
+          setMetricsEditorError("");
+          setExpandedMetricSlot(null);
+          setShowMetricsEditor(true);
+        },
+        style: {
+          marginLeft: "auto",
+          padding: "4px 12px",
+          borderRadius: "6px",
+          border: `1px solid ${isDarkMode ? "rgba(16,185,129,0.4)" : "rgba(16,185,129,0.5)"}`,
+          background: "transparent",
+          color: isDarkMode ? "#6ee7b7" : "#065f46",
+          cursor: "pointer",
+          fontSize: "11px",
+          fontWeight: 500,
+          whiteSpace: "nowrap"
+        }
+      },
+      "Configure Metrics"
+    ), configId && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: isCreatorMode ? "0" : "auto", position: "relative" } }, /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: () => {
+          if (isCreatorMode) {
+            setIsCreatorMode(false);
+            if (creatorTimerRef.current) clearTimeout(creatorTimerRef.current);
+          } else if (getEditSecret(configId)) {
+            setIsCreatorMode(true);
+          } else {
+            setShowUnlockPrompt(!showUnlockPrompt);
+            setUnlockError("");
+            setUnlockSecret("");
+          }
+        },
+        title: isCreatorMode ? "Lock editing (auto-locks after 2 min)" : "Unlock editing",
+        style: {
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          padding: "4px 8px",
+          color: isCreatorMode ? isDarkMode ? "#6ee7b7" : "#065f46" : isDarkMode ? "#6b7280" : "#9ca3af",
+          fontSize: "14px",
+          display: "flex",
+          alignItems: "center"
+        }
+      },
+      isCreatorMode ? "\u{1F513}" : "\u{1F512}"
+    ), showUnlockPrompt && !isCreatorMode && /* @__PURE__ */ React.createElement("div", { style: {
+      position: "absolute",
+      top: "100%",
+      right: 0,
+      zIndex: 100,
+      backgroundColor: isDarkMode ? "#1f2937" : "#ffffff",
+      border: `1px solid ${isDarkMode ? "#374151" : "#e5e7eb"}`,
+      borderRadius: "8px",
+      padding: "12px",
+      boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+      minWidth: "240px"
+    } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "12px", fontWeight: 600, marginBottom: "8px", color: isDarkMode ? "#d1d5db" : "#374151" } }, "Enter Edit Key"), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        autoFocus: true,
+        type: "password",
+        placeholder: "Paste edit key...",
+        value: unlockSecret,
+        onChange: (e) => setUnlockSecret(e.target.value),
+        onKeyDown: (e) => {
+          if (e.key === "Escape") setShowUnlockPrompt(false);
+          if (e.key === "Enter" && unlockSecret.trim()) {
+            updateConfig(configId, unlockSecret.trim(), {}).then((ok) => {
+              if (ok) {
+                setEditSecret(configId, unlockSecret.trim());
+                setIsCreatorMode(true);
+                setShowUnlockPrompt(false);
+              } else {
+                setUnlockError("Invalid key");
+              }
+            }).catch(() => setUnlockError("Failed to verify"));
+          }
+        },
+        style: {
+          width: "100%",
+          padding: "6px 10px",
+          borderRadius: "6px",
+          fontSize: "13px",
+          boxSizing: "border-box",
+          border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`,
+          backgroundColor: isDarkMode ? "#111827" : "#f9fafb",
+          color: isDarkMode ? "#f3f4f6" : "#111827",
+          outline: "none"
+        }
+      }
+    ), unlockError && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", color: "#ef4444", marginTop: "4px" } }, unlockError), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", color: isDarkMode ? "#6b7280" : "#9ca3af", marginTop: "6px" } }, "Press Enter to unlock editing"))));
+  }
+
+  // src/components/ConnectModal.js
+  var SUPABASE_FIELDS = [
+    { key: "supabaseUrl", label: "Supabase URL", placeholder: "https://your-project.supabase.co" },
+    { key: "apiKey", label: "API Key (anon)", placeholder: "eyJhbGciOi...", password: true },
+    { key: "dataset", label: "Table (schema.table)", placeholder: "public_analytics.fct_job_metrics" }
+  ];
+  var FASTAPI_FIELDS = [
+    { key: "apiUrl", label: "API URL", placeholder: "https://your-server.com/dash-api" },
+    { key: "apiSecret", label: "API Secret", placeholder: "your-secret", password: true },
+    { key: "connection", label: "Connection Name", placeholder: "zbt" },
+    { key: "dataset", label: "Table (schema.table)", placeholder: "analytics.signals" }
+  ];
+  function ConnectModal({
+    styles,
+    isDarkMode,
+    connectForm,
+    setConnectForm,
+    connectError,
+    setConnectError,
+    connectSaving,
+    setConnectSaving,
+    setShowConnectModal
+  }) {
+    const isSupabase = connectForm.connectionType !== "fastapi";
+    const fields = isSupabase ? SUPABASE_FIELDS : FASTAPI_FIELDS;
+    const canSubmit = isSupabase ? connectForm.supabaseUrl && connectForm.apiKey && connectForm.dataset : connectForm.apiUrl && connectForm.apiSecret && connectForm.connection && connectForm.dataset;
+    const handleConnect = async () => {
+      setConnectError("");
+      setConnectSaving(true);
+      try {
+        let connectionJson, testData;
+        if (isSupabase) {
+          const testRes = await fetch(connectForm.supabaseUrl.replace(/\/+$/, "") + "/rest/v1/rpc/query_dataset", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "apikey": connectForm.apiKey, "Authorization": "Bearer " + connectForm.apiKey },
+            body: JSON.stringify({ p_table: connectForm.dataset, p_action: "schema" })
+          });
+          if (!testRes.ok) throw new Error("Connection failed (HTTP " + testRes.status + "). Check your URL and API key.");
+          testData = await testRes.json();
+          if (testData.error) throw new Error(testData.error);
+          connectionJson = { supabaseUrl: connectForm.supabaseUrl.replace(/\/+$/, ""), apiKey: connectForm.apiKey, dataset: connectForm.dataset };
+        } else {
+          const testRes = await fetch(connectForm.apiUrl.replace(/\/+$/, "") + "/query", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Authorization": "Bearer " + connectForm.apiSecret },
+            body: JSON.stringify({ connection: connectForm.connection, table: connectForm.dataset, action: "schema" })
+          });
+          if (!testRes.ok) {
+            const errBody = await testRes.json().catch(() => ({}));
+            throw new Error(errBody.detail || "Connection failed (HTTP " + testRes.status + ")");
+          }
+          testData = await testRes.json();
+          if (testData.error) throw new Error(testData.error);
+          connectionJson = { connectionType: "fastapi", apiUrl: connectForm.apiUrl.replace(/\/+$/, ""), apiSecret: connectForm.apiSecret, connection: connectForm.connection, dataset: connectForm.dataset };
+        }
+        const tabsJson = [{ id: "tab_1", name: connectForm.dataset, dataset: connectForm.dataset, metricConfig: null }];
+        const result = await createConfig({ name: connectForm.dataset, connectionJson, tabsJson });
+        setEditSecret(result.id, result.editSecret);
+        window.location.hash = "#/" + result.id;
+        window.location.reload();
+      } catch (err) {
+        setConnectError(err.message);
+      }
+      setConnectSaving(false);
+    };
+    return /* @__PURE__ */ React.createElement("div", { style: styles.shareModal, onClick: (e) => {
+      if (e.target === e.currentTarget) setShowConnectModal(false);
+    } }, /* @__PURE__ */ React.createElement("div", { style: { ...styles.shareModalContent, maxWidth: "440px" } }, /* @__PURE__ */ React.createElement("div", { style: styles.shareModalHeader }, /* @__PURE__ */ React.createElement("div", { style: styles.shareModalTitle }, "Connect to Database"), /* @__PURE__ */ React.createElement("button", { style: styles.shareModalClose, onClick: () => setShowConnectModal(false) }, "\xD7")), /* @__PURE__ */ React.createElement("div", { style: { padding: "4px 0 16px" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: "4px", marginBottom: "16px", padding: "2px", borderRadius: "8px", background: isDarkMode ? "#1f2937" : "#f3f4f6" } }, [{ value: "supabase", label: "Supabase" }, { value: "fastapi", label: "Direct Postgres" }].map((opt) => /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        key: opt.value,
+        onClick: () => setConnectForm((prev) => ({ ...prev, connectionType: opt.value })),
+        style: {
+          flex: 1,
+          padding: "6px 12px",
+          borderRadius: "6px",
+          fontSize: "12px",
+          fontWeight: 600,
+          cursor: "pointer",
+          border: "none",
+          background: connectForm.connectionType === opt.value ? isDarkMode ? "#374151" : "#ffffff" : "transparent",
+          color: connectForm.connectionType === opt.value ? isDarkMode ? "#f3f4f6" : "#111827" : isDarkMode ? "#9ca3af" : "#6b7280",
+          boxShadow: connectForm.connectionType === opt.value ? "0 1px 2px rgba(0,0,0,0.1)" : "none",
+          transition: "background-color 0.15s ease, color 0.15s ease"
+        }
+      },
+      opt.label
+    ))), /* @__PURE__ */ React.createElement("p", { style: { margin: "0 0 16px", fontSize: "12px", color: isDarkMode ? "#9ca3af" : "#6b7280" } }, isSupabase ? /* @__PURE__ */ React.createElement(React.Fragment, null, "Requires the ", /* @__PURE__ */ React.createElement("code", { style: { fontSize: "11px", padding: "1px 4px", borderRadius: "3px", background: isDarkMode ? "#1f2937" : "#f3f4f6" } }, "query_dataset"), " RPC function (see setup.sql).") : "Connect via dash-api proxy to any Postgres database."), fields.map((f) => /* @__PURE__ */ React.createElement("div", { key: f.key, style: { marginBottom: "12px" } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: "11px", fontWeight: 600, marginBottom: "4px", color: isDarkMode ? "#d1d5db" : "#374151" } }, f.label), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: f.password ? "password" : "text",
+        value: connectForm[f.key],
+        onChange: (e) => setConnectForm((prev) => ({ ...prev, [f.key]: e.target.value })),
+        placeholder: f.placeholder,
+        style: {
+          width: "100%",
+          padding: "8px 10px",
+          borderRadius: "6px",
+          fontSize: "13px",
+          boxSizing: "border-box",
+          border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`,
+          backgroundColor: isDarkMode ? "#111827" : "#f9fafb",
+          color: isDarkMode ? "#f3f4f6" : "#111827",
+          outline: "none"
+        }
+      }
+    ))), connectError && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "12px", color: "#ef4444", marginBottom: "12px" } }, connectError), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: "8px", justifyContent: "flex-end" } }, /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: () => setShowConnectModal(false),
+        style: {
+          padding: "6px 14px",
+          borderRadius: "6px",
+          fontSize: "12px",
+          cursor: "pointer",
+          border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`,
+          background: "transparent",
+          color: isDarkMode ? "#d1d5db" : "#374151"
+        }
+      },
+      "Cancel"
+    ), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        disabled: connectSaving || !canSubmit,
+        onClick: handleConnect,
+        style: {
+          padding: "6px 14px",
+          borderRadius: "6px",
+          fontSize: "12px",
+          cursor: "pointer",
+          fontWeight: 600,
+          border: "none",
+          background: !canSubmit ? isDarkMode ? "#374151" : "#e5e7eb" : "#6366f1",
+          color: !canSubmit ? isDarkMode ? "#6b7280" : "#9ca3af" : "#ffffff",
+          transition: "background-color 0.15s ease"
+        }
+      },
+      connectSaving ? "Connecting..." : "Connect & Save"
+    )))));
+  }
+
+  // src/components/ShareModal.js
+  function ShareModal({
+    styles,
+    isDarkMode,
+    shareCode,
+    isCreatorMode,
+    configId,
+    setShowShareModal
+  }) {
+    return /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        style: styles.shareModal,
+        onClick: (e) => {
+          if (e.target === e.currentTarget) setShowShareModal(false);
+        }
+      },
+      /* @__PURE__ */ React.createElement("div", { style: styles.shareModalContent }, /* @__PURE__ */ React.createElement("div", { style: styles.shareModalHeader }, /* @__PURE__ */ React.createElement("div", { style: styles.shareModalTitle }, "Share Chart Configuration"), /* @__PURE__ */ React.createElement("button", { style: styles.shareModalClose, onClick: () => setShowShareModal(false) }, "\xD7")), /* @__PURE__ */ React.createElement("div", { style: styles.shareCodeSection }, /* @__PURE__ */ React.createElement("label", { style: styles.shareCodeLabel }, "Your Share Link:"), /* @__PURE__ */ React.createElement("div", { style: styles.shareLinkContainer }, /* @__PURE__ */ React.createElement(
+        "a",
+        {
+          id: "share-link-anchor",
+          href: shareCode,
+          target: "_blank",
+          rel: "noopener noreferrer",
+          style: {
+            ...styles.shareLinkInput,
+            textDecoration: "none",
+            color: "#6366f1",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            padding: "10px 12px",
+            wordBreak: "break-all"
+          }
+        },
+        shareCode
+      ), /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          id: "copy-share-code-btn",
+          style: styles.shareCopyButton,
+          onClick: () => {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(shareCode).then(() => {
+                const btn = document.getElementById("copy-share-code-btn");
+                if (btn) {
+                  const orig = btn.textContent;
+                  btn.textContent = "Copied!";
+                  btn.style.backgroundColor = "#10b981";
+                  setTimeout(() => {
+                    btn.textContent = orig;
+                    btn.style.backgroundColor = "#6366f1";
+                  }, 2e3);
+                }
+              }).catch((e) => logger_default.error("Failed to copy:", e));
+            }
+          }
+        },
+        "Copy Link"
+      )), /* @__PURE__ */ React.createElement("div", { style: styles.shareInstructions }, /* @__PURE__ */ React.createElement("p", { style: { margin: "8px 0 0 0", fontSize: "12px", color: "#6b7280" } }, "Share this link. Recipients can view and explore the dashboard from this exact view.")), isCreatorMode && configId && (() => {
+        const secret = getEditSecret(configId);
+        if (!secret) return null;
+        return /* @__PURE__ */ React.createElement("div", { style: {
+          marginTop: "12px",
+          padding: "10px 12px",
+          borderRadius: "6px",
+          background: isDarkMode ? "rgba(99,102,241,0.08)" : "rgba(99,102,241,0.05)",
+          border: `1px solid ${isDarkMode ? "rgba(99,102,241,0.2)" : "rgba(99,102,241,0.15)"}`
+        } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", fontWeight: 600, color: isDarkMode ? "#a5b4fc" : "#4338ca", marginBottom: "4px" } }, "Edit Key (for managing from other devices)"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px" } }, /* @__PURE__ */ React.createElement("code", { style: {
+          flex: 1,
+          fontSize: "11px",
+          padding: "4px 8px",
+          borderRadius: "4px",
+          background: isDarkMode ? "#111827" : "#f3f4f6",
+          color: isDarkMode ? "#d1d5db" : "#374151",
+          wordBreak: "break-all",
+          userSelect: "all"
+        } }, secret), /* @__PURE__ */ React.createElement(
+          "button",
+          {
+            id: "copy-edit-key-btn",
+            onClick: () => {
+              navigator.clipboard.writeText(secret).then(() => {
+                const btn = document.getElementById("copy-edit-key-btn");
+                if (btn) {
+                  const orig = btn.textContent;
+                  btn.textContent = "Copied!";
+                  setTimeout(() => {
+                    btn.textContent = orig;
+                  }, 1500);
+                }
+              });
+            },
+            style: {
+              padding: "3px 8px",
+              borderRadius: "4px",
+              fontSize: "10px",
+              cursor: "pointer",
+              border: `1px solid ${isDarkMode ? "rgba(99,102,241,0.3)" : "rgba(99,102,241,0.3)"}`,
+              background: "transparent",
+              color: isDarkMode ? "#a5b4fc" : "#4338ca",
+              whiteSpace: "nowrap"
+            }
+          },
+          "Copy"
+        )), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "10px", color: isDarkMode ? "#6b7280" : "#9ca3af", marginTop: "4px" } }, "Paste this into the \u2699 gear icon on another device to unlock editing."));
+      })()))
+    );
+  }
+
+  // src/components/DataSummaryPanel.js
+  function DataSummaryPanel({
+    styles,
+    showDataSummary,
+    setShowDataSummary,
+    dataFrequency,
+    metric,
+    view,
+    dateRange,
+    liveRowCount,
+    filteredData,
+    periods,
+    FILTER_CONFIG,
+    formatFilterName: formatFilterName2,
+    getShortFilterContext,
+    formatMetric,
+    calculateMetric,
+    displayedInsights,
+    filterTimeRef,
+    renderStartTime,
+    renderCountRef,
+    cleanedQueryData
+  }) {
+    return /* @__PURE__ */ React.createElement("div", { style: styles.summaryContainer }, /* @__PURE__ */ React.createElement("h4", { style: styles.summaryTitle, onClick: () => setShowDataSummary(!showDataSummary) }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: "12px" } }, showDataSummary ? "\u25BC" : "\u25B6"), "Data Summary"), showDataSummary && /* @__PURE__ */ React.createElement("div", { style: styles.summaryGrid }, /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Date Aggregation:"), " ", dataFrequency), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Metric:"), " ", metric), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Split By Dimension:"), " ", view), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Date Range:"), " ", dateRange), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Total Records:"), " ", (liveRowCount || filteredData.length).toLocaleString()), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Period Range:"), " ", periods.length > 0 ? periods[0] + " to " + periods[periods.length - 1] : "No data"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Active Filters:"), " ", FILTER_CONFIG.flatMap(({ state, formatValue, key }) => {
+      if (state.length === 0) return [];
+      return state.map(
+        (val) => formatValue ? formatValue(val) : formatFilterName2(val)
+      );
+    }).join(", ") || "None"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Filter Context:"), " ", getShortFilterContext()), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Market Size:"), " ", formatMetric(calculateMetric(filteredData))), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Solo Insights Found:"), " ", Object.values(displayedInsights.basicInsights).flat().length), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Data Filter Time:"), " ", filterTimeRef.current.toFixed(2), "ms"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Render Time:"), " ", (performance.now() - renderStartTime).toFixed(2), "ms"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Render Count:"), " ", renderCountRef.current), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Raw Data Rows:"), " ", cleanedQueryData.rows ? cleanedQueryData.rows.length.toLocaleString() : 0), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Filtered Rows:"), " ", filteredData.length.toLocaleString()), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Cross Insights Found:"), " ", Object.values(displayedInsights.advancedInsights).flat().length)));
+  }
+
+  // src/components/SaveViewModal.js
+  function SaveViewModal({
+    styles,
+    setShowSaveViewModal,
+    saveViewName,
+    setSaveViewName,
+    saveViewError,
+    setSaveViewError,
+    saveViewSuccess,
+    setSaveViewSuccess,
+    saveViewOwnerType,
+    setSaveViewOwnerType,
+    saveViewCustomOwner,
+    setSaveViewCustomOwner,
+    username,
+    teamName,
+    handleSaveView
+  }) {
+    return /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        style: styles.shareModal,
+        onClick: (e) => {
+          if (e.target === e.currentTarget) setShowSaveViewModal(false);
+        }
+      },
+      /* @__PURE__ */ React.createElement("div", { style: styles.shareModalContent }, /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          style: styles.shareModalClose,
+          onClick: () => {
+            setShowSaveViewModal(false);
+            setSaveViewError("");
+            setSaveViewSuccess("");
+          }
+        },
+        "\xD7"
+      ), /* @__PURE__ */ React.createElement("div", { style: styles.shareCodeSection }, /* @__PURE__ */ React.createElement("div", { style: styles.shareInstructions }, /* @__PURE__ */ React.createElement("p", { style: { margin: "0 0 16px 0", fontSize: "11px", color: "#9ca3af", fontStyle: "italic" } }, 'Note: Saved views will appear in the "Load Saved View" dropdown after approximately 1 hour, once the Google Sheet data is refreshed in the database.')), /* @__PURE__ */ React.createElement("div", { style: styles.marginBottom16 }, /* @__PURE__ */ React.createElement("label", { style: styles.shareCodeLabel }, "View Name:"), /* @__PURE__ */ React.createElement(
+        "input",
+        {
+          type: "text",
+          value: saveViewName,
+          onChange: (e) => {
+            setSaveViewName(e.target.value);
+            setSaveViewError("");
+          },
+          placeholder: "Enter a name for this view...",
+          style: { ...styles.pasteCodeInput, width: "100%" }
+        }
+      )), /* @__PURE__ */ React.createElement("div", { style: styles.marginBottom16 }, /* @__PURE__ */ React.createElement("label", { style: styles.shareCodeLabel }, "Save as:"), /* @__PURE__ */ React.createElement("div", { style: styles.flexGap12Mt8 }, /* @__PURE__ */ React.createElement("label", { style: styles.radioLabel }, /* @__PURE__ */ React.createElement(
+        "input",
+        {
+          type: "radio",
+          value: "username",
+          checked: saveViewOwnerType === "username",
+          onChange: (e) => setSaveViewOwnerType(e.target.value),
+          style: styles.marginRight6,
+          disabled: !username
+        }
+      ), username || "Username (not available)"), /* @__PURE__ */ React.createElement("label", { style: styles.radioLabel }, /* @__PURE__ */ React.createElement(
+        "input",
+        {
+          type: "radio",
+          value: "team",
+          checked: saveViewOwnerType === "team",
+          onChange: (e) => setSaveViewOwnerType(e.target.value),
+          style: styles.marginRight6,
+          disabled: !teamName
+        }
+      ), teamName || "Team (not available)"), /* @__PURE__ */ React.createElement("label", { style: styles.radioLabel }, /* @__PURE__ */ React.createElement(
+        "input",
+        {
+          type: "radio",
+          value: "custom",
+          checked: saveViewOwnerType === "custom",
+          onChange: (e) => setSaveViewOwnerType(e.target.value),
+          style: styles.marginRight6
+        }
+      ), "Custom"))), saveViewOwnerType === "custom" && /* @__PURE__ */ React.createElement("div", { style: styles.marginBottom16 }, /* @__PURE__ */ React.createElement("label", { style: styles.shareCodeLabel }, "Custom Owner:"), /* @__PURE__ */ React.createElement(
+        "input",
+        {
+          type: "text",
+          value: saveViewCustomOwner,
+          onChange: (e) => {
+            setSaveViewCustomOwner(e.target.value);
+            setSaveViewError("");
+          },
+          placeholder: "Enter custom owner name...",
+          style: { ...styles.pasteCodeInput, width: "100%" }
+        }
+      )), saveViewError && /* @__PURE__ */ React.createElement("div", { style: { color: "#ef4444", fontSize: "13px", marginBottom: "12px", padding: "8px", backgroundColor: "#fee2e2", borderRadius: "4px" } }, saveViewError), saveViewSuccess && /* @__PURE__ */ React.createElement("div", { style: { color: "#10b981", fontSize: "13px", marginBottom: "12px", padding: "8px", backgroundColor: "#d1fae5", borderRadius: "4px" } }, saveViewSuccess), /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          style: { ...styles.shareLoadButton, width: "100%" },
+          onClick: handleSaveView
+        },
+        "Save View"
+      ), /* @__PURE__ */ React.createElement("div", { style: styles.shareInstructions }, /* @__PURE__ */ React.createElement("p", { style: { margin: "12px 0 0 0", fontSize: "12px", color: "#6b7280" } }, "This will save your current chart configuration to Google Sheets. A new tab will open to complete the save (to bypass CSP/CORS restrictions). You can close the new tab after seeing the success message."))))
+    );
+  }
+
+  // src/components/InsightsPanel.js
+  function buildInsightsConfig(displayedInsights, theme, isDarkMode) {
+    return {
+      basic: {
+        title: "Single-dimension analysis of trends and patterns",
+        emptyMessage: "No significant patterns detected with current filters and data range. Try adjusting your date range or filters to see more insights.",
+        categories: [
+          {
+            key: "decomposition",
+            title: "Investigation Decomposition",
+            tooltipText: "Breaks down the investigation to show which sub-segments are driving the observed performance. Explains what's behind the trend or anomaly you're investigating.",
+            colors: {
+              borderColor: "#10b981",
+              backgroundColor: isDarkMode ? "rgba(16, 185, 129, 0.1)" : "rgba(16, 185, 129, 0.08)",
+              hoverBackgroundColor: isDarkMode ? "rgba(16, 185, 129, 0.15)" : "#d1fae5",
+              hoverBorderColor: "#10b981"
+            }
+          },
+          {
+            key: "performanceAlerts",
+            title: "Performance Alerts",
+            tooltipText: null,
+            colors: {
+              borderColor: theme.danger,
+              backgroundColor: theme.dangerBg,
+              hoverBackgroundColor: isDarkMode ? "rgba(239, 68, 68, 0.2)" : "#fee2e2",
+              hoverBorderColor: theme.danger
+            }
+          },
+          {
+            key: "overallTrends",
+            title: "Overall Trends",
+            tooltipText: null
+          },
+          {
+            key: "categoryTrends",
+            title: "Category Trends",
+            tooltipText: "Above/below avg. compares category growth rate to overall market growth rate. For example, if market grew 20% and category grew 30%, it's 10 percentage points above avg.",
+            colors: {
+              borderColor: theme.accentPrimary,
+              backgroundColor: theme.statBoxActiveBg,
+              hoverBackgroundColor: isDarkMode ? "rgba(129, 140, 248, 0.15)" : "#dbeafe",
+              hoverBorderColor: theme.accentPrimary
+            }
+          },
+          {
+            key: "shareShifts",
+            title: "Market Share Shifts",
+            tooltipText: "Above/below avg. compares category growth rate to overall market growth rate. For example, if market grew 20% and category grew 30%, it's 10 percentage points above avg.",
+            colors: {
+              borderColor: isDarkMode ? "#a78bfa" : "#8b5cf6",
+              backgroundColor: isDarkMode ? "rgba(139, 92, 246, 0.1)" : "rgba(139, 92, 246, 0.08)",
+              hoverBackgroundColor: isDarkMode ? "rgba(139, 92, 246, 0.15)" : "#f3e8ff",
+              hoverBorderColor: isDarkMode ? "#a78bfa" : "#8b5cf6"
+            }
+          },
+          {
+            key: "marketLeaders",
+            title: "Market Leaders",
+            tooltipText: null
+          }
+        ],
+        insights: displayedInsights.basicInsights
+      },
+      advanced: {
+        title: "Multi-attribute analysis across dimensions",
+        emptyMessage: "Advanced cross-dimensional insights will be displayed here when sufficient data patterns are detected across multiple attributes. Try using fewer filters to see cross-dimensional patterns.",
+        categories: [
+          {
+            key: "allTimeGrowth",
+            title: "Cross Insights Growth",
+            tooltipText: "Above/below avg. compares segment growth rate to overall market growth rate. For example, if market grew 20% and segment grew 30%, it's 10 percentage points above avg."
+          }
+        ],
+        insights: displayedInsights.advancedInsights
+      }
+    };
+  }
+  function InsightsPanel({
+    styles,
+    theme,
+    isDarkMode,
+    activeInsightsTab,
+    setActiveInsightsTab,
+    displayedInsights,
+    loadingInsights,
+    getShortFilterContext,
+    renderInsightCategory
+  }) {
+    const insightsConfigMemo = React.useMemo(
+      () => buildInsightsConfig(displayedInsights, theme, isDarkMode),
+      [displayedInsights, theme, isDarkMode]
+    );
+    return /* @__PURE__ */ React.createElement("div", { style: styles.leftPanel, "data-guide": "insights-panel" }, activeInsightsTab === null ? /* @__PURE__ */ React.createElement("div", { style: styles.insightsTabsContainer }, /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        style: styles.clickForInsightsButton,
+        onClick: () => setActiveInsightsTab("basic"),
+        onMouseEnter: (e) => {
+          e.currentTarget.style.opacity = "0.9";
+        },
+        onMouseLeave: (e) => {
+          e.currentTarget.style.opacity = "";
+        }
+      },
+      /* @__PURE__ */ React.createElement("span", { style: { fontSize: "16px" } }, "\u2728"),
+      "Click for Insights",
+      /* @__PURE__ */ React.createElement("span", { style: { fontSize: "16px" } }, "\u2728")
+    )) : /* @__PURE__ */ React.createElement("div", { style: styles.insightsTabsContainer }, /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        style: { ...styles.insightsTab, ...activeInsightsTab === "basic" ? styles.insightsTabActive : {} },
+        onClick: () => setActiveInsightsTab(activeInsightsTab === "basic" ? null : "basic")
+      },
+      "Solo Insights",
+      /* @__PURE__ */ React.createElement("span", { style: styles.tabCount }, Object.values(displayedInsights.basicInsights).flat().length)
+    ), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        style: { ...styles.insightsTab, ...activeInsightsTab === "advanced" ? styles.insightsTabActive : {} },
+        onClick: () => setActiveInsightsTab(activeInsightsTab === "advanced" ? null : "advanced")
+      },
+      "Cross Insights",
+      (activeInsightsTab === "advanced" || Object.values(displayedInsights.advancedInsights).flat().length > 0) && /* @__PURE__ */ React.createElement("span", { style: styles.tabCount }, Object.values(displayedInsights.advancedInsights).flat().length)
+    )), activeInsightsTab && (() => {
+      const insightsConfig = insightsConfigMemo;
+      const config = insightsConfig[activeInsightsTab];
+      if (!config) return null;
+      if (loadingInsights) {
+        return /* @__PURE__ */ React.createElement("div", { style: styles.structuredInsightsContainer }, /* @__PURE__ */ React.createElement("div", { style: {
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "40px",
+          color: "#6b7280"
+        } }, /* @__PURE__ */ React.createElement("div", { style: {
+          width: "40px",
+          height: "40px",
+          border: "4px solid #f3f4f6",
+          borderTop: "4px solid #3b82f6",
+          borderRadius: "50%",
+          animation: "spin 0.8s linear infinite",
+          marginBottom: "16px"
+        } }), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "14px", fontWeight: "500" } }, "Loading Insights..."), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "12px", marginTop: "8px" } }, "Analyzing patterns in your data")));
+      }
+      const processedInsights = config.insights;
+      const totalInsights = Object.values(processedInsights).flat().length;
+      return /* @__PURE__ */ React.createElement("div", { style: styles.structuredInsightsContainer }, /* @__PURE__ */ React.createElement("div", { style: styles.insightsContext }, getShortFilterContext()), /* @__PURE__ */ React.createElement("div", { style: styles.insightsSubtitle }, config.title), config.categories.map(
+        ({ key, title, tooltipText, colors }) => renderInsightCategory(
+          processedInsights[key],
+          title,
+          key,
+          tooltipText,
+          colors
+        )
+      ), totalInsights === 0 && /* @__PURE__ */ React.createElement("div", { style: styles.categorySection }, /* @__PURE__ */ React.createElement("div", { style: styles.insightText }, config.emptyMessage)));
+    })());
   }
 
   // src/styles.js
@@ -4334,19 +5280,24 @@ var __app = (() => {
         borderRadius: "6px"
       },
       filterDropdownTitle: {
-        fontSize: "13px",
+        fontSize: "14px",
         fontWeight: "500",
         color: theme.textSecondary,
         display: "flex",
         alignItems: "center",
         gap: "8px"
       },
-      filterDropdownChevron: { fontSize: "12px", color: theme.textTertiary },
+      filterDropdownChevron: {
+        fontSize: "12px",
+        color: theme.textTertiary,
+        transition: "transform 0.18s ease"
+      },
       filterDropdownContent: {
         maxHeight: "200px",
         overflowY: "auto",
         padding: "8px",
-        borderTop: `1px solid ${theme.borderPrimary}`
+        borderTop: `1px solid ${theme.borderPrimary}`,
+        animation: "dropdownSlideIn 0.18s ease"
       },
       filterSelectedCount: {
         fontSize: "11px",
@@ -4499,7 +5450,8 @@ var __app = (() => {
         gap: "6px",
         border: "none",
         fontSize: "12px",
-        cursor: "pointer"
+        cursor: "pointer",
+        transition: "background-color 0.15s ease, color 0.15s ease"
       },
       insightsTabActive: {
         backgroundColor: theme.accentPrimary,
@@ -4572,9 +5524,9 @@ var __app = (() => {
         minWidth: "16px"
       },
       insightText: {
-        fontSize: "12px",
+        fontSize: "13px",
         color: theme.textSecondary,
-        lineHeight: "1.4",
+        lineHeight: "1.55",
         flex: 1
       },
       summaryTitle: {
@@ -4730,7 +5682,10 @@ var __app = (() => {
         cursor: "pointer",
         borderRadius: "4px",
         fontWeight: "600",
-        backgroundColor: "#f0f9ff"
+        backgroundColor: "#f0f9ff",
+        borderLeft: `2px solid ${theme.accentPrimary}`,
+        paddingLeft: "6px",
+        transition: "background-color 0.15s ease, border-left-color 0.15s ease"
       },
       checkboxItemUnselected: {
         display: "flex",
@@ -4738,7 +5693,10 @@ var __app = (() => {
         padding: "6px 8px",
         cursor: "pointer",
         borderRadius: "4px",
-        backgroundColor: "transparent"
+        backgroundColor: "transparent",
+        borderLeft: "2px solid transparent",
+        paddingLeft: "6px",
+        transition: "background-color 0.15s ease, border-left-color 0.15s ease"
       },
       filterSuggestionItemSelected: {
         display: "flex",
@@ -6843,14 +7801,9 @@ var __app = (() => {
       if (dataSourceType === "csv" && csvRowsRef.current) {
         const grain2 = frequencyToGrain[dataFrequency] || "month";
         const dateCol2 = liveMetricConfig.dateColumn || "reporting_week";
-        const viewConfig2 = view !== "Overall" ? VIEW_CONFIG[view] : null;
+        const viewConfig2 = getActiveViewConfig(view, VIEW_CONFIG);
         const dimColumn2 = viewConfig2 ? viewConfig2.column : null;
-        const pFilters2 = {};
-        Object.keys(dynamicFilters).forEach((fk) => {
-          const vals = dynamicFilters[fk];
-          if (!vals || vals.length === 0) return;
-          pFilters2[fk.replace(/^dim_/, "").replace(/_filter$/, "")] = vals;
-        });
+        const pFilters2 = buildPFilters(dynamicFilters);
         const aggConfig = { metricConfig: liveMetricConfig, grain: grain2, dateColumn: dateCol2, filters: pFilters2 };
         const periodAggs = aggregateCsvPeriods(csvRowsRef.current, aggConfig);
         setLivePeriodAggregates(periodAggs);
@@ -6871,21 +7824,8 @@ var __app = (() => {
       const dateCol = liveMetricConfig.dateColumn || liveDateColumn;
       const rpcMetrics = buildRpcMetrics(liveMetricConfig);
       const serverWindow = computeServerDateWindow(liveMetricConfig, dateRange);
-      const pFilters = {};
-      Object.keys(dynamicFilters).forEach((filterKey) => {
-        const vals = dynamicFilters[filterKey];
-        if (!vals || vals.length === 0) return;
-        const colName = filterKey.replace(/^dim_/, "").replace(/_filter$/, "");
-        if (liveBooleanColumns.has(colName)) {
-          pFilters[colName] = vals.map((v) => {
-            const suffix = v.replace(colName + "_", "");
-            return suffix === "true" ? true : suffix === "false" ? false : v;
-          });
-        } else {
-          pFilters[colName] = vals;
-        }
-      });
-      const viewConfig = view !== "Overall" ? VIEW_CONFIG[view] : null;
+      const pFilters = buildPFilters(dynamicFilters, liveBooleanColumns);
+      const viewConfig = getActiveViewConfig(view, VIEW_CONFIG);
       const dimColumn = viewConfig ? viewConfig.column : null;
       const periodPromise = cachedQuery("data", {
         p_time_grain: grain,
@@ -6945,12 +7885,7 @@ var __app = (() => {
         const dateCol2 = liveMetricConfig.dateColumn || "reporting_week";
         const dimCols2 = visibleLiveDimensions.map((d) => d.name);
         if (dimCols2.length === 0) return;
-        const pFilters2 = {};
-        Object.keys(dynamicFilters).forEach((fk) => {
-          const vals = dynamicFilters[fk];
-          if (!vals || vals.length === 0) return;
-          pFilters2[fk.replace(/^dim_/, "").replace(/_filter$/, "")] = vals;
-        });
+        const pFilters2 = buildPFilters(dynamicFilters);
         const aggConfig = { metricConfig: liveMetricConfig, grain: grain2, dateColumn: dateCol2, filters: pFilters2 };
         const allDimAggs = aggregateAllDimensions(csvRowsRef.current, dimCols2, aggConfig);
         const merged2 = {};
@@ -6963,20 +7898,7 @@ var __app = (() => {
       const grain = frequencyToGrain[dataFrequency] || "month";
       const dateCol = liveMetricConfig.dateColumn || liveDateColumn;
       const rpcMetrics = buildRpcMetrics(liveMetricConfig);
-      const pFilters = {};
-      Object.keys(dynamicFilters).forEach((filterKey) => {
-        const vals = dynamicFilters[filterKey];
-        if (!vals || vals.length === 0) return;
-        const colName = filterKey.replace(/^dim_/, "").replace(/_filter$/, "");
-        if (liveBooleanColumns.has(colName)) {
-          pFilters[colName] = vals.map((v) => {
-            const suffix = v.replace(colName + "_", "");
-            return suffix === "true" ? true : suffix === "false" ? false : v;
-          });
-        } else {
-          pFilters[colName] = vals;
-        }
-      });
+      const pFilters = buildPFilters(dynamicFilters, liveBooleanColumns);
       const dimCols = visibleLiveDimensions.map((d) => d.name);
       if (dimCols.length === 0) return;
       const hasMetric3 = !!liveMetricConfig.derivedAggType || liveMetricConfig.derivedMode === "formula";
@@ -7021,6 +7943,7 @@ var __app = (() => {
         controller.abort();
       };
     }, [
+      liveSchemaReady,
       dataSourceType,
       activeInsightsTab,
       liveMetricConfig,
@@ -8715,9 +9638,19 @@ var __app = (() => {
         isAiCompany: isAiCompanyFilter,
         channel: channelFilter,
         productGroup: productGroupFilter,
-        productSub: productSubFilter
+        productSub: productSubFilter,
+        __dynamic: dynamicFilters
       };
-      const dimDataKey = Object.keys(liveInsightsDimAggs).sort().join(",");
+      const periodAggsKey = "p" + Object.keys(periodAggregates).length;
+      const dimAggsKey = "d" + Object.keys(dimensionAggregates || {}).filter((k) => k !== "_categoryTotals").length;
+      const insightsAggsKey = Object.keys(liveInsightsDimAggs).sort().map((col) => {
+        const cps = liveInsightsDimAggs[col] || {};
+        const cpKeys = Object.keys(cps).sort();
+        if (cpKeys.length === 0) return col + ":0";
+        const cats = Object.keys(cps[cpKeys[0]]).sort().join("|");
+        return col + ":" + cpKeys.length + ":" + cats;
+      }).join(",");
+      const dimDataKey = periodAggsKey + "|" + dimAggsKey + "|" + insightsAggsKey;
       const cacheKey = createInsightsCacheKey(
         metric,
         activeInsightsTab,
@@ -8762,6 +9695,8 @@ var __app = (() => {
       channelFilter,
       productGroupFilter,
       productSubFilter,
+      dynamicFilters,
+      // live-mode filters live here, not in the per-column vars above
       insightContext,
       // 🆕 CRITICAL: Must include insightContext so insights regenerate when drilling down
       periodAggregates,
@@ -9741,7 +10676,7 @@ var __app = (() => {
         selectedCategories: [...selectedCategories],
         categorySelectionMode,
         metricConfig: liveMetricConfig,
-        viewConfig: view !== "Overall" ? VIEW_CONFIG[view] : null,
+        viewConfig: getActiveViewConfig(view, VIEW_CONFIG),
         categoryColorMap: { ...categoryColorMap },
         activeOverlays: { ...activeOverlays },
         smaWindow,
@@ -10202,295 +11137,55 @@ var __app = (() => {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
           }
-        `), baseConnection && tabs.length > 0 && /* @__PURE__ */ React.createElement("div", { style: {
-      display: "flex",
-      alignItems: "center",
-      gap: "0",
-      marginBottom: "12px",
-      borderBottom: `2px solid ${isDarkMode ? "#374151" : "#e5e7eb"}`
-    } }, tabs.map((tab) => {
-      const isActive = tab.id === activeTabId;
-      const isRenaming = renamingTabId === tab.id;
-      return /* @__PURE__ */ React.createElement(
-        "div",
-        {
-          key: tab.id,
-          style: {
-            display: "flex",
-            alignItems: "center",
-            gap: "4px",
-            padding: "8px 16px",
-            fontSize: "13px",
-            fontWeight: isActive ? 600 : 400,
-            cursor: "pointer",
-            userSelect: "none",
-            position: "relative",
-            color: isActive ? isDarkMode ? "#f3f4f6" : "#111827" : isDarkMode ? "#9ca3af" : "#6b7280",
-            backgroundColor: isActive ? isDarkMode ? "rgba(99,102,241,0.1)" : "rgba(99,102,241,0.05)" : "transparent",
-            borderBottom: isActive ? `2px solid ${isDarkMode ? "#818cf8" : "#6366f1"}` : "2px solid transparent",
-            marginBottom: "-2px",
-            borderRadius: "6px 6px 0 0",
-            transition: "all 0.15s ease"
-          },
-          onClick: () => {
-            if (!isRenaming) switchTab(tab.id);
-          },
-          onDoubleClick: () => {
-            if (isCreatorMode || !configId) {
-              setRenamingTabId(tab.id);
-              setRenameText(tab.name);
-            }
+          @keyframes dropdownSlideIn {
+            from { opacity: 0; transform: translateY(-4px); }
+            to { opacity: 1; transform: translateY(0); }
           }
-        },
-        isActive && /* @__PURE__ */ React.createElement("span", { style: {
-          width: "6px",
-          height: "6px",
-          borderRadius: "50%",
-          backgroundColor: liveDataLoading ? "#818cf8" : liveDataError ? "#ef4444" : "#10b981",
-          display: "inline-block",
-          flexShrink: 0
-        } }),
-        isRenaming ? /* @__PURE__ */ React.createElement(
-          "input",
-          {
-            autoFocus: true,
-            value: renameText,
-            onChange: (e) => setRenameText(e.target.value),
-            onBlur: () => {
-              if (renameText.trim()) renameTab(tab.id, renameText.trim());
-              setRenamingTabId(null);
-            },
-            onKeyDown: (e) => {
-              if (e.key === "Enter") {
-                if (renameText.trim()) renameTab(tab.id, renameText.trim());
-                setRenamingTabId(null);
-              }
-              if (e.key === "Escape") setRenamingTabId(null);
-            },
-            onClick: (e) => e.stopPropagation(),
-            style: {
-              background: "transparent",
-              border: "none",
-              borderBottom: `1px solid ${isDarkMode ? "#818cf8" : "#6366f1"}`,
-              color: "inherit",
-              fontSize: "13px",
-              fontWeight: 600,
-              padding: "0 2px",
-              width: Math.max(60, renameText.length * 8) + "px",
-              outline: "none"
-            }
+          @keyframes bannerFadeIn {
+            from { opacity: 0; transform: translateY(-2px); }
+            to { opacity: 1; transform: translateY(0); }
           }
-        ) : /* @__PURE__ */ React.createElement("span", null, tab.name),
-        isActive && liveRowCount > 0 && !liveDataLoading && /* @__PURE__ */ React.createElement("span", { style: { fontSize: "11px", color: isDarkMode ? "#6b7280" : "#9ca3af", marginLeft: "4px" } }, "(", liveRowCount.toLocaleString(), liveDataTruncated ? "!" : "", ")"),
-        tabs.length > 1 && isActive && (isCreatorMode || !configId) && /* @__PURE__ */ React.createElement(React.Fragment, null, tabs.indexOf(tab) > 0 && /* @__PURE__ */ React.createElement(
-          "button",
-          {
-            onClick: (e) => {
-              e.stopPropagation();
-              moveTab(tab.id, -1);
-            },
-            style: { background: "none", border: "none", color: isDarkMode ? "#6b7280" : "#9ca3af", cursor: "pointer", fontSize: "10px", lineHeight: 1, padding: "0 1px", marginLeft: "4px", opacity: 0.6 },
-            onMouseEnter: (e) => e.target.style.opacity = 1,
-            onMouseLeave: (e) => e.target.style.opacity = 0.6,
-            title: "Move left"
-          },
-          "\u25C0"
-        ), tabs.indexOf(tab) < tabs.length - 1 && /* @__PURE__ */ React.createElement(
-          "button",
-          {
-            onClick: (e) => {
-              e.stopPropagation();
-              moveTab(tab.id, 1);
-            },
-            style: { background: "none", border: "none", color: isDarkMode ? "#6b7280" : "#9ca3af", cursor: "pointer", fontSize: "10px", lineHeight: 1, padding: "0 1px", opacity: 0.6 },
-            onMouseEnter: (e) => e.target.style.opacity = 1,
-            onMouseLeave: (e) => e.target.style.opacity = 0.6,
-            title: "Move right"
-          },
-          "\u25B6"
-        )),
-        tabs.length > 1 && (isCreatorMode || !configId) && /* @__PURE__ */ React.createElement(
-          "button",
-          {
-            onClick: (e) => {
-              e.stopPropagation();
-              removeTab(tab.id);
-            },
-            style: {
-              background: "none",
-              border: "none",
-              color: isDarkMode ? "#6b7280" : "#9ca3af",
-              cursor: "pointer",
-              fontSize: "14px",
-              lineHeight: 1,
-              padding: "0 2px",
-              marginLeft: "4px",
-              opacity: 0.6,
-              display: "flex",
-              alignItems: "center"
-            },
-            onMouseEnter: (e) => e.target.style.opacity = 1,
-            onMouseLeave: (e) => e.target.style.opacity = 0.6
-          },
-          "\xD7"
-        )
-      );
-    }), (isCreatorMode || !configId) && /* @__PURE__ */ React.createElement("div", { style: { position: "relative" }, "data-add-tab": true }, /* @__PURE__ */ React.createElement(
-      "button",
+        `), baseConnection && tabs.length > 0 && /* @__PURE__ */ React.createElement(
+      TabBar,
       {
-        onClick: () => setShowAddTab(!showAddTab),
-        style: {
-          background: "none",
-          border: "none",
-          color: isDarkMode ? "#6b7280" : "#9ca3af",
-          cursor: "pointer",
-          fontSize: "18px",
-          lineHeight: 1,
-          padding: "6px 12px",
-          display: "flex",
-          alignItems: "center"
-        },
-        title: "Add dataset tab"
-      },
-      "+"
-    ), showAddTab && /* @__PURE__ */ React.createElement("div", { style: {
-      position: "absolute",
-      top: "100%",
-      left: 0,
-      zIndex: 100,
-      backgroundColor: isDarkMode ? "#1f2937" : "#ffffff",
-      border: `1px solid ${isDarkMode ? "#374151" : "#e5e7eb"}`,
-      borderRadius: "8px",
-      padding: "12px",
-      boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-      minWidth: "200px"
-    } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "12px", fontWeight: 600, marginBottom: "8px", color: isDarkMode ? "#d1d5db" : "#374151" } }, "New Tab"), /* @__PURE__ */ React.createElement(
-      "input",
-      {
-        autoFocus: true,
-        placeholder: "Tab name",
-        value: newTabDataset,
-        onChange: (e) => setNewTabDataset(e.target.value),
-        onKeyDown: (e) => {
-          if (e.key === "Enter" && newTabDataset.trim()) {
-            addTab(newTabDataset.trim());
-            setNewTabDataset("");
-            setShowAddTab(false);
-          }
-          if (e.key === "Escape") {
-            setShowAddTab(false);
-            setNewTabDataset("");
-          }
-        },
-        style: {
-          width: "100%",
-          padding: "6px 10px",
-          borderRadius: "6px",
-          fontSize: "13px",
-          border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`,
-          backgroundColor: isDarkMode ? "#111827" : "#f9fafb",
-          color: isDarkMode ? "#f3f4f6" : "#111827",
-          outline: "none",
-          boxSizing: "border-box"
-        }
+        tabs,
+        activeTabId,
+        activeTab,
+        configId,
+        liveMetricConfig,
+        liveRowCount,
+        liveDataTruncated,
+        liveDataLoading,
+        liveDataError,
+        isDarkMode,
+        isCreatorMode,
+        renamingTabId,
+        renameText,
+        showAddTab,
+        newTabDataset,
+        showUnlockPrompt,
+        unlockSecret,
+        unlockError,
+        setRenamingTabId,
+        setRenameText,
+        setShowAddTab,
+        setNewTabDataset,
+        setShowUnlockPrompt,
+        setUnlockSecret,
+        setUnlockError,
+        setIsCreatorMode,
+        setShowMetricsEditor,
+        setMetricsEditorDraft,
+        setMetricsEditorError,
+        setExpandedMetricSlot,
+        switchTab,
+        addTab,
+        removeTab,
+        renameTab,
+        moveTab,
+        creatorTimerRef
       }
-    ), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", color: isDarkMode ? "#6b7280" : "#9ca3af", marginTop: "6px" } }, "Name your tab, then set dataset in Configure Metrics"))), (isCreatorMode || !configId) && /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        onClick: () => {
-          setMetricsEditorDraft({ ...liveMetricConfig || {}, dataset: activeTab?.dataset || "" });
-          setMetricsEditorError("");
-          setExpandedMetricSlot(null);
-          setShowMetricsEditor(true);
-        },
-        style: {
-          marginLeft: "auto",
-          padding: "4px 12px",
-          borderRadius: "6px",
-          border: `1px solid ${isDarkMode ? "rgba(16,185,129,0.4)" : "rgba(16,185,129,0.5)"}`,
-          background: "transparent",
-          color: isDarkMode ? "#6ee7b7" : "#065f46",
-          cursor: "pointer",
-          fontSize: "11px",
-          fontWeight: 500,
-          whiteSpace: "nowrap"
-        }
-      },
-      "Configure Metrics"
-    ), configId && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: isCreatorMode ? "0" : "auto", position: "relative" } }, /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        onClick: () => {
-          if (isCreatorMode) {
-            setIsCreatorMode(false);
-            if (creatorTimerRef.current) clearTimeout(creatorTimerRef.current);
-          } else if (getEditSecret(configId)) {
-            setIsCreatorMode(true);
-          } else {
-            setShowUnlockPrompt(!showUnlockPrompt);
-            setUnlockError("");
-            setUnlockSecret("");
-          }
-        },
-        title: isCreatorMode ? "Lock editing (auto-locks after 2 min)" : "Unlock editing",
-        style: {
-          background: "none",
-          border: "none",
-          cursor: "pointer",
-          padding: "4px 8px",
-          color: isCreatorMode ? isDarkMode ? "#6ee7b7" : "#065f46" : isDarkMode ? "#6b7280" : "#9ca3af",
-          fontSize: "14px",
-          display: "flex",
-          alignItems: "center"
-        }
-      },
-      isCreatorMode ? "\u{1F513}" : "\u{1F512}"
-    ), showUnlockPrompt && !isCreatorMode && /* @__PURE__ */ React.createElement("div", { style: {
-      position: "absolute",
-      top: "100%",
-      right: 0,
-      zIndex: 100,
-      backgroundColor: isDarkMode ? "#1f2937" : "#ffffff",
-      border: `1px solid ${isDarkMode ? "#374151" : "#e5e7eb"}`,
-      borderRadius: "8px",
-      padding: "12px",
-      boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-      minWidth: "240px"
-    } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "12px", fontWeight: 600, marginBottom: "8px", color: isDarkMode ? "#d1d5db" : "#374151" } }, "Enter Edit Key"), /* @__PURE__ */ React.createElement(
-      "input",
-      {
-        autoFocus: true,
-        type: "password",
-        placeholder: "Paste edit key...",
-        value: unlockSecret,
-        onChange: (e) => setUnlockSecret(e.target.value),
-        onKeyDown: (e) => {
-          if (e.key === "Escape") setShowUnlockPrompt(false);
-          if (e.key === "Enter" && unlockSecret.trim()) {
-            updateConfig(configId, unlockSecret.trim(), {}).then((ok) => {
-              if (ok) {
-                setEditSecret(configId, unlockSecret.trim());
-                setIsCreatorMode(true);
-                setShowUnlockPrompt(false);
-              } else {
-                setUnlockError("Invalid key");
-              }
-            }).catch(() => setUnlockError("Failed to verify"));
-          }
-        },
-        style: {
-          width: "100%",
-          padding: "6px 10px",
-          borderRadius: "6px",
-          fontSize: "13px",
-          boxSizing: "border-box",
-          border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`,
-          backgroundColor: isDarkMode ? "#111827" : "#f9fafb",
-          color: isDarkMode ? "#f3f4f6" : "#111827",
-          outline: "none"
-        }
-      }
-    ), unlockError && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", color: "#ef4444", marginTop: "4px" } }, unlockError), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", color: isDarkMode ? "#6b7280" : "#9ca3af", marginTop: "6px" } }, "Press Enter to unlock editing")))), /* @__PURE__ */ React.createElement(
+    ), /* @__PURE__ */ React.createElement(
       StatusBanner,
       {
         baseConnection,
@@ -10979,202 +11674,28 @@ var __app = (() => {
           formatValue || formatFilterName2
         );
       }
-    )))), /* @__PURE__ */ React.createElement("div", { style: styles.proTipBanner }, /* @__PURE__ */ React.createElement("span", { style: styles.proTipLabel }, "ProTip"), /* @__PURE__ */ React.createElement("span", { style: styles.proTipIcon }, PRO_TIPS[currentTipIndex].icon), /* @__PURE__ */ React.createElement("div", { style: styles.proTipContent }, /* @__PURE__ */ React.createElement("span", { style: styles.proTipTitle }, PRO_TIPS[currentTipIndex].title, ":"), /* @__PURE__ */ React.createElement("span", { style: styles.proTipText }, PRO_TIPS[currentTipIndex].text)), /* @__PURE__ */ React.createElement("div", { style: styles.proTipNavigation }, /* @__PURE__ */ React.createElement(
-      "button",
+    )))), /* @__PURE__ */ React.createElement(
+      ProTipBanner,
       {
-        style: styles.proTipNavButton,
-        onClick: () => setCurrentTipIndex(
-          (prev) => prev === 0 ? PRO_TIPS.length - 1 : prev - 1
-        ),
-        onMouseEnter: (e) => {
-          e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.9)";
-          e.currentTarget.style.transform = "scale(1.1)";
-        },
-        onMouseLeave: (e) => {
-          e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.6)";
-          e.currentTarget.style.transform = "scale(1)";
-        },
-        title: "Previous tip"
-      },
-      "\u2039"
-    ), /* @__PURE__ */ React.createElement("span", { style: styles.proTipCounter }, currentTipIndex + 1, "/", PRO_TIPS.length), /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        style: styles.proTipNavButton,
-        onClick: () => setCurrentTipIndex((prev) => (prev + 1) % PRO_TIPS.length),
-        onMouseEnter: (e) => {
-          e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.9)";
-          e.currentTarget.style.transform = "scale(1.1)";
-        },
-        onMouseLeave: (e) => {
-          e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.6)";
-          e.currentTarget.style.transform = "scale(1)";
-        },
-        title: "Next tip"
-      },
-      "\u203A"
-    ))), /* @__PURE__ */ React.createElement("div", { style: styles.mainContent }, /* @__PURE__ */ React.createElement("div", { style: styles.leftPanel, "data-guide": "insights-panel" }, activeInsightsTab === null ? /* @__PURE__ */ React.createElement("div", { style: styles.insightsTabsContainer }, /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        style: styles.clickForInsightsButton,
-        onClick: () => setActiveInsightsTab("basic"),
-        onMouseEnter: (e) => {
-          e.currentTarget.style.opacity = "0.9";
-        },
-        onMouseLeave: (e) => {
-          e.currentTarget.style.opacity = "";
-        }
-      },
-      /* @__PURE__ */ React.createElement("span", { style: { fontSize: "16px" } }, "\u2728"),
-      "Click for Insights",
-      /* @__PURE__ */ React.createElement("span", { style: { fontSize: "16px" } }, "\u2728")
-    )) : /* @__PURE__ */ React.createElement("div", { style: styles.insightsTabsContainer }, /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        style: {
-          ...styles.insightsTab,
-          ...activeInsightsTab === "basic" ? styles.insightsTabActive : {}
-        },
-        onClick: () => setActiveInsightsTab(
-          activeInsightsTab === "basic" ? null : "basic"
-        )
-      },
-      "Solo Insights",
-      /* @__PURE__ */ React.createElement("span", { style: styles.tabCount }, Object.values(displayedInsights.basicInsights).flat().length)
-    ), /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        style: {
-          ...styles.insightsTab,
-          ...activeInsightsTab === "advanced" ? styles.insightsTabActive : {}
-        },
-        onClick: () => setActiveInsightsTab(
-          activeInsightsTab === "advanced" ? null : "advanced"
-        )
-      },
-      "Cross Insights",
-      (activeInsightsTab === "advanced" || Object.values(displayedInsights.advancedInsights).flat().length > 0) && /* @__PURE__ */ React.createElement("span", { style: styles.tabCount }, Object.values(displayedInsights.advancedInsights).flat().length)
-    )), activeInsightsTab && (() => {
-      const insightsConfig = {
-        basic: {
-          title: "Single-dimension analysis of trends and patterns",
-          emptyMessage: "No significant patterns detected with current filters and data range. Try adjusting your date range or filters to see more insights.",
-          categories: [
-            {
-              key: "decomposition",
-              title: "Investigation Decomposition",
-              tooltipText: "Breaks down the investigation to show which sub-segments are driving the observed performance. Explains what's behind the trend or anomaly you're investigating.",
-              colors: {
-                borderColor: "#10b981",
-                backgroundColor: isDarkMode ? "rgba(16, 185, 129, 0.1)" : "rgba(16, 185, 129, 0.08)",
-                hoverBackgroundColor: isDarkMode ? "rgba(16, 185, 129, 0.15)" : "#d1fae5",
-                hoverBorderColor: "#10b981"
-              }
-            },
-            {
-              key: "performanceAlerts",
-              title: "Performance Alerts",
-              tooltipText: null,
-              colors: {
-                borderColor: theme.danger,
-                backgroundColor: theme.dangerBg,
-                hoverBackgroundColor: isDarkMode ? "rgba(239, 68, 68, 0.2)" : "#fee2e2",
-                hoverBorderColor: theme.danger
-              }
-            },
-            {
-              key: "overallTrends",
-              title: "Overall Trends",
-              tooltipText: null
-            },
-            {
-              key: "categoryTrends",
-              title: "Category Trends",
-              tooltipText: "Above/below avg. compares category growth rate to overall market growth rate. For example, if market grew 20% and category grew 30%, it's 10 percentage points above avg.",
-              colors: {
-                borderColor: theme.accentPrimary,
-                backgroundColor: theme.statBoxActiveBg,
-                hoverBackgroundColor: isDarkMode ? "rgba(129, 140, 248, 0.15)" : "#dbeafe",
-                hoverBorderColor: theme.accentPrimary
-              }
-            },
-            {
-              key: "shareShifts",
-              title: "Market Share Shifts",
-              tooltipText: "Above/below avg. compares category growth rate to overall market growth rate. For example, if market grew 20% and category grew 30%, it's 10 percentage points above avg.",
-              colors: {
-                borderColor: isDarkMode ? "#a78bfa" : "#8b5cf6",
-                backgroundColor: isDarkMode ? "rgba(139, 92, 246, 0.1)" : "rgba(139, 92, 246, 0.08)",
-                hoverBackgroundColor: isDarkMode ? "rgba(139, 92, 246, 0.15)" : "#f3e8ff",
-                hoverBorderColor: isDarkMode ? "#a78bfa" : "#8b5cf6"
-              }
-            },
-            {
-              key: "marketLeaders",
-              title: "Market Leaders",
-              tooltipText: null
-            }
-          ],
-          insights: displayedInsights.basicInsights
-        },
-        advanced: {
-          title: "Multi-attribute analysis across dimensions",
-          emptyMessage: "Advanced cross-dimensional insights will be displayed here when sufficient data patterns are detected across multiple attributes. Try using fewer filters to see cross-dimensional patterns.",
-          categories: [
-            {
-              key: "allTimeGrowth",
-              title: "Cross Insights Growth",
-              tooltipText: "Above/below avg. compares segment growth rate to overall market growth rate. For example, if market grew 20% and segment grew 30%, it's 10 percentage points above avg."
-            }
-          ],
-          insights: displayedInsights.advancedInsights
-        }
-      };
-      const config = insightsConfig[activeInsightsTab];
-      if (!config) return null;
-      if (loadingInsights) {
-        return /* @__PURE__ */ React.createElement("div", { style: styles.structuredInsightsContainer }, /* @__PURE__ */ React.createElement(
-          "div",
-          {
-            style: {
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: "40px",
-              color: "#6b7280"
-            }
-          },
-          /* @__PURE__ */ React.createElement(
-            "div",
-            {
-              style: {
-                width: "40px",
-                height: "40px",
-                border: "4px solid #f3f4f6",
-                borderTop: "4px solid #3b82f6",
-                borderRadius: "50%",
-                animation: "spin 1s linear infinite",
-                marginBottom: "16px"
-              }
-            }
-          ),
-          /* @__PURE__ */ React.createElement("div", { style: { fontSize: "14px", fontWeight: "500" } }, "Loading Insights..."),
-          /* @__PURE__ */ React.createElement("div", { style: { fontSize: "12px", marginTop: "8px" } }, "Analyzing patterns in your data")
-        ));
+        styles,
+        PRO_TIPS,
+        currentTipIndex,
+        setCurrentTipIndex
       }
-      const processedInsights = config.insights;
-      const totalInsights = Object.values(processedInsights).flat().length;
-      return /* @__PURE__ */ React.createElement("div", { style: styles.structuredInsightsContainer }, /* @__PURE__ */ React.createElement("div", { style: styles.insightsContext }, getShortFilterContext()), /* @__PURE__ */ React.createElement("div", { style: styles.insightsSubtitle }, config.title), config.categories.map(
-        ({ key, title, tooltipText, colors }) => renderInsightCategory(
-          processedInsights[key],
-          title,
-          key,
-          tooltipText,
-          colors
-        )
-      ), totalInsights === 0 && /* @__PURE__ */ React.createElement("div", { style: styles.categorySection }, /* @__PURE__ */ React.createElement("div", { style: styles.insightText }, config.emptyMessage)));
-    })()), /* @__PURE__ */ React.createElement("div", { style: styles.chartContainer }, /* @__PURE__ */ React.createElement(
+    ), /* @__PURE__ */ React.createElement("div", { style: styles.mainContent }, /* @__PURE__ */ React.createElement(
+      InsightsPanel,
+      {
+        styles,
+        theme,
+        isDarkMode,
+        activeInsightsTab,
+        setActiveInsightsTab,
+        displayedInsights,
+        loadingInsights,
+        getShortFilterContext,
+        renderInsightCategory
+      }
+    ), /* @__PURE__ */ React.createElement("div", { style: styles.chartContainer }, /* @__PURE__ */ React.createElement(
       "button",
       {
         style: {
@@ -11628,390 +12149,72 @@ var __app = (() => {
         ref: chartRef,
         onLegendClick: handleLegendClick
       }
-    ))), /* @__PURE__ */ React.createElement("div", { style: styles.summaryContainer }, /* @__PURE__ */ React.createElement(
-      "h4",
+    ))), /* @__PURE__ */ React.createElement(
+      DataSummaryPanel,
       {
-        style: styles.summaryTitle,
-        onClick: () => setShowDataSummary(!showDataSummary)
-      },
-      /* @__PURE__ */ React.createElement("span", { style: { fontSize: "12px" } }, showDataSummary ? "\u25BC" : "\u25B6"),
-      "Data Summary"
-    ), showDataSummary && /* @__PURE__ */ React.createElement("div", { style: styles.summaryGrid }, /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Date Aggregation:"), " ", dataFrequency), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Metric:"), " ", metric), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Split By Dimension:"), " ", view), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Date Range:"), " ", dateRange), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Total Records:"), " ", (liveRowCount || filteredData.length).toLocaleString()), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Period Range:"), " ", periods.length > 0 ? periods[0] + " to " + periods[periods.length - 1] : "No data"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Active Filters:"), " ", FILTER_CONFIG.flatMap(({ state, formatValue, key }) => {
-      if (state.length === 0) return [];
-      return state.map(
-        (val) => formatValue ? formatValue(val) : formatFilterName2(val)
-      );
-    }).join(", ") || "None"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Filter Context:"), " ", getShortFilterContext()), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Market Size:"), " ", formatMetric(calculateMetric(filteredData))), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Solo Insights Found:"), " ", Object.values(displayedInsights.basicInsights).flat().length), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Data Filter Time:"), " ", filterTimeRef.current.toFixed(2), "ms"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Render Time:"), " ", (performance.now() - renderStartTime).toFixed(2), "ms"), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Render Count:"), " ", renderCountRef.current), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Raw Data Rows:"), " ", cleanedQueryData.rows ? cleanedQueryData.rows.length.toLocaleString() : 0), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Filtered Rows:"), " ", filteredData.length.toLocaleString()), /* @__PURE__ */ React.createElement("div", { style: styles.summaryItem }, /* @__PURE__ */ React.createElement("strong", null, "Cross Insights Found:"), " ", Object.values(displayedInsights.advancedInsights).flat().length))), showConnectModal && (() => {
-      const isSupabase = connectForm.connectionType !== "fastapi";
-      const supabaseFields = [
-        { key: "supabaseUrl", label: "Supabase URL", placeholder: "https://your-project.supabase.co" },
-        { key: "apiKey", label: "API Key (anon)", placeholder: "eyJhbGciOi...", password: true },
-        { key: "dataset", label: "Table (schema.table)", placeholder: "public_analytics.fct_job_metrics" }
-      ];
-      const fastapiFields = [
-        { key: "apiUrl", label: "API URL", placeholder: "https://your-server.com/dash-api" },
-        { key: "apiSecret", label: "API Secret", placeholder: "your-secret", password: true },
-        { key: "connection", label: "Connection Name", placeholder: "zbt" },
-        { key: "dataset", label: "Table (schema.table)", placeholder: "analytics.signals" }
-      ];
-      const fields = isSupabase ? supabaseFields : fastapiFields;
-      const canSubmit = isSupabase ? connectForm.supabaseUrl && connectForm.apiKey && connectForm.dataset : connectForm.apiUrl && connectForm.apiSecret && connectForm.connection && connectForm.dataset;
-      return /* @__PURE__ */ React.createElement("div", { style: styles.shareModal, onClick: (e) => {
-        if (e.target === e.currentTarget) setShowConnectModal(false);
-      } }, /* @__PURE__ */ React.createElement("div", { style: { ...styles.shareModalContent, maxWidth: "440px" } }, /* @__PURE__ */ React.createElement("div", { style: styles.shareModalHeader }, /* @__PURE__ */ React.createElement("div", { style: styles.shareModalTitle }, "Connect to Database"), /* @__PURE__ */ React.createElement("button", { style: styles.shareModalClose, onClick: () => setShowConnectModal(false) }, "\xD7")), /* @__PURE__ */ React.createElement("div", { style: { padding: "4px 0 16px" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: "4px", marginBottom: "16px", padding: "2px", borderRadius: "8px", background: isDarkMode ? "#1f2937" : "#f3f4f6" } }, [{ value: "supabase", label: "Supabase" }, { value: "fastapi", label: "Direct Postgres" }].map((opt) => /* @__PURE__ */ React.createElement(
-        "button",
-        {
-          key: opt.value,
-          onClick: () => setConnectForm((prev) => ({ ...prev, connectionType: opt.value })),
-          style: {
-            flex: 1,
-            padding: "6px 12px",
-            borderRadius: "6px",
-            fontSize: "12px",
-            fontWeight: 600,
-            cursor: "pointer",
-            border: "none",
-            background: connectForm.connectionType === opt.value ? isDarkMode ? "#374151" : "#ffffff" : "transparent",
-            color: connectForm.connectionType === opt.value ? isDarkMode ? "#f3f4f6" : "#111827" : isDarkMode ? "#9ca3af" : "#6b7280",
-            boxShadow: connectForm.connectionType === opt.value ? "0 1px 2px rgba(0,0,0,0.1)" : "none"
-          }
-        },
-        opt.label
-      ))), /* @__PURE__ */ React.createElement("p", { style: { margin: "0 0 16px", fontSize: "12px", color: isDarkMode ? "#9ca3af" : "#6b7280" } }, isSupabase ? /* @__PURE__ */ React.createElement(React.Fragment, null, "Requires the ", /* @__PURE__ */ React.createElement("code", { style: { fontSize: "11px", padding: "1px 4px", borderRadius: "3px", background: isDarkMode ? "#1f2937" : "#f3f4f6" } }, "query_dataset"), " RPC function (see setup.sql).") : "Connect via dash-api proxy to any Postgres database."), fields.map((f) => /* @__PURE__ */ React.createElement("div", { key: f.key, style: { marginBottom: "12px" } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: "11px", fontWeight: 600, marginBottom: "4px", color: isDarkMode ? "#d1d5db" : "#374151" } }, f.label), /* @__PURE__ */ React.createElement(
-        "input",
-        {
-          type: f.password ? "password" : "text",
-          value: connectForm[f.key],
-          onChange: (e) => setConnectForm((prev) => ({ ...prev, [f.key]: e.target.value })),
-          placeholder: f.placeholder,
-          style: {
-            width: "100%",
-            padding: "8px 10px",
-            borderRadius: "6px",
-            fontSize: "13px",
-            boxSizing: "border-box",
-            border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`,
-            backgroundColor: isDarkMode ? "#111827" : "#f9fafb",
-            color: isDarkMode ? "#f3f4f6" : "#111827",
-            outline: "none"
-          }
-        }
-      ))), connectError && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "12px", color: "#ef4444", marginBottom: "12px" } }, connectError), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: "8px", justifyContent: "flex-end" } }, /* @__PURE__ */ React.createElement(
-        "button",
-        {
-          onClick: () => setShowConnectModal(false),
-          style: {
-            padding: "6px 14px",
-            borderRadius: "6px",
-            fontSize: "12px",
-            cursor: "pointer",
-            border: `1px solid ${isDarkMode ? "#4b5563" : "#d1d5db"}`,
-            background: "transparent",
-            color: isDarkMode ? "#d1d5db" : "#374151"
-          }
-        },
-        "Cancel"
-      ), /* @__PURE__ */ React.createElement(
-        "button",
-        {
-          disabled: connectSaving || !canSubmit,
-          onClick: async () => {
-            setConnectError("");
-            setConnectSaving(true);
-            try {
-              let connectionJson, testData;
-              if (isSupabase) {
-                const testRes = await fetch(connectForm.supabaseUrl.replace(/\/+$/, "") + "/rest/v1/rpc/query_dataset", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json", "apikey": connectForm.apiKey, "Authorization": "Bearer " + connectForm.apiKey },
-                  body: JSON.stringify({ p_table: connectForm.dataset, p_action: "schema" })
-                });
-                if (!testRes.ok) throw new Error("Connection failed (HTTP " + testRes.status + "). Check your URL and API key.");
-                testData = await testRes.json();
-                if (testData.error) throw new Error(testData.error);
-                connectionJson = { supabaseUrl: connectForm.supabaseUrl.replace(/\/+$/, ""), apiKey: connectForm.apiKey, dataset: connectForm.dataset };
-              } else {
-                const testRes = await fetch(connectForm.apiUrl.replace(/\/+$/, "") + "/query", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json", "Authorization": "Bearer " + connectForm.apiSecret },
-                  body: JSON.stringify({ connection: connectForm.connection, table: connectForm.dataset, action: "schema" })
-                });
-                if (!testRes.ok) {
-                  const errBody = await testRes.json().catch(() => ({}));
-                  throw new Error(errBody.detail || "Connection failed (HTTP " + testRes.status + ")");
-                }
-                testData = await testRes.json();
-                if (testData.error) throw new Error(testData.error);
-                connectionJson = { connectionType: "fastapi", apiUrl: connectForm.apiUrl.replace(/\/+$/, ""), apiSecret: connectForm.apiSecret, connection: connectForm.connection, dataset: connectForm.dataset };
-              }
-              const tabsJson = [{ id: "tab_1", name: connectForm.dataset, dataset: connectForm.dataset, metricConfig: null }];
-              const result = await createConfig({ name: connectForm.dataset, connectionJson, tabsJson });
-              setEditSecret(result.id, result.editSecret);
-              window.location.hash = "#/" + result.id;
-              window.location.reload();
-            } catch (err) {
-              setConnectError(err.message);
-            }
-            setConnectSaving(false);
-          },
-          style: {
-            padding: "6px 14px",
-            borderRadius: "6px",
-            fontSize: "12px",
-            cursor: "pointer",
-            fontWeight: 600,
-            border: "none",
-            background: !canSubmit ? isDarkMode ? "#374151" : "#e5e7eb" : "#6366f1",
-            color: !canSubmit ? isDarkMode ? "#6b7280" : "#9ca3af" : "#ffffff"
-          }
-        },
-        connectSaving ? "Connecting..." : "Connect & Save"
-      )))));
-    })(), showShareModal && /* @__PURE__ */ React.createElement(
-      "div",
+        styles,
+        showDataSummary,
+        setShowDataSummary,
+        dataFrequency,
+        metric,
+        view,
+        dateRange,
+        liveRowCount,
+        filteredData,
+        periods,
+        FILTER_CONFIG,
+        formatFilterName: formatFilterName2,
+        getShortFilterContext,
+        formatMetric,
+        calculateMetric,
+        displayedInsights,
+        filterTimeRef,
+        renderStartTime,
+        renderCountRef,
+        cleanedQueryData
+      }
+    ), showConnectModal && /* @__PURE__ */ React.createElement(
+      ConnectModal,
       {
-        style: styles.shareModal,
-        onClick: (e) => {
-          if (e.target === e.currentTarget) {
-            setShowShareModal(false);
-          }
-        }
-      },
-      /* @__PURE__ */ React.createElement("div", { style: styles.shareModalContent }, /* @__PURE__ */ React.createElement("div", { style: styles.shareModalHeader }, /* @__PURE__ */ React.createElement("div", { style: styles.shareModalTitle }, "Share Chart Configuration"), /* @__PURE__ */ React.createElement(
-        "button",
-        {
-          style: styles.shareModalClose,
-          onClick: () => setShowShareModal(false)
-        },
-        "\xD7"
-      )), /* @__PURE__ */ React.createElement("div", { style: styles.shareCodeSection }, /* @__PURE__ */ React.createElement("label", { style: styles.shareCodeLabel }, "Your Share Link:"), /* @__PURE__ */ React.createElement("div", { style: styles.shareLinkContainer }, /* @__PURE__ */ React.createElement(
-        "a",
-        {
-          id: "share-link-anchor",
-          href: shareCode,
-          target: "_blank",
-          rel: "noopener noreferrer",
-          style: {
-            ...styles.shareLinkInput,
-            textDecoration: "none",
-            color: "#6366f1",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            padding: "10px 12px",
-            wordBreak: "break-all"
-          }
-        },
-        shareCode
-      ), /* @__PURE__ */ React.createElement(
-        "button",
-        {
-          id: "copy-share-code-btn",
-          style: styles.shareCopyButton,
-          onClick: () => {
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-              navigator.clipboard.writeText(shareCode).then(() => {
-                const btn = document.getElementById("copy-share-code-btn");
-                if (btn) {
-                  const orig = btn.textContent;
-                  btn.textContent = "Copied!";
-                  btn.style.backgroundColor = "#10b981";
-                  setTimeout(() => {
-                    btn.textContent = orig;
-                    btn.style.backgroundColor = "#6366f1";
-                  }, 2e3);
-                }
-              }).catch((e) => logger_default.error("Failed to copy:", e));
-            }
-          }
-        },
-        "Copy Link"
-      )), /* @__PURE__ */ React.createElement("div", { style: styles.shareInstructions }, /* @__PURE__ */ React.createElement("p", { style: { margin: "8px 0 0 0", fontSize: "12px", color: "#6b7280" } }, "Share this link. Recipients can view and explore the dashboard from this exact view.")), isCreatorMode && configId && (() => {
-        const secret = getEditSecret(configId);
-        if (!secret) return null;
-        return /* @__PURE__ */ React.createElement("div", { style: {
-          marginTop: "12px",
-          padding: "10px 12px",
-          borderRadius: "6px",
-          background: isDarkMode ? "rgba(99,102,241,0.08)" : "rgba(99,102,241,0.05)",
-          border: `1px solid ${isDarkMode ? "rgba(99,102,241,0.2)" : "rgba(99,102,241,0.15)"}`
-        } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "11px", fontWeight: 600, color: isDarkMode ? "#a5b4fc" : "#4338ca", marginBottom: "4px" } }, "Edit Key (for managing from other devices)"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px" } }, /* @__PURE__ */ React.createElement("code", { style: {
-          flex: 1,
-          fontSize: "11px",
-          padding: "4px 8px",
-          borderRadius: "4px",
-          background: isDarkMode ? "#111827" : "#f3f4f6",
-          color: isDarkMode ? "#d1d5db" : "#374151",
-          wordBreak: "break-all",
-          userSelect: "all"
-        } }, secret), /* @__PURE__ */ React.createElement(
-          "button",
-          {
-            id: "copy-edit-key-btn",
-            onClick: () => {
-              navigator.clipboard.writeText(secret).then(() => {
-                const btn = document.getElementById("copy-edit-key-btn");
-                if (btn) {
-                  const orig = btn.textContent;
-                  btn.textContent = "Copied!";
-                  setTimeout(() => {
-                    btn.textContent = orig;
-                  }, 1500);
-                }
-              });
-            },
-            style: {
-              padding: "3px 8px",
-              borderRadius: "4px",
-              fontSize: "10px",
-              cursor: "pointer",
-              border: `1px solid ${isDarkMode ? "rgba(99,102,241,0.3)" : "rgba(99,102,241,0.3)"}`,
-              background: "transparent",
-              color: isDarkMode ? "#a5b4fc" : "#4338ca",
-              whiteSpace: "nowrap"
-            }
-          },
-          "Copy"
-        )), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "10px", color: isDarkMode ? "#6b7280" : "#9ca3af", marginTop: "4px" } }, "Paste this into the \u2699 gear icon on another device to unlock editing."));
-      })()))
+        styles,
+        isDarkMode,
+        connectForm,
+        setConnectForm,
+        connectError,
+        setConnectError,
+        connectSaving,
+        setConnectSaving,
+        setShowConnectModal
+      }
+    ), showShareModal && /* @__PURE__ */ React.createElement(
+      ShareModal,
+      {
+        styles,
+        isDarkMode,
+        shareCode,
+        isCreatorMode,
+        configId,
+        setShowShareModal
+      }
     ), showSaveViewModal && /* @__PURE__ */ React.createElement(
-      "div",
+      SaveViewModal,
       {
-        style: styles.shareModal,
-        onClick: (e) => {
-          if (e.target === e.currentTarget) {
-            setShowSaveViewModal(false);
-          }
-        }
-      },
-      /* @__PURE__ */ React.createElement("div", { style: styles.shareModalContent }, /* @__PURE__ */ React.createElement(
-        "button",
-        {
-          style: styles.shareModalClose,
-          onClick: () => {
-            setShowSaveViewModal(false);
-            setSaveViewError("");
-            setSaveViewSuccess("");
-          }
-        },
-        "\xD7"
-      ), /* @__PURE__ */ React.createElement("div", { style: styles.shareCodeSection }, /* @__PURE__ */ React.createElement("div", { style: styles.shareInstructions }, /* @__PURE__ */ React.createElement(
-        "p",
-        {
-          style: {
-            margin: "0 0 16px 0",
-            fontSize: "11px",
-            color: "#9ca3af",
-            fontStyle: "italic"
-          }
-        },
-        'Note: Saved views will appear in the "Load Saved View" dropdown after approximately 1 hour, once the Google Sheet data is refreshed in the database.'
-      )), /* @__PURE__ */ React.createElement("div", { style: styles.marginBottom16 }, /* @__PURE__ */ React.createElement("label", { style: styles.shareCodeLabel }, "View Name:"), /* @__PURE__ */ React.createElement(
-        "input",
-        {
-          type: "text",
-          value: saveViewName,
-          onChange: (e) => {
-            setSaveViewName(e.target.value);
-            setSaveViewError("");
-          },
-          placeholder: "Enter a name for this view...",
-          style: {
-            ...styles.pasteCodeInput,
-            width: "100%"
-          }
-        }
-      )), /* @__PURE__ */ React.createElement("div", { style: styles.marginBottom16 }, /* @__PURE__ */ React.createElement("label", { style: styles.shareCodeLabel }, "Save as:"), /* @__PURE__ */ React.createElement("div", { style: styles.flexGap12Mt8 }, /* @__PURE__ */ React.createElement("label", { style: styles.radioLabel }, /* @__PURE__ */ React.createElement(
-        "input",
-        {
-          type: "radio",
-          value: "username",
-          checked: saveViewOwnerType === "username",
-          onChange: (e) => setSaveViewOwnerType(e.target.value),
-          style: styles.marginRight6,
-          disabled: !username
-        }
-      ), username || "Username (not available)"), /* @__PURE__ */ React.createElement("label", { style: styles.radioLabel }, /* @__PURE__ */ React.createElement(
-        "input",
-        {
-          type: "radio",
-          value: "team",
-          checked: saveViewOwnerType === "team",
-          onChange: (e) => setSaveViewOwnerType(e.target.value),
-          style: styles.marginRight6,
-          disabled: !teamName
-        }
-      ), teamName || "Team (not available)"), /* @__PURE__ */ React.createElement("label", { style: styles.radioLabel }, /* @__PURE__ */ React.createElement(
-        "input",
-        {
-          type: "radio",
-          value: "custom",
-          checked: saveViewOwnerType === "custom",
-          onChange: (e) => setSaveViewOwnerType(e.target.value),
-          style: styles.marginRight6
-        }
-      ), "Custom"))), saveViewOwnerType === "custom" && /* @__PURE__ */ React.createElement("div", { style: styles.marginBottom16 }, /* @__PURE__ */ React.createElement("label", { style: styles.shareCodeLabel }, "Custom Owner:"), /* @__PURE__ */ React.createElement(
-        "input",
-        {
-          type: "text",
-          value: saveViewCustomOwner,
-          onChange: (e) => {
-            setSaveViewCustomOwner(e.target.value);
-            setSaveViewError("");
-          },
-          placeholder: "Enter custom owner name...",
-          style: {
-            ...styles.pasteCodeInput,
-            width: "100%"
-          }
-        }
-      )), saveViewError && /* @__PURE__ */ React.createElement(
-        "div",
-        {
-          style: {
-            color: "#ef4444",
-            fontSize: "13px",
-            marginBottom: "12px",
-            padding: "8px",
-            backgroundColor: "#fee2e2",
-            borderRadius: "4px"
-          }
-        },
-        saveViewError
-      ), saveViewSuccess && /* @__PURE__ */ React.createElement(
-        "div",
-        {
-          style: {
-            color: "#10b981",
-            fontSize: "13px",
-            marginBottom: "12px",
-            padding: "8px",
-            backgroundColor: "#d1fae5",
-            borderRadius: "4px"
-          }
-        },
-        saveViewSuccess
-      ), /* @__PURE__ */ React.createElement(
-        "button",
-        {
-          style: {
-            ...styles.shareLoadButton,
-            width: "100%"
-          },
-          onClick: handleSaveView
-        },
-        "Save View"
-      ), /* @__PURE__ */ React.createElement("div", { style: styles.shareInstructions }, /* @__PURE__ */ React.createElement(
-        "p",
-        {
-          style: {
-            margin: "12px 0 0 0",
-            fontSize: "12px",
-            color: "#6b7280"
-          }
-        },
-        "This will save your current chart configuration to Google Sheets. A new tab will open to complete the save (to bypass CSP/CORS restrictions). You can close the new tab after seeing the success message."
-      ))))
+        styles,
+        setShowSaveViewModal,
+        saveViewName,
+        setSaveViewName,
+        saveViewError,
+        setSaveViewError,
+        saveViewSuccess,
+        setSaveViewSuccess,
+        saveViewOwnerType,
+        setSaveViewOwnerType,
+        saveViewCustomOwner,
+        setSaveViewCustomOwner,
+        username,
+        teamName,
+        handleSaveView
+      }
     ), showGuide && (() => {
       const step = GUIDE_STEPS[guideStep];
       if (!step) return null;

@@ -605,19 +605,24 @@ export function buildStaticStyles(theme, isDarkMode, showDataSummary) {
         borderRadius: "6px",
       },
       filterDropdownTitle: {
-        fontSize: "13px",
+        fontSize: "14px",
         fontWeight: "500",
         color: theme.textSecondary,
         display: "flex",
         alignItems: "center",
         gap: "8px",
       },
-      filterDropdownChevron: { fontSize: "12px", color: theme.textTertiary },
+      filterDropdownChevron: {
+        fontSize: "12px",
+        color: theme.textTertiary,
+        transition: "transform 0.18s ease",
+      },
       filterDropdownContent: {
         maxHeight: "200px",
         overflowY: "auto",
         padding: "8px",
         borderTop: `1px solid ${theme.borderPrimary}`,
+        animation: "dropdownSlideIn 0.18s ease",
       },
       filterSelectedCount: {
         fontSize: "11px",
@@ -777,6 +782,7 @@ export function buildStaticStyles(theme, isDarkMode, showDataSummary) {
         border: "none",
         fontSize: "12px",
         cursor: "pointer",
+        transition: "background-color 0.15s ease, color 0.15s ease",
       },
       insightsTabActive: {
         backgroundColor: theme.accentPrimary,
@@ -853,9 +859,9 @@ export function buildStaticStyles(theme, isDarkMode, showDataSummary) {
         minWidth: "16px",
       },
       insightText: {
-        fontSize: "12px",
+        fontSize: "13px",
         color: theme.textSecondary,
-        lineHeight: "1.4",
+        lineHeight: "1.55",
         flex: 1,
       },
       summaryTitle: {
@@ -1012,6 +1018,9 @@ export function buildStaticStyles(theme, isDarkMode, showDataSummary) {
         borderRadius: "4px",
         fontWeight: "600",
         backgroundColor: "#f0f9ff",
+        borderLeft: `2px solid ${theme.accentPrimary}`,
+        paddingLeft: "6px",
+        transition: "background-color 0.15s ease, border-left-color 0.15s ease",
       },
       checkboxItemUnselected: {
         display: "flex",
@@ -1020,6 +1029,9 @@ export function buildStaticStyles(theme, isDarkMode, showDataSummary) {
         cursor: "pointer",
         borderRadius: "4px",
         backgroundColor: "transparent",
+        borderLeft: "2px solid transparent",
+        paddingLeft: "6px",
+        transition: "background-color 0.15s ease, border-left-color 0.15s ease",
       },
       filterSuggestionItemSelected: {
         display: "flex",

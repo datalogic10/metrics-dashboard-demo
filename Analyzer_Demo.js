@@ -64,8 +64,16 @@ import { StatBox } from './src/components/StatBox.js';
 import { buildComparisonChart, COMPARE_CARD_COLORS } from './src/compareChartBuilder.js';
 import { CompareDockBar, CompareOverlay } from './src/components/CompareView.js';
 import { StatusBanner } from './src/components/StatusBanner.js';
+import { ProTipBanner } from './src/components/ProTipBanner.js';
+import { TabBar } from './src/components/TabBar.js';
+import { ConnectModal } from './src/components/ConnectModal.js';
+import { ShareModal } from './src/components/ShareModal.js';
+import { DataSummaryPanel } from './src/components/DataSummaryPanel.js';
+import { SaveViewModal } from './src/components/SaveViewModal.js';
+import { InsightsPanel } from './src/components/InsightsPanel.js';
 import { buildStaticStyles } from './src/styles.js';
 import { DATE_RANGES, GUIDE_STEPS, PRO_TIPS } from './src/constants.js';
+import { buildPFilters, getActiveViewConfig, tabIconHover } from './src/filterUtils.js';
 
 // Server-side fetch window when connecting to a live Postgres source.
 // Adapts to the UI date range so large ranges (5Y, All) don't get silently
@@ -2450,15 +2458,9 @@ export function render() {
     if (dataSourceType === 'csv' && csvRowsRef.current) {
       const grain = frequencyToGrain[dataFrequency] || "month";
       const dateCol = liveMetricConfig.dateColumn || 'reporting_week';
-      const viewConfig = view !== "Overall" ? VIEW_CONFIG[view] : null;
+      const viewConfig = getActiveViewConfig(view, VIEW_CONFIG);
       const dimColumn = viewConfig ? viewConfig.column : null;
-      // Build filters: strip dim_/filter wrapper to get raw column names
-      const pFilters = {};
-      Object.keys(dynamicFilters).forEach(fk => {
-        const vals = dynamicFilters[fk];
-        if (!vals || vals.length === 0) return;
-        pFilters[fk.replace(/^dim_/, '').replace(/_filter$/, '')] = vals;
-      });
+      const pFilters = buildPFilters(dynamicFilters);
       const aggConfig = { metricConfig: liveMetricConfig, grain, dateColumn: dateCol, filters: pFilters };
       const periodAggs = aggregateCsvPeriods(csvRowsRef.current, aggConfig);
       setLivePeriodAggregates(periodAggs);
@@ -2490,26 +2492,10 @@ export function render() {
     // Client-side dateRange still crops within this window for chart display.
     const serverWindow = computeServerDateWindow(liveMetricConfig, dateRange);
 
-    // Build p_filters from dynamicFilters (strip dim_ prefix and _filter suffix to get column name)
-    const pFilters = {};
-    Object.keys(dynamicFilters).forEach(filterKey => {
-      const vals = dynamicFilters[filterKey];
-      if (!vals || vals.length === 0) return;
-      // filterKey format: "dim_column_name_filter"
-      const colName = filterKey.replace(/^dim_/, '').replace(/_filter$/, '');
-      // Reverse-transform boolean display values back to raw true/false for the DB query
-      if (liveBooleanColumns.has(colName)) {
-        pFilters[colName] = vals.map(v => {
-          const suffix = v.replace(colName + '_', '');
-          return suffix === 'true' ? true : suffix === 'false' ? false : v;
-        });
-      } else {
-        pFilters[colName] = vals;
-      }
-    });
+    const pFilters = buildPFilters(dynamicFilters, liveBooleanColumns);
 
     // Determine active dimension column for split-by view
-    const viewConfig = view !== "Overall" ? VIEW_CONFIG[view] : null;
+    const viewConfig = getActiveViewConfig(view, VIEW_CONFIG);
     const dimColumn = viewConfig ? viewConfig.column : null;
 
     // Call 1: Period aggregates (overall, no dimension split)
@@ -2593,12 +2579,7 @@ export function render() {
       const dateCol = liveMetricConfig.dateColumn || 'reporting_week';
       const dimCols = visibleLiveDimensions.map(d => d.name);
       if (dimCols.length === 0) return;
-      const pFilters = {};
-      Object.keys(dynamicFilters).forEach(fk => {
-        const vals = dynamicFilters[fk];
-        if (!vals || vals.length === 0) return;
-        pFilters[fk.replace(/^dim_/, '').replace(/_filter$/, '')] = vals;
-      });
+      const pFilters = buildPFilters(dynamicFilters);
       const aggConfig = { metricConfig: liveMetricConfig, grain, dateColumn: dateCol, filters: pFilters };
       const allDimAggs = aggregateAllDimensions(csvRowsRef.current, dimCols, aggConfig);
       // Extract just the dimension data (without _categoryTotals) for insights
@@ -2613,20 +2594,7 @@ export function render() {
     const grain = frequencyToGrain[dataFrequency] || "month";
     const dateCol = liveMetricConfig.dateColumn || liveDateColumn;
     const rpcMetrics = buildRpcMetrics(liveMetricConfig);
-    const pFilters = {};
-    Object.keys(dynamicFilters).forEach(filterKey => {
-      const vals = dynamicFilters[filterKey];
-      if (!vals || vals.length === 0) return;
-      const colName = filterKey.replace(/^dim_/, '').replace(/_filter$/, '');
-      if (liveBooleanColumns.has(colName)) {
-        pFilters[colName] = vals.map(v => {
-          const suffix = v.replace(colName + '_', '');
-          return suffix === 'true' ? true : suffix === 'false' ? false : v;
-        });
-      } else {
-        pFilters[colName] = vals;
-      }
-    });
+    const pFilters = buildPFilters(dynamicFilters, liveBooleanColumns);
 
     // Only fetch visible dimensions (user-configured in Configure Metrics)
     const dimCols = visibleLiveDimensions.map(d => d.name);
@@ -2682,7 +2650,7 @@ export function render() {
       cancelled = true;
       controller.abort();
     };
-  }, [dataSourceType, activeInsightsTab, liveMetricConfig, dataFrequency, serverDateWindowKey, dynamicFilters,
+  }, [liveSchemaReady, dataSourceType, activeInsightsTab, liveMetricConfig, dataFrequency, serverDateWindowKey, dynamicFilters,
       visibleLiveDimensions, cachedQuery, liveDateColumn, liveBooleanColumns]);
 
   const periodChangeLabel = React.useMemo(() => {
@@ -5012,7 +4980,10 @@ export function render() {
       return;
     }
 
-    // Create cache key with active filters to prevent stale cache hits
+    // Create cache key with active filters to prevent stale cache hits.
+    // Demo-mode filters are hardcoded per-column useState vars; live-mode
+    // filters all live in `dynamicFilters` — both must be in the key or
+    // changing live filters will hit stale cached insights.
     const activeFilters = {
       productName: productNameFilter,
       companySegment: companySegmentFilter,
@@ -5024,10 +4995,28 @@ export function render() {
       channel: channelFilter,
       productGroup: productGroupFilter,
       productSub: productSubFilter,
+      __dynamic: dynamicFilters,
     };
 
-    // In live mode, include dimension data fingerprint so cache invalidates when dim data arrives
-    const dimDataKey = Object.keys(liveInsightsDimAggs).sort().join(',');
+    // Content-aware fingerprint of every data source the generator reads.
+    //
+    // Why this is broad: data sources load in stages (period aggs → dim
+    // aggs → all-dim aggs). If the cache key only fingerprints one of
+    // them, an early generation with partial data gets cached, and later
+    // generations with more data hit the stale cache because the
+    // unfingerprinted sources happen to match. Capturing all three forces
+    // a regeneration whenever any source changes shape.
+    const periodAggsKey = 'p' + Object.keys(periodAggregates).length;
+    const dimAggsKey = 'd' + Object.keys(dimensionAggregates || {})
+      .filter((k) => k !== '_categoryTotals').length;
+    const insightsAggsKey = Object.keys(liveInsightsDimAggs).sort().map((col) => {
+      const cps = liveInsightsDimAggs[col] || {};
+      const cpKeys = Object.keys(cps).sort();
+      if (cpKeys.length === 0) return col + ':0';
+      const cats = Object.keys(cps[cpKeys[0]]).sort().join('|');
+      return col + ':' + cpKeys.length + ':' + cats;
+    }).join(',');
+    const dimDataKey = periodAggsKey + '|' + dimAggsKey + '|' + insightsAggsKey;
     const cacheKey = createInsightsCacheKey(
       metric,
       activeInsightsTab,
@@ -5086,6 +5075,7 @@ export function render() {
     channelFilter,
     productGroupFilter,
     productSubFilter,
+    dynamicFilters, // live-mode filters live here, not in the per-column vars above
     insightContext, // 🆕 CRITICAL: Must include insightContext so insights regenerate when drilling down
     periodAggregates,
     dimensionAggregates,
@@ -6332,7 +6322,7 @@ export function render() {
       selectedCategories: [...selectedCategories],
       categorySelectionMode,
       metricConfig: liveMetricConfig,
-      viewConfig: view !== 'Overall' ? VIEW_CONFIG[view] : null,
+      viewConfig: getActiveViewConfig(view, VIEW_CONFIG),
       categoryColorMap: { ...categoryColorMap },
       activeOverlays: { ...activeOverlays },
       smaWindow,
@@ -6924,248 +6914,43 @@ export function render() {
 
   return (
     <div style={{ ...styles.container, ...(compareCards.length > 0 ? { paddingBottom: '90px' } : {}) }}>
-      {/* Add keyframes animation for loading spinner */}
+      {/* Keyframes: spinner + subtle entry animations for modern UX feel */}
       <style>{`
           @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
           }
+          @keyframes dropdownSlideIn {
+            from { opacity: 0; transform: translateY(-4px); }
+            to { opacity: 1; transform: translateY(0); }
+          }
+          @keyframes bannerFadeIn {
+            from { opacity: 0; transform: translateY(-2px); }
+            to { opacity: 1; transform: translateY(0); }
+          }
         `}</style>
 
       {/* Tab Bar — only in live mode with tabs */}
       {baseConnection && tabs.length > 0 && (
-        <div style={{
-          display: "flex", alignItems: "center", gap: "0", marginBottom: "12px",
-          borderBottom: `2px solid ${isDarkMode ? '#374151' : '#e5e7eb'}`,
-        }}>
-          {tabs.map(tab => {
-            const isActive = tab.id === activeTabId;
-            const isRenaming = renamingTabId === tab.id;
-            return (
-              <div key={tab.id} style={{
-                display: "flex", alignItems: "center", gap: "4px",
-                padding: "8px 16px", fontSize: "13px", fontWeight: isActive ? 600 : 400,
-                cursor: "pointer", userSelect: "none", position: "relative",
-                color: isActive ? (isDarkMode ? '#f3f4f6' : '#111827') : (isDarkMode ? '#9ca3af' : '#6b7280'),
-                backgroundColor: isActive ? (isDarkMode ? 'rgba(99,102,241,0.1)' : 'rgba(99,102,241,0.05)') : 'transparent',
-                borderBottom: isActive ? `2px solid ${isDarkMode ? '#818cf8' : '#6366f1'}` : '2px solid transparent',
-                marginBottom: '-2px',
-                borderRadius: '6px 6px 0 0',
-                transition: 'all 0.15s ease',
-              }}
-                onClick={() => { if (!isRenaming) switchTab(tab.id); }}
-                onDoubleClick={() => { if (isCreatorMode || !configId) { setRenamingTabId(tab.id); setRenameText(tab.name); } }}
-              >
-                {isActive && (
-                  <span style={{ width: "6px", height: "6px", borderRadius: "50%",
-                    backgroundColor: liveDataLoading ? '#818cf8' : liveDataError ? '#ef4444' : '#10b981',
-                    display: "inline-block", flexShrink: 0 }} />
-                )}
-                {isRenaming ? (
-                  <input
-                    autoFocus
-                    value={renameText}
-                    onChange={e => setRenameText(e.target.value)}
-                    onBlur={() => { if (renameText.trim()) renameTab(tab.id, renameText.trim()); setRenamingTabId(null); }}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter') { if (renameText.trim()) renameTab(tab.id, renameText.trim()); setRenamingTabId(null); }
-                      if (e.key === 'Escape') setRenamingTabId(null);
-                    }}
-                    onClick={e => e.stopPropagation()}
-                    style={{
-                      background: 'transparent', border: 'none', borderBottom: `1px solid ${isDarkMode ? '#818cf8' : '#6366f1'}`,
-                      color: 'inherit', fontSize: '13px', fontWeight: 600, padding: '0 2px', width: Math.max(60, renameText.length * 8) + 'px',
-                      outline: 'none',
-                    }}
-                  />
-                ) : (
-                  <span>{tab.name}</span>
-                )}
-                {isActive && liveRowCount > 0 && !liveDataLoading && (
-                  <span style={{ fontSize: '11px', color: isDarkMode ? '#6b7280' : '#9ca3af', marginLeft: '4px' }}>
-                    ({liveRowCount.toLocaleString()}{liveDataTruncated ? '!' : ''})
-                  </span>
-                )}
-                {tabs.length > 1 && isActive && (isCreatorMode || !configId) && (
-                  <React.Fragment>
-                    {tabs.indexOf(tab) > 0 && <button
-                      onClick={e => { e.stopPropagation(); moveTab(tab.id, -1); }}
-                      style={{ background: 'none', border: 'none', color: isDarkMode ? '#6b7280' : '#9ca3af', cursor: 'pointer', fontSize: '10px', lineHeight: 1, padding: '0 1px', marginLeft: '4px', opacity: 0.6 }}
-                      onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.6}
-                      title="Move left"
-                    >&#9664;</button>}
-                    {tabs.indexOf(tab) < tabs.length - 1 && <button
-                      onClick={e => { e.stopPropagation(); moveTab(tab.id, 1); }}
-                      style={{ background: 'none', border: 'none', color: isDarkMode ? '#6b7280' : '#9ca3af', cursor: 'pointer', fontSize: '10px', lineHeight: 1, padding: '0 1px', opacity: 0.6 }}
-                      onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.6}
-                      title="Move right"
-                    >&#9654;</button>}
-                  </React.Fragment>
-                )}
-                {tabs.length > 1 && (isCreatorMode || !configId) && (
-                  <button
-                    onClick={e => { e.stopPropagation(); removeTab(tab.id); }}
-                    style={{
-                      background: 'none', border: 'none', color: isDarkMode ? '#6b7280' : '#9ca3af',
-                      cursor: 'pointer', fontSize: '14px', lineHeight: 1, padding: '0 2px', marginLeft: '4px',
-                      opacity: 0.6, display: 'flex', alignItems: 'center',
-                    }}
-                    onMouseEnter={e => e.target.style.opacity = 1}
-                    onMouseLeave={e => e.target.style.opacity = 0.6}
-                  >
-                    &times;
-                  </button>
-                )}
-              </div>
-            );
-          })}
-          {/* Add Tab Button — hidden for viewers */}
-          {(isCreatorMode || !configId) && <div style={{ position: 'relative' }} data-add-tab>
-            <button
-              onClick={() => setShowAddTab(!showAddTab)}
-              style={{
-                background: 'none', border: 'none', color: isDarkMode ? '#6b7280' : '#9ca3af',
-                cursor: 'pointer', fontSize: '18px', lineHeight: 1, padding: '6px 12px',
-                display: 'flex', alignItems: 'center',
-              }}
-              title="Add dataset tab"
-            >
-              +
-            </button>
-            {showAddTab && (
-              <div style={{
-                position: 'absolute', top: '100%', left: 0, zIndex: 100,
-                backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
-                border: `1px solid ${isDarkMode ? '#374151' : '#e5e7eb'}`,
-                borderRadius: '8px', padding: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                minWidth: '200px',
-              }}>
-                <div style={{ fontSize: '12px', fontWeight: 600, marginBottom: '8px', color: isDarkMode ? '#d1d5db' : '#374151' }}>
-                  New Tab
-                </div>
-                <input
-                  autoFocus
-                  placeholder="Tab name"
-                  value={newTabDataset}
-                  onChange={e => setNewTabDataset(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && newTabDataset.trim()) {
-                      addTab(newTabDataset.trim());
-                      setNewTabDataset('');
-                      setShowAddTab(false);
-                    }
-                    if (e.key === 'Escape') { setShowAddTab(false); setNewTabDataset(''); }
-                  }}
-                  style={{
-                    width: '100%', padding: '6px 10px', borderRadius: '6px', fontSize: '13px',
-                    border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`,
-                    backgroundColor: isDarkMode ? '#111827' : '#f9fafb',
-                    color: isDarkMode ? '#f3f4f6' : '#111827',
-                    outline: 'none', boxSizing: 'border-box',
-                  }}
-                />
-                <div style={{ fontSize: '11px', color: isDarkMode ? '#6b7280' : '#9ca3af', marginTop: '6px' }}>
-                  Name your tab, then set dataset in Configure Metrics
-                </div>
-              </div>
-            )}
-          </div>}
-          {/* Configure Metrics button — right-aligned, hidden for viewers */}
-          {(isCreatorMode || !configId) && (
-            <button
-              onClick={() => {
-                setMetricsEditorDraft({ ...(liveMetricConfig || {}), dataset: activeTab?.dataset || '' });
-                setMetricsEditorError('');
-                setExpandedMetricSlot(null);
-                setShowMetricsEditor(true);
-              }}
-              style={{
-                marginLeft: 'auto', padding: "4px 12px", borderRadius: "6px",
-                border: `1px solid ${isDarkMode ? 'rgba(16,185,129,0.4)' : 'rgba(16,185,129,0.5)'}`,
-                background: "transparent", color: isDarkMode ? '#6ee7b7' : '#065f46',
-                cursor: "pointer", fontSize: "11px", fontWeight: 500, whiteSpace: "nowrap",
-              }}
-            >
-              Configure Metrics
-            </button>
-          )}
-          {/* Lock/unlock toggle — creators can lock, viewers can unlock with edit key */}
-          {configId && (
-            <div style={{ marginLeft: isCreatorMode ? '0' : 'auto', position: 'relative' }}>
-              <button
-                onClick={() => {
-                  if (isCreatorMode) {
-                    // Lock: exit creator mode
-                    setIsCreatorMode(false);
-                    if (creatorTimerRef.current) clearTimeout(creatorTimerRef.current);
-                  } else if (getEditSecret(configId)) {
-                    // Has secret in localStorage — re-unlock directly
-                    setIsCreatorMode(true);
-                  } else {
-                    // No secret — show prompt
-                    setShowUnlockPrompt(!showUnlockPrompt);
-                    setUnlockError('');
-                    setUnlockSecret('');
-                  }
-                }}
-                title={isCreatorMode ? "Lock editing (auto-locks after 2 min)" : "Unlock editing"}
-                style={{
-                  background: 'none', border: 'none', cursor: 'pointer', padding: '4px 8px',
-                  color: isCreatorMode ? (isDarkMode ? '#6ee7b7' : '#065f46') : (isDarkMode ? '#6b7280' : '#9ca3af'),
-                  fontSize: '14px', display: 'flex', alignItems: 'center',
-                }}
-              >{isCreatorMode ? '\u{1F513}' : '\u{1F512}'}</button>
-              {showUnlockPrompt && !isCreatorMode && (
-                <div style={{
-                  position: 'absolute', top: '100%', right: 0, zIndex: 100,
-                  backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
-                  border: `1px solid ${isDarkMode ? '#374151' : '#e5e7eb'}`,
-                  borderRadius: '8px', padding: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                  minWidth: '240px',
-                }}>
-                  <div style={{ fontSize: '12px', fontWeight: 600, marginBottom: '8px', color: isDarkMode ? '#d1d5db' : '#374151' }}>
-                    Enter Edit Key
-                  </div>
-                  <input
-                    autoFocus
-                    type="password"
-                    placeholder="Paste edit key..."
-                    value={unlockSecret}
-                    onChange={e => setUnlockSecret(e.target.value)}
-                    onKeyDown={e => {
-                      if (e.key === 'Escape') setShowUnlockPrompt(false);
-                      if (e.key === 'Enter' && unlockSecret.trim()) {
-                        updateConfig(configId, unlockSecret.trim(), {})
-                          .then(ok => {
-                            if (ok) {
-                              setEditSecret(configId, unlockSecret.trim());
-                              setIsCreatorMode(true);
-                              setShowUnlockPrompt(false);
-                            } else {
-                              setUnlockError('Invalid key');
-                            }
-                          })
-                          .catch(() => setUnlockError('Failed to verify'));
-                      }
-                    }}
-                    style={{
-                      width: '100%', padding: '6px 10px', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box',
-                      border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`,
-                      backgroundColor: isDarkMode ? '#111827' : '#f9fafb',
-                      color: isDarkMode ? '#f3f4f6' : '#111827', outline: 'none',
-                    }}
-                  />
-                  {unlockError && <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '4px' }}>{unlockError}</div>}
-                  <div style={{ fontSize: '11px', color: isDarkMode ? '#6b7280' : '#9ca3af', marginTop: '6px' }}>
-                    Press Enter to unlock editing
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+        <TabBar
+          tabs={tabs} activeTabId={activeTabId} activeTab={activeTab} configId={configId}
+          liveMetricConfig={liveMetricConfig}
+          liveRowCount={liveRowCount} liveDataTruncated={liveDataTruncated}
+          liveDataLoading={liveDataLoading} liveDataError={liveDataError}
+          isDarkMode={isDarkMode} isCreatorMode={isCreatorMode}
+          renamingTabId={renamingTabId} renameText={renameText}
+          showAddTab={showAddTab} newTabDataset={newTabDataset}
+          showUnlockPrompt={showUnlockPrompt} unlockSecret={unlockSecret} unlockError={unlockError}
+          setRenamingTabId={setRenamingTabId} setRenameText={setRenameText}
+          setShowAddTab={setShowAddTab} setNewTabDataset={setNewTabDataset}
+          setShowUnlockPrompt={setShowUnlockPrompt} setUnlockSecret={setUnlockSecret} setUnlockError={setUnlockError}
+          setIsCreatorMode={setIsCreatorMode}
+          setShowMetricsEditor={setShowMetricsEditor} setMetricsEditorDraft={setMetricsEditorDraft}
+          setMetricsEditorError={setMetricsEditorError} setExpandedMetricSlot={setExpandedMetricSlot}
+          switchTab={switchTab} addTab={addTab} removeTab={removeTab} renameTab={renameTab} moveTab={moveTab}
+          creatorTimerRef={creatorTimerRef}
+        />
       )}
-
       {/* Status Banner */}
       <StatusBanner
         baseConnection={baseConnection}
@@ -7769,305 +7554,23 @@ export function render() {
         </div>
       </div>
 
-      {/* Pro Tip Banner */}
-      <div style={styles.proTipBanner}>
-        <span style={styles.proTipLabel}>ProTip</span>
-        <span style={styles.proTipIcon}>{PRO_TIPS[currentTipIndex].icon}</span>
-        <div style={styles.proTipContent}>
-          <span style={styles.proTipTitle}>
-            {PRO_TIPS[currentTipIndex].title}:
-          </span>
-          <span style={styles.proTipText}>
-            {PRO_TIPS[currentTipIndex].text}
-          </span>
-        </div>
-        <div style={styles.proTipNavigation}>
-          <button
-            style={styles.proTipNavButton}
-            onClick={() =>
-              setCurrentTipIndex((prev) =>
-                prev === 0 ? PRO_TIPS.length - 1 : prev - 1
-              )
-            }
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor =
-                "rgba(255, 255, 255, 0.9)";
-              e.currentTarget.style.transform = "scale(1.1)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor =
-                "rgba(255, 255, 255, 0.6)";
-              e.currentTarget.style.transform = "scale(1)";
-            }}
-            title="Previous tip"
-          >
-            ‹
-          </button>
-          <span style={styles.proTipCounter}>
-            {currentTipIndex + 1}/{PRO_TIPS.length}
-          </span>
-          <button
-            style={styles.proTipNavButton}
-            onClick={() =>
-              setCurrentTipIndex((prev) => (prev + 1) % PRO_TIPS.length)
-            }
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor =
-                "rgba(255, 255, 255, 0.9)";
-              e.currentTarget.style.transform = "scale(1.1)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor =
-                "rgba(255, 255, 255, 0.6)";
-              e.currentTarget.style.transform = "scale(1)";
-            }}
-            title="Next tip"
-          >
-            ›
-          </button>
-        </div>
-      </div>
+      <ProTipBanner
+        styles={styles}
+        PRO_TIPS={PRO_TIPS}
+        currentTipIndex={currentTipIndex}
+        setCurrentTipIndex={setCurrentTipIndex}
+      />
 
       {/* Main Content */}
       <div style={styles.mainContent}>
-        {/* Left Panel: Insights */}
-        <div style={styles.leftPanel} data-guide="insights-panel">
-          {/* Tab-Style Insights */}
-          {activeInsightsTab === null ? (
-            <div style={styles.insightsTabsContainer}>
-              <button
-                style={styles.clickForInsightsButton}
-                onClick={() => setActiveInsightsTab("basic")}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.opacity = "0.9";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.opacity = "";
-                }}
-              >
-                <span style={{ fontSize: "16px" }}>✨</span>
-                Click for Insights
-                <span style={{ fontSize: "16px" }}>✨</span>
-              </button>
-            </div>
-          ) : (
-            <div style={styles.insightsTabsContainer}>
-              <button
-                style={{
-                  ...styles.insightsTab,
-                  ...(activeInsightsTab === "basic"
-                    ? styles.insightsTabActive
-                    : {}),
-                }}
-                onClick={() =>
-                  setActiveInsightsTab(
-                    activeInsightsTab === "basic" ? null : "basic"
-                  )
-                }
-              >
-                Solo Insights
-                <span style={styles.tabCount}>
-                  {Object.values(displayedInsights.basicInsights).flat().length}
-                </span>
-              </button>
-
-              <button
-                style={{
-                  ...styles.insightsTab,
-                  ...(activeInsightsTab === "advanced"
-                    ? styles.insightsTabActive
-                    : {}),
-                }}
-                onClick={() =>
-                  setActiveInsightsTab(
-                    activeInsightsTab === "advanced" ? null : "advanced"
-                  )
-                }
-              >
-                Cross Insights
-                {(activeInsightsTab === "advanced" ||
-                  Object.values(displayedInsights.advancedInsights).flat()
-                    .length > 0) && (
-                  <span style={styles.tabCount}>
-                    {
-                      Object.values(displayedInsights.advancedInsights).flat()
-                        .length
-                    }
-                  </span>
-                )}
-              </button>
-            </div>
-          )}
-
-          {/* DRY: Insights sections with configuration */}
-          {activeInsightsTab &&
-            (() => {
-              const insightsConfig = {
-                basic: {
-                  title: "Single-dimension analysis of trends and patterns",
-                  emptyMessage:
-                    "No significant patterns detected with current filters and data range. Try adjusting your date range or filters to see more insights.",
-                  categories: [
-                    {
-                      key: "decomposition",
-                      title: "Investigation Decomposition",
-                      tooltipText:
-                        "Breaks down the investigation to show which sub-segments are driving the observed performance. Explains what's behind the trend or anomaly you're investigating.",
-                      colors: {
-                        borderColor: "#10b981",
-                        backgroundColor: isDarkMode
-                          ? "rgba(16, 185, 129, 0.1)"
-                          : "rgba(16, 185, 129, 0.08)",
-                        hoverBackgroundColor: isDarkMode
-                          ? "rgba(16, 185, 129, 0.15)"
-                          : "#d1fae5",
-                        hoverBorderColor: "#10b981",
-                      },
-                    },
-                    {
-                      key: "performanceAlerts",
-                      title: "Performance Alerts",
-                      tooltipText: null,
-                      colors: {
-                        borderColor: theme.danger,
-                        backgroundColor: theme.dangerBg,
-                        hoverBackgroundColor: isDarkMode
-                          ? "rgba(239, 68, 68, 0.2)"
-                          : "#fee2e2",
-                        hoverBorderColor: theme.danger,
-                      },
-                    },
-                    {
-                      key: "overallTrends",
-                      title: "Overall Trends",
-                      tooltipText: null,
-                    },
-                    {
-                      key: "categoryTrends",
-                      title: "Category Trends",
-                      tooltipText:
-                        "Above/below avg. compares category growth rate to overall market growth rate. For example, if market grew 20% and category grew 30%, it's 10 percentage points above avg.",
-                      colors: {
-                        borderColor: theme.accentPrimary,
-                        backgroundColor: theme.statBoxActiveBg,
-                        hoverBackgroundColor: isDarkMode
-                          ? "rgba(129, 140, 248, 0.15)"
-                          : "#dbeafe",
-                        hoverBorderColor: theme.accentPrimary,
-                      },
-                    },
-                    {
-                      key: "shareShifts",
-                      title: "Market Share Shifts",
-                      tooltipText:
-                        "Above/below avg. compares category growth rate to overall market growth rate. For example, if market grew 20% and category grew 30%, it's 10 percentage points above avg.",
-                      colors: {
-                        borderColor: isDarkMode ? "#a78bfa" : "#8b5cf6",
-                        backgroundColor: isDarkMode
-                          ? "rgba(139, 92, 246, 0.1)"
-                          : "rgba(139, 92, 246, 0.08)",
-                        hoverBackgroundColor: isDarkMode
-                          ? "rgba(139, 92, 246, 0.15)"
-                          : "#f3e8ff",
-                        hoverBorderColor: isDarkMode ? "#a78bfa" : "#8b5cf6",
-                      },
-                    },
-                    {
-                      key: "marketLeaders",
-                      title: "Market Leaders",
-                      tooltipText: null,
-                    },
-                  ],
-                  insights: displayedInsights.basicInsights,
-                },
-                advanced: {
-                  title: "Multi-attribute analysis across dimensions",
-                  emptyMessage:
-                    "Advanced cross-dimensional insights will be displayed here when sufficient data patterns are detected across multiple attributes. Try using fewer filters to see cross-dimensional patterns.",
-                  categories: [
-                    {
-                      key: "allTimeGrowth",
-                      title: "Cross Insights Growth",
-                      tooltipText:
-                        "Above/below avg. compares segment growth rate to overall market growth rate. For example, if market grew 20% and segment grew 30%, it's 10 percentage points above avg.",
-                    },
-                  ],
-                  insights: displayedInsights.advancedInsights,
-                },
-              };
-
-              const config = insightsConfig[activeInsightsTab];
-              if (!config) return null;
-
-              // Show loading indicator while insights are being generated
-              if (loadingInsights) {
-                return (
-                  <div style={styles.structuredInsightsContainer}>
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        padding: "40px",
-                        color: "#6b7280",
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: "40px",
-                          height: "40px",
-                          border: "4px solid #f3f4f6",
-                          borderTop: "4px solid #3b82f6",
-                          borderRadius: "50%",
-                          animation: "spin 1s linear infinite",
-                          marginBottom: "16px",
-                        }}
-                      ></div>
-                      <div style={{ fontSize: "14px", fontWeight: "500" }}>
-                        Loading Insights...
-                      </div>
-                      <div style={{ fontSize: "12px", marginTop: "8px" }}>
-                        Analyzing patterns in your data
-                      </div>
-                    </div>
-                  </div>
-                );
-              }
-
-              // Use insights directly (limiting now happens at generation time)
-              const processedInsights = config.insights;
-
-              const totalInsights =
-                Object.values(processedInsights).flat().length;
-
-              return (
-                <div style={styles.structuredInsightsContainer}>
-                  <div style={styles.insightsContext}>
-                    {getShortFilterContext()}
-                  </div>
-                  <div style={styles.insightsSubtitle}>{config.title}</div>
-                  {config.categories.map(
-                    ({ key, title, tooltipText, colors }) =>
-                      renderInsightCategory(
-                        processedInsights[key],
-                        title,
-                        key,
-                        tooltipText,
-                        colors
-                      )
-                  )}
-                  {totalInsights === 0 && (
-                    <div style={styles.categorySection}>
-                      <div style={styles.insightText}>
-                        {config.emptyMessage}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-        </div>
+        <InsightsPanel
+          styles={styles} theme={theme} isDarkMode={isDarkMode}
+          activeInsightsTab={activeInsightsTab} setActiveInsightsTab={setActiveInsightsTab}
+          displayedInsights={displayedInsights}
+          loadingInsights={loadingInsights}
+          getShortFilterContext={getShortFilterContext}
+          renderInsightCategory={renderInsightCategory}
+        />
 
         {/* Chart */}
         <div style={styles.chartContainer}>
@@ -8510,511 +8013,52 @@ export function render() {
         </div>
       </div>
 
-      {/* Summary Stats */}
-      <div style={styles.summaryContainer}>
-        <h4
-          style={styles.summaryTitle}
-          onClick={() => setShowDataSummary(!showDataSummary)}
-        >
-          <span style={{ fontSize: "12px" }}>
-            {showDataSummary ? "▼" : "▶"}
-          </span>
-          Data Summary
-        </h4>
-        {showDataSummary && (
-          <div style={styles.summaryGrid}>
-            <div style={styles.summaryItem}>
-              <strong>Date Aggregation:</strong> {dataFrequency}
-            </div>
-            <div style={styles.summaryItem}>
-              <strong>Metric:</strong> {metric}
-            </div>
-            <div style={styles.summaryItem}>
-              <strong>Split By Dimension:</strong> {view}
-            </div>
-            <div style={styles.summaryItem}>
-              <strong>Date Range:</strong> {dateRange}
-            </div>
-            <div style={styles.summaryItem}>
-              <strong>Total Records:</strong>{" "}
-              {(liveRowCount || filteredData.length).toLocaleString()}
-            </div>
-            <div style={styles.summaryItem}>
-              <strong>Period Range:</strong>{" "}
-              {periods.length > 0
-                ? periods[0] + " to " + periods[periods.length - 1]
-                : "No data"}
-            </div>
-            <div style={styles.summaryItem}>
-              <strong>Active Filters:</strong>{" "}
-              {FILTER_CONFIG.flatMap(({ state, formatValue, key }) => {
-                if (state.length === 0) return [];
-                return state.map((val) =>
-                  formatValue ? formatValue(val) : formatFilterName(val)
-                );
-              }).join(", ") || "None"}
-            </div>
-            <div style={styles.summaryItem}>
-              <strong>Filter Context:</strong> {getShortFilterContext()}
-            </div>
-            <div style={styles.summaryItem}>
-              <strong>Market Size:</strong>{" "}
-              {formatMetric(calculateMetric(filteredData))}
-            </div>
-            <div style={styles.summaryItem}>
-              <strong>Solo Insights Found:</strong>{" "}
-              {Object.values(displayedInsights.basicInsights).flat().length}
-            </div>
-            <div style={styles.summaryItem}>
-              <strong>Data Filter Time:</strong>{" "}
-              {filterTimeRef.current.toFixed(2)}ms
-            </div>
-            <div style={styles.summaryItem}>
-              <strong>Render Time:</strong>{" "}
-              {(performance.now() - renderStartTime).toFixed(2)}ms
-            </div>
-            <div style={styles.summaryItem}>
-              <strong>Render Count:</strong> {renderCountRef.current}
-            </div>
-            <div style={styles.summaryItem}>
-              <strong>Raw Data Rows:</strong>{" "}
-              {cleanedQueryData.rows
-                ? cleanedQueryData.rows.length.toLocaleString()
-                : 0}
-            </div>
-            <div style={styles.summaryItem}>
-              <strong>Filtered Rows:</strong>{" "}
-              {filteredData.length.toLocaleString()}
-            </div>
-            <div style={styles.summaryItem}>
-              <strong>Cross Insights Found:</strong>{" "}
-              {Object.values(displayedInsights.advancedInsights).flat().length}
-            </div>
-          </div>
-        )}
-      </div>
+      <DataSummaryPanel
+        styles={styles}
+        showDataSummary={showDataSummary} setShowDataSummary={setShowDataSummary}
+        dataFrequency={dataFrequency} metric={metric} view={view} dateRange={dateRange}
+        liveRowCount={liveRowCount} filteredData={filteredData} periods={periods}
+        FILTER_CONFIG={FILTER_CONFIG} formatFilterName={formatFilterName}
+        getShortFilterContext={getShortFilterContext}
+        formatMetric={formatMetric} calculateMetric={calculateMetric}
+        displayedInsights={displayedInsights}
+        filterTimeRef={filterTimeRef} renderStartTime={renderStartTime} renderCountRef={renderCountRef}
+        cleanedQueryData={cleanedQueryData}
+      />
 
       {/* Connect to Database Modal */}
-      {showConnectModal && (() => {
-        const isSupabase = connectForm.connectionType !== 'fastapi';
-        const supabaseFields = [
-          { key: 'supabaseUrl', label: 'Supabase URL', placeholder: 'https://your-project.supabase.co' },
-          { key: 'apiKey', label: 'API Key (anon)', placeholder: 'eyJhbGciOi...', password: true },
-          { key: 'dataset', label: 'Table (schema.table)', placeholder: 'public_analytics.fct_job_metrics' },
-        ];
-        const fastapiFields = [
-          { key: 'apiUrl', label: 'API URL', placeholder: 'https://your-server.com/dash-api' },
-          { key: 'apiSecret', label: 'API Secret', placeholder: 'your-secret', password: true },
-          { key: 'connection', label: 'Connection Name', placeholder: 'zbt' },
-          { key: 'dataset', label: 'Table (schema.table)', placeholder: 'analytics.signals' },
-        ];
-        const fields = isSupabase ? supabaseFields : fastapiFields;
-        const canSubmit = isSupabase
-          ? connectForm.supabaseUrl && connectForm.apiKey && connectForm.dataset
-          : connectForm.apiUrl && connectForm.apiSecret && connectForm.connection && connectForm.dataset;
-        return (
-        <div style={styles.shareModal} onClick={e => { if (e.target === e.currentTarget) setShowConnectModal(false); }}>
-          <div style={{ ...styles.shareModalContent, maxWidth: '440px' }}>
-            <div style={styles.shareModalHeader}>
-              <div style={styles.shareModalTitle}>Connect to Database</div>
-              <button style={styles.shareModalClose} onClick={() => setShowConnectModal(false)}>×</button>
-            </div>
-            <div style={{ padding: '4px 0 16px' }}>
-              {/* Connection type toggle */}
-              <div style={{ display: 'flex', gap: '4px', marginBottom: '16px', padding: '2px', borderRadius: '8px', background: isDarkMode ? '#1f2937' : '#f3f4f6' }}>
-                {[{ value: 'supabase', label: 'Supabase' }, { value: 'fastapi', label: 'Direct Postgres' }].map(opt => (
-                  <button key={opt.value}
-                    onClick={() => setConnectForm(prev => ({ ...prev, connectionType: opt.value }))}
-                    style={{
-                      flex: 1, padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
-                      border: 'none',
-                      background: connectForm.connectionType === opt.value ? (isDarkMode ? '#374151' : '#ffffff') : 'transparent',
-                      color: connectForm.connectionType === opt.value ? (isDarkMode ? '#f3f4f6' : '#111827') : (isDarkMode ? '#9ca3af' : '#6b7280'),
-                      boxShadow: connectForm.connectionType === opt.value ? '0 1px 2px rgba(0,0,0,0.1)' : 'none',
-                    }}
-                  >{opt.label}</button>
-                ))}
-              </div>
-              <p style={{ margin: '0 0 16px', fontSize: '12px', color: isDarkMode ? '#9ca3af' : '#6b7280' }}>
-                {isSupabase
-                  ? <>Requires the <code style={{ fontSize: '11px', padding: '1px 4px', borderRadius: '3px', background: isDarkMode ? '#1f2937' : '#f3f4f6' }}>query_dataset</code> RPC function (see setup.sql).</>
-                  : 'Connect via dash-api proxy to any Postgres database.'}
-              </p>
-              {fields.map(f => (
-                <div key={f.key} style={{ marginBottom: '12px' }}>
-                  <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, marginBottom: '4px', color: isDarkMode ? '#d1d5db' : '#374151' }}>{f.label}</label>
-                  <input
-                    type={f.password ? 'password' : 'text'}
-                    value={connectForm[f.key]}
-                    onChange={e => setConnectForm(prev => ({ ...prev, [f.key]: e.target.value }))}
-                    placeholder={f.placeholder}
-                    style={{
-                      width: '100%', padding: '8px 10px', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box',
-                      border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`,
-                      backgroundColor: isDarkMode ? '#111827' : '#f9fafb',
-                      color: isDarkMode ? '#f3f4f6' : '#111827', outline: 'none',
-                    }}
-                  />
-                </div>
-              ))}
-              {connectError && (
-                <div style={{ fontSize: '12px', color: '#ef4444', marginBottom: '12px' }}>{connectError}</div>
-              )}
-              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                <button
-                  onClick={() => setShowConnectModal(false)}
-                  style={{
-                    padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer',
-                    border: `1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'}`,
-                    background: 'transparent', color: isDarkMode ? '#d1d5db' : '#374151',
-                  }}
-                >Cancel</button>
-                <button
-                  disabled={connectSaving || !canSubmit}
-                  onClick={async () => {
-                    setConnectError('');
-                    setConnectSaving(true);
-                    try {
-                      let connectionJson, testData;
-                      if (isSupabase) {
-                        const testRes = await fetch(connectForm.supabaseUrl.replace(/\/+$/, '') + '/rest/v1/rpc/query_dataset', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json', 'apikey': connectForm.apiKey, 'Authorization': 'Bearer ' + connectForm.apiKey },
-                          body: JSON.stringify({ p_table: connectForm.dataset, p_action: 'schema' }),
-                        });
-                        if (!testRes.ok) throw new Error('Connection failed (HTTP ' + testRes.status + '). Check your URL and API key.');
-                        testData = await testRes.json();
-                        if (testData.error) throw new Error(testData.error);
-                        connectionJson = { supabaseUrl: connectForm.supabaseUrl.replace(/\/+$/, ''), apiKey: connectForm.apiKey, dataset: connectForm.dataset };
-                      } else {
-                        const testRes = await fetch(connectForm.apiUrl.replace(/\/+$/, '') + '/query', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + connectForm.apiSecret },
-                          body: JSON.stringify({ connection: connectForm.connection, table: connectForm.dataset, action: 'schema' }),
-                        });
-                        if (!testRes.ok) {
-                          const errBody = await testRes.json().catch(() => ({}));
-                          throw new Error(errBody.detail || 'Connection failed (HTTP ' + testRes.status + ')');
-                        }
-                        testData = await testRes.json();
-                        if (testData.error) throw new Error(testData.error);
-                        connectionJson = { connectionType: 'fastapi', apiUrl: connectForm.apiUrl.replace(/\/+$/, ''), apiSecret: connectForm.apiSecret, connection: connectForm.connection, dataset: connectForm.dataset };
-                      }
-                      const tabsJson = [{ id: 'tab_1', name: connectForm.dataset, dataset: connectForm.dataset, metricConfig: null }];
-                      const result = await createConfig({ name: connectForm.dataset, connectionJson, tabsJson });
-                      setEditSecret(result.id, result.editSecret);
-                      window.location.hash = '#/' + result.id;
-                      window.location.reload();
-                    } catch (err) {
-                      setConnectError(err.message);
-                    }
-                    setConnectSaving(false);
-                  }}
-                  style={{
-                    padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: 600,
-                    border: 'none',
-                    background: !canSubmit ? (isDarkMode ? '#374151' : '#e5e7eb') : '#6366f1',
-                    color: !canSubmit ? (isDarkMode ? '#6b7280' : '#9ca3af') : '#ffffff',
-                  }}
-                >{connectSaving ? 'Connecting...' : 'Connect & Save'}</button>
-              </div>
-            </div>
-          </div>
-        </div>
-        );
-      })()}
+      {showConnectModal && (
+        <ConnectModal
+          styles={styles} isDarkMode={isDarkMode}
+          connectForm={connectForm} setConnectForm={setConnectForm}
+          connectError={connectError} setConnectError={setConnectError}
+          connectSaving={connectSaving} setConnectSaving={setConnectSaving}
+          setShowConnectModal={setShowConnectModal}
+        />
+      )}
 
       {/* Share Modal */}
       {showShareModal && (
-        <div
-          style={styles.shareModal}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) {
-              setShowShareModal(false);
-            }
-          }}
-        >
-          <div style={styles.shareModalContent}>
-            <div style={styles.shareModalHeader}>
-              <div style={styles.shareModalTitle}>
-                Share Chart Configuration
-              </div>
-              <button
-                style={styles.shareModalClose}
-                onClick={() => setShowShareModal(false)}
-              >
-                ×
-              </button>
-            </div>
-            {/* Share Link Section */}
-            <div style={styles.shareCodeSection}>
-              <label style={styles.shareCodeLabel}>Your Share Link:</label>
-              <div style={styles.shareLinkContainer}>
-                      <a
-                        id="share-link-anchor"
-                        href={shareCode}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                          ...styles.shareLinkInput,
-                          textDecoration: "none",
-                          color: "#6366f1",
-                          cursor: "pointer",
-                          display: "flex",
-                          alignItems: "center",
-                          padding: "10px 12px",
-                          wordBreak: "break-all",
-                        }}
-                      >
-                        {shareCode}
-                      </a>
-                      <button
-                        id="copy-share-code-btn"
-                        style={styles.shareCopyButton}
-                        onClick={() => {
-                          if (navigator.clipboard && navigator.clipboard.writeText) {
-                            navigator.clipboard.writeText(shareCode).then(() => {
-                              const btn = document.getElementById("copy-share-code-btn");
-                              if (btn) {
-                                const orig = btn.textContent;
-                                btn.textContent = "Copied!";
-                                btn.style.backgroundColor = "#10b981";
-                                setTimeout(() => { btn.textContent = orig; btn.style.backgroundColor = "#6366f1"; }, 2000);
-                              }
-                            }).catch(e => logger.error("Failed to copy:", e));
-                          }
-                        }}
-                      >
-                        Copy Link
-                      </button>
-              </div>
-              <div style={styles.shareInstructions}>
-                <p style={{ margin: "8px 0 0 0", fontSize: "12px", color: "#6b7280" }}>
-                  Share this link. Recipients can view and explore the dashboard from this exact view.
-                </p>
-              </div>
-              {/* Edit Key section — only for creators with a config */}
-              {isCreatorMode && configId && (() => {
-                const secret = getEditSecret(configId);
-                if (!secret) return null;
-                return (
-                  <div style={{ marginTop: '12px', padding: '10px 12px', borderRadius: '6px',
-                    background: isDarkMode ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.05)',
-                    border: `1px solid ${isDarkMode ? 'rgba(99,102,241,0.2)' : 'rgba(99,102,241,0.15)'}`,
-                  }}>
-                    <div style={{ fontSize: '11px', fontWeight: 600, color: isDarkMode ? '#a5b4fc' : '#4338ca', marginBottom: '4px' }}>
-                      Edit Key (for managing from other devices)
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <code style={{
-                        flex: 1, fontSize: '11px', padding: '4px 8px', borderRadius: '4px',
-                        background: isDarkMode ? '#111827' : '#f3f4f6', color: isDarkMode ? '#d1d5db' : '#374151',
-                        wordBreak: 'break-all', userSelect: 'all',
-                      }}>{secret}</code>
-                      <button
-                        id="copy-edit-key-btn"
-                        onClick={() => {
-                          navigator.clipboard.writeText(secret).then(() => {
-                            const btn = document.getElementById('copy-edit-key-btn');
-                            if (btn) { const orig = btn.textContent; btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = orig; }, 1500); }
-                          });
-                        }}
-                        style={{
-                          padding: '3px 8px', borderRadius: '4px', fontSize: '10px', cursor: 'pointer',
-                          border: `1px solid ${isDarkMode ? 'rgba(99,102,241,0.3)' : 'rgba(99,102,241,0.3)'}`,
-                          background: 'transparent', color: isDarkMode ? '#a5b4fc' : '#4338ca', whiteSpace: 'nowrap',
-                        }}
-                      >Copy</button>
-                    </div>
-                    <div style={{ fontSize: '10px', color: isDarkMode ? '#6b7280' : '#9ca3af', marginTop: '4px' }}>
-                      Paste this into the &#9881; gear icon on another device to unlock editing.
-                    </div>
-                  </div>
-                );
-              })()}
-            </div>
-
-          </div>
-        </div>
+        <ShareModal
+          styles={styles} isDarkMode={isDarkMode} shareCode={shareCode}
+          isCreatorMode={isCreatorMode} configId={configId}
+          setShowShareModal={setShowShareModal}
+        />
       )}
 
       {/* Save View Modal */}
       {showSaveViewModal && (
-        <div
-          style={styles.shareModal}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) {
-              setShowSaveViewModal(false);
-            }
-          }}
-        >
-          <div style={styles.shareModalContent}>
-            <button
-              style={styles.shareModalClose}
-              onClick={() => {
-                setShowSaveViewModal(false);
-                setSaveViewError("");
-                setSaveViewSuccess("");
-              }}
-            >
-              ×
-            </button>
-
-            <div style={styles.shareCodeSection}>
-              {/* Note at top */}
-              <div style={styles.shareInstructions}>
-                <p
-                  style={{
-                    margin: "0 0 16px 0",
-                    fontSize: "11px",
-                    color: "#9ca3af",
-                    fontStyle: "italic",
-                  }}
-                >
-                  Note: Saved views will appear in the "Load Saved View"
-                  dropdown after approximately 1 hour, once the Google Sheet
-                  data is refreshed in the database.
-                </p>
-              </div>
-
-              {/* View Name Input */}
-              <div style={styles.marginBottom16}>
-                <label style={styles.shareCodeLabel}>View Name:</label>
-                <input
-                  type="text"
-                  value={saveViewName}
-                  onChange={(e) => {
-                    setSaveViewName(e.target.value);
-                    setSaveViewError("");
-                  }}
-                  placeholder="Enter a name for this view..."
-                  style={{
-                    ...styles.pasteCodeInput,
-                    width: "100%",
-                  }}
-                />
-              </div>
-
-              {/* Owner Type Selection */}
-              <div style={styles.marginBottom16}>
-                <label style={styles.shareCodeLabel}>Save as:</label>
-                <div style={styles.flexGap12Mt8}>
-                  <label style={styles.radioLabel}>
-                    <input
-                      type="radio"
-                      value="username"
-                      checked={saveViewOwnerType === "username"}
-                      onChange={(e) => setSaveViewOwnerType(e.target.value)}
-                      style={styles.marginRight6}
-                      disabled={!username}
-                    />
-                    {username || "Username (not available)"}
-                  </label>
-                  <label style={styles.radioLabel}>
-                    <input
-                      type="radio"
-                      value="team"
-                      checked={saveViewOwnerType === "team"}
-                      onChange={(e) => setSaveViewOwnerType(e.target.value)}
-                      style={styles.marginRight6}
-                      disabled={!teamName}
-                    />
-                    {teamName || "Team (not available)"}
-                  </label>
-                  <label style={styles.radioLabel}>
-                    <input
-                      type="radio"
-                      value="custom"
-                      checked={saveViewOwnerType === "custom"}
-                      onChange={(e) => setSaveViewOwnerType(e.target.value)}
-                      style={styles.marginRight6}
-                    />
-                    Custom
-                  </label>
-                </div>
-              </div>
-
-              {/* Custom Owner Input (shown only when "Custom" is selected) */}
-              {saveViewOwnerType === "custom" && (
-                <div style={styles.marginBottom16}>
-                  <label style={styles.shareCodeLabel}>Custom Owner:</label>
-                  <input
-                    type="text"
-                    value={saveViewCustomOwner}
-                    onChange={(e) => {
-                      setSaveViewCustomOwner(e.target.value);
-                      setSaveViewError("");
-                    }}
-                    placeholder="Enter custom owner name..."
-                    style={{
-                      ...styles.pasteCodeInput,
-                      width: "100%",
-                    }}
-                  />
-                </div>
-              )}
-
-              {/* Error Message */}
-              {saveViewError && (
-                <div
-                  style={{
-                    color: "#ef4444",
-                    fontSize: "13px",
-                    marginBottom: "12px",
-                    padding: "8px",
-                    backgroundColor: "#fee2e2",
-                    borderRadius: "4px",
-                  }}
-                >
-                  {saveViewError}
-                </div>
-              )}
-
-              {/* Success Message */}
-              {saveViewSuccess && (
-                <div
-                  style={{
-                    color: "#10b981",
-                    fontSize: "13px",
-                    marginBottom: "12px",
-                    padding: "8px",
-                    backgroundColor: "#d1fae5",
-                    borderRadius: "4px",
-                  }}
-                >
-                  {saveViewSuccess}
-                </div>
-              )}
-
-              {/* Save Button */}
-              <button
-                style={{
-                  ...styles.shareLoadButton,
-                  width: "100%",
-                }}
-                onClick={handleSaveView}
-              >
-                Save View
-              </button>
-
-              {/* Instructions */}
-              <div style={styles.shareInstructions}>
-                <p
-                  style={{
-                    margin: "12px 0 0 0",
-                    fontSize: "12px",
-                    color: "#6b7280",
-                  }}
-                >
-                  This will save your current chart configuration to Google
-                  Sheets. A new tab will open to complete the save (to bypass
-                  CSP/CORS restrictions). You can close the new tab after seeing
-                  the success message.
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
+        <SaveViewModal
+          styles={styles}
+          setShowSaveViewModal={setShowSaveViewModal}
+          saveViewName={saveViewName} setSaveViewName={setSaveViewName}
+          saveViewError={saveViewError} setSaveViewError={setSaveViewError}
+          saveViewSuccess={saveViewSuccess} setSaveViewSuccess={setSaveViewSuccess}
+          saveViewOwnerType={saveViewOwnerType} setSaveViewOwnerType={setSaveViewOwnerType}
+          saveViewCustomOwner={saveViewCustomOwner} setSaveViewCustomOwner={setSaveViewCustomOwner}
+          username={username} teamName={teamName}
+          handleSaveView={handleSaveView}
+        />
       )}
 
       {showGuide &&

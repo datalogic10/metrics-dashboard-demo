@@ -32,6 +32,8 @@ function BannerBase({ isDarkMode, color, children }) {
       border: `1px solid ${c.border}`,
       borderRadius: "8px", marginBottom: "12px", fontSize: "12px",
       color: c.text,
+      transition: "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease",
+      animation: "bannerFadeIn 0.25s ease",
     }}>
       {children}
     </div>
