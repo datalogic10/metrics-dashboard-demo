@@ -394,6 +394,10 @@ export function render() {
 
 
   // ===== STARTUP: FETCH SCHEMA + DISTINCT VALUES =====
+  // ════════════════════════════════════════════════════════════════════════
+  // LIVE DATA CONNECTION & SCHEMA
+  // ════════════════════════════════════════════════════════════════════════
+
   // Track which datasets have been loaded to avoid redundant fetches on tab switch
   const loadedDatasetsRef = React.useRef(new Set());
   React.useEffect(() => {
@@ -901,6 +905,10 @@ export function render() {
   // Only include filters for columns that exist in the data
   // Static filter configuration - only depends on column existence, not filter state values
   // This prevents unnecessary recalculations when filter selections change
+  // ════════════════════════════════════════════════════════════════════════
+  // FILTER STATE & HELPERS
+  // ════════════════════════════════════════════════════════════════════════
+
   const FILTER_CONFIG_STATIC = React.useMemo(() => {
     // Derive from DIMENSION_DEFINITIONS and filter to only include existing columns
     return DIMENSION_DEFINITIONS.map((dim) => ({
@@ -945,6 +953,10 @@ export function render() {
 
   // ===== TAB SWITCHING =====
   // Capture current per-tab state into a snapshot object
+  // ════════════════════════════════════════════════════════════════════════
+  // TAB STATE & HANDLERS
+  // ════════════════════════════════════════════════════════════════════════
+
   const captureTabSnapshot = React.useCallback(() => ({
     // Live data state
     liveColumnMeta, liveSchemaReady, liveFilterOptions,
@@ -1539,6 +1551,10 @@ export function render() {
     FILTER_CONFIG,
   ]);
 
+  // ════════════════════════════════════════════════════════════════════════
+  // SHARE CODE & STATE RESTORE
+  // ════════════════════════════════════════════════════════════════════════
+
   const restoreStateSnapshot = React.useCallback(
     (snapshot) => {
       isRestoringRef.current = true;
@@ -2039,6 +2055,10 @@ export function render() {
   );
 
   // Helper function to render a dropdown filter
+  // ════════════════════════════════════════════════════════════════════════
+  // RENDER HELPERS
+  // ════════════════════════════════════════════════════════════════════════
+
   const renderDropdownFilter = React.useCallback(
     (
       filterName,
@@ -2721,6 +2741,10 @@ export function render() {
   }, []);
 
   // Get filtered dates (as array)
+  // ════════════════════════════════════════════════════════════════════════
+  // DATA TRANSFORMATION MEMOS
+  // ════════════════════════════════════════════════════════════════════════
+
   const filteredDates = React.useMemo(() => {
     if (dateRange === "All") {
       return allDates;
@@ -3694,6 +3718,10 @@ export function render() {
     }-${firstPeriods}-${lastPeriods}-${filterHash}-${contextKey}`;
   };
 
+  // ════════════════════════════════════════════════════════════════════════
+  // INSIGHTS GENERATION TRIGGER
+  // ════════════════════════════════════════════════════════════════════════
+
   // Generate insights asynchronously to avoid blocking UI when switching metrics
   React.useEffect(() => {
     // Skip computation if insights tab is not open
@@ -4624,6 +4652,10 @@ export function render() {
   }, [view, metric, dataFrequency, prepareChartDataByAttribute, VIEW_CONFIG, activeOverlays, smaWindow, forecastHorizon, METRIC_LABELS]);
 
   // Prepare chart data based on view
+  // ════════════════════════════════════════════════════════════════════════
+  // CHART DATA CONSTRUCTION
+  // ════════════════════════════════════════════════════════════════════════
+
   const { chartData, chartLayout } = React.useMemo(() => {
     let chartData = [];
     let chartLayout = {};
@@ -5509,6 +5541,10 @@ export function render() {
   );
 
   // Handle natural language query via LLM worker
+  // ════════════════════════════════════════════════════════════════════════
+  // LLM QUERY HANDLING
+  // ════════════════════════════════════════════════════════════════════════
+
   const handleLLMQuery = React.useCallback(
     async (query) => {
       if (!query || !query.trim()) return;
@@ -5658,6 +5694,10 @@ export function render() {
   );
 
   // StatBox rendering delegated to extracted component (src/components/StatBox.js)
+
+  // ════════════════════════════════════════════════════════════════════════
+  // JSX RENDER OUTPUT
+  // ════════════════════════════════════════════════════════════════════════
 
   return (
     <div style={{ ...styles.container, ...(compareCards.length > 0 ? { paddingBottom: '90px' } : {}) }}>
