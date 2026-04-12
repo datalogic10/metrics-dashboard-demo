@@ -5763,6 +5763,939 @@ var __app = (() => {
     )))));
   }
 
+  // src/insightsGenerator.js
+  function generateStructuredInsights(tabType, ctx) {
+    const {
+      acquisitionChannelFilter,
+      activeInsightsTab,
+      calculateMetric,
+      channelFilter,
+      COLUMNS,
+      columnExists,
+      companySegmentFilter,
+      dateField,
+      DIMENSION_DEFINITIONS,
+      FILTER_CONFIG,
+      filterOptionsMap,
+      formatFilterName: formatFilterName2,
+      formatMetric,
+      formatPeriodDate: formatPeriodDate2,
+      generateExcessGrowthInsights,
+      getFilterContext,
+      getFilterSetState,
+      getFilterState,
+      INSIGHT_LIMITS,
+      insightContext,
+      isAiCompanyFilter,
+      isFormulaMetric: isFormulaMetric2,
+      liveInsightsDimAggs,
+      metric,
+      METRIC_LABELS,
+      periodAggregates,
+      periods,
+      pricingTypeFilter,
+      productGroupFilter,
+      productNameFilter,
+      productSubFilter,
+      revenueCountryFilter,
+      revenueRegionFilter,
+      setInsightContext,
+      setSelectedCategories,
+      setView
+    } = ctx;
+    if (periods.length < 3) {
+      return {
+        basicInsights: {
+          decomposition: [],
+          // 🆕 NEW
+          overallTrends: [],
+          marketLeaders: [],
+          performanceAlerts: [],
+          categoryTrends: []
+        },
+        advancedInsights: {
+          allTimeGrowth: []
+        },
+        recommendations: []
+      };
+    }
+    const structuredInsights = {
+      basicInsights: {
+        decomposition: [],
+        // 🆕 NEW - explains parent's excess growth (shown first)
+        overallTrends: [],
+        marketLeaders: [],
+        performanceAlerts: [],
+        categoryTrends: [],
+        shareShifts: []
+      },
+      advancedInsights: {
+        allTimeGrowth: []
+      },
+      recommendations: []
+    };
+    const completePeriods = periods.slice(0, -1);
+    let completeFilteredData = [];
+    let completeDataByPeriod = {};
+    completePeriods.forEach((period) => {
+      const agg = periodAggregates[period];
+      if (!agg) return;
+      const syntheticRow = { [dateField]: period, [COLUMNS.METRIC1]: agg.metric1, [COLUMNS.METRIC2]: agg.metric2, __metric3: agg.metric3 };
+      completeFilteredData.push(syntheticRow);
+      completeDataByPeriod[period] = [syntheticRow];
+    });
+    const activeDimColumns = DIMENSION_DEFINITIONS.filter((dim) => columnExists(COLUMNS[dim.columnKey])).map((dim) => COLUMNS[dim.columnKey]);
+    const precomputed = {};
+    activeDimColumns.forEach((col) => {
+      precomputed[col] = {};
+    });
+    activeDimColumns.forEach((col) => {
+      const dimPeriods = liveInsightsDimAggs[col] || {};
+      Object.keys(dimPeriods).forEach((period) => {
+        if (!completePeriods.includes(period)) return;
+        const cats = dimPeriods[period];
+        Object.keys(cats).forEach((val) => {
+          if (!val || val === "Unknown") return;
+          const catAgg = cats[val];
+          let cat = precomputed[col][val];
+          if (!cat) {
+            cat = { metric1: 0, metric2: 0, byPeriod: {} };
+            precomputed[col][val] = cat;
+          }
+          const vol = catAgg.metric1 || 0;
+          const rev = catAgg.metric2 || 0;
+          cat.metric1 += vol;
+          cat.metric2 += rev;
+          cat.byPeriod[period] = { metric1: vol, metric2: rev, metric3: catAgg.metric3 };
+        });
+      });
+    });
+    const metricFromAgg = (m1, m2, m3) => {
+      switch (metric) {
+        case "metric1":
+          return m1;
+        case "metric2":
+          return m2;
+        case "metric3":
+          if (m3 !== void 0) return m3;
+          return m1 > 0 ? 1e4 * m2 / m1 : 0;
+        default:
+          return m1;
+      }
+    };
+    const totalMarketValue = calculateMetric(completeFilteredData);
+    const totalRevShare = completeFilteredData.reduce(
+      (sum, row) => sum + (row[COLUMNS.METRIC2] || 0),
+      0
+    );
+    const dataScale = totalMarketValue;
+    const periodCount = completePeriods.length;
+    const INSIGHT_THRESHOLDS = {
+      // Growth thresholds
+      minGrowthThreshold: periodCount >= 6 ? 5 : 8,
+      minRelativeGrowthThreshold: 5,
+      // Minimum difference from market to be significant
+      // Market share thresholds
+      // Lower threshold for larger datasets (more categories), higher for smaller datasets
+      minMarketShareThreshold: dataScale > 1e6 ? 5 : 10,
+      minRevContributionThreshold: 0.01,
+      // 1% of total revenue
+      // Performance alert thresholds
+      consecutiveDeclineThreshold: 2,
+      suddenDropThreshold: 20,
+      // Percentage
+      // Segment size thresholds
+      minSegmentSize: Math.max(dataScale * 0.03, totalMarketValue * 0.05),
+      // Share shift thresholds
+      minShareShiftPoints: 3
+      // Percentage points
+    };
+    const shouldExcludeCategory = (category) => {
+      if (!category) return true;
+      const excludedCategories = ["uncategorized", "other", "unknown"];
+      return excludedCategories.some(
+        (excluded) => category.toLowerCase() === excluded.toLowerCase()
+      );
+    };
+    const calculateCategoryRevShare = (columnName, categoryValue) => {
+      var dimData = precomputed[columnName];
+      var catData = dimData && dimData[categoryValue];
+      return catData && catData.metric2 || 0;
+    };
+    const minRevThreshold = totalRevShare * INSIGHT_THRESHOLDS.minRevContributionThreshold;
+    const createInsight = (text, basePriority, category, action, metadata = {}) => {
+      return {
+        text,
+        priority: basePriority,
+        // Base priority before scoring
+        category,
+        action: action || (() => setView("Overall")),
+        metadata
+        // Store additional data for scoring adjustments
+      };
+    };
+    const deduplicateInsightsByText = (insights) => {
+      const seenTexts = /* @__PURE__ */ new Set();
+      return insights.filter((insight) => {
+        if (seenTexts.has(insight.text)) return false;
+        seenTexts.add(insight.text);
+        return true;
+      });
+    };
+    if (insightContext && insightContext.parentCategory) {
+      const excessInsights = generateExcessGrowthInsights(insightContext);
+      structuredInsights.basicInsights.decomposition = excessInsights.slice(
+        0,
+        10
+      );
+    }
+    const createStandardMetadata = (type, values = {}) => {
+      const baseMetadata = {
+        insightType: type,
+        // 'global' | 'single-dimension' | 'cross-dimension'
+        scope: type === "global" ? "global" : type === "cross-dimension" ? "cross-dimensional" : "filtered"
+      };
+      if (type === "single-dimension") {
+        baseMetadata.dimensionColumn = values.dimensionColumn;
+        baseMetadata.viewName = values.viewName;
+        baseMetadata.label = values.label;
+      }
+      if (type === "cross-dimension") {
+        baseMetadata.dimensionColumns = values.crossDimensionFields;
+        baseMetadata.crossDimensionName = values.crossDimensionName;
+      }
+      Object.keys(values).forEach((key) => {
+        if (!baseMetadata.hasOwnProperty(key)) {
+          baseMetadata[key] = values[key];
+        }
+      });
+      return baseMetadata;
+    };
+    const calculateBasePriority = (value, type, context = {}) => {
+      switch (type) {
+        case "growth_percentage":
+          return Math.abs(value);
+        case "share_points":
+          const revShare = context.revShare || 10;
+          const recencyFactor = context.recencyFactor || 1;
+          return Math.abs(value) * (revShare / 10) * recencyFactor;
+        case "market_share":
+          return value;
+        case "drop_percentage":
+          return value + 50;
+        case "decline_score":
+          return (context.consecutivePeriods || 0) * 20 + (value || 0);
+        case "relative_growth":
+          const revShareForGrowth = context.revShare || 10;
+          return Math.abs(value) * (revShareForGrowth / 10);
+        default:
+          return Math.abs(value) || 0;
+      }
+    };
+    const detectPerformanceAlerts = () => {
+      if (completePeriods.length < 3) return [];
+      const alerts = [];
+      const recentPeriods = completePeriods.slice(-3);
+      let consecutiveDeclines = 0;
+      let totalDecline = 0;
+      for (let i = 1; i < recentPeriods.length; i++) {
+        const currentRows = completeDataByPeriod[recentPeriods[i]] || [];
+        const prevRows = completeDataByPeriod[recentPeriods[i - 1]] || [];
+        const currentValue = calculateMetric(currentRows);
+        const prevValue = calculateMetric(prevRows);
+        const percentChange = calculatePercentageChange(
+          currentValue,
+          prevValue
+        );
+        if (percentChange !== null && percentChange < 0) {
+          consecutiveDeclines++;
+          totalDecline += Math.abs(percentChange);
+        } else {
+          break;
+        }
+      }
+      if (consecutiveDeclines >= INSIGHT_THRESHOLDS.consecutiveDeclineThreshold) {
+        const priority = calculateBasePriority(totalDecline, "decline_score", {
+          consecutivePeriods: consecutiveDeclines
+        });
+        alerts.push(
+          createInsight(
+            `${METRIC_LABELS[metric] || metric} declining for ${consecutiveDeclines} consecutive periods (${totalDecline.toFixed(
+              1
+            )}% total decline) - requires attention`,
+            priority,
+            "performanceAlerts",
+            () => setView("Overall"),
+            createStandardMetadata("global", {
+              alertType: "consecutive_decline",
+              consecutiveDeclines,
+              totalDecline
+            })
+          )
+        );
+      }
+      for (let i = 1; i < completePeriods.length; i++) {
+        const currentRows = completeDataByPeriod[completePeriods[i]] || [];
+        const prevRows = completeDataByPeriod[completePeriods[i - 1]] || [];
+        const currentValue = calculateMetric(currentRows);
+        const prevValue = calculateMetric(prevRows);
+        const percentChange = calculatePercentageChange(
+          currentValue,
+          prevValue
+        );
+        if (percentChange !== null) {
+          const dropPercent = Math.abs(Math.min(0, percentChange));
+          if (dropPercent > INSIGHT_THRESHOLDS.suddenDropThreshold) {
+            const priority = calculateBasePriority(
+              dropPercent,
+              "drop_percentage"
+            );
+            const formattedPeriod = formatPeriodDate2(completePeriods[i]);
+            const anomalousPeriod = completePeriods[i];
+            const comparisonPeriod = completePeriods[i - 1];
+            alerts.push(
+              createInsight(
+                `Significant ${METRIC_LABELS[metric] || metric} drop of ${dropPercent.toFixed(
+                  1
+                )}% in ${formattedPeriod} (${formatMetric(
+                  prevValue
+                )} \u2192 ${formatMetric(currentValue)})`,
+                priority,
+                "performanceAlerts",
+                () => {
+                  setInsightContext({
+                    type: "period_anomaly",
+                    anomalousPeriod,
+                    comparisonPeriod,
+                    periods: [comparisonPeriod, anomalousPeriod],
+                    // Just 2 periods
+                    firstValue: prevValue,
+                    lastValue: currentValue,
+                    parentGrowth: percentChange,
+                    parentExcessGrowth: null,
+                    // No market comparison for period anomalies
+                    marketAvgGrowth: null,
+                    // Simple mode
+                    parentAbsChange: currentValue - prevValue,
+                    parentLabel: `${formattedPeriod} Drop`,
+                    drillPath: []
+                  });
+                  setView("Overall");
+                },
+                createStandardMetadata("global", {
+                  alertType: "sudden_drop",
+                  dropPercent,
+                  period: completePeriods[i]
+                })
+              )
+            );
+          }
+        }
+      }
+      return deduplicateInsightsByText(alerts).slice(
+        0,
+        INSIGHT_LIMITS.generation.performanceAlerts
+      );
+    };
+    const detectShareShiftsForDimension = (columnName, filterArray, optionsArray, setFilterFn, labelPrefix = "", viewName = null) => {
+      if (filterArray.length > 0 || completePeriods.length < 2) return [];
+      const insights = [];
+      const firstPeriod = completePeriods[0];
+      const lastPeriod = completePeriods[completePeriods.length - 1];
+      const firstPeriodShare = {};
+      const lastPeriodShare = {};
+      const firstPeriodData = completeDataByPeriod[firstPeriod] || [];
+      const lastPeriodData = completeDataByPeriod[lastPeriod] || [];
+      const firstTotal = calculateMetric(firstPeriodData);
+      const lastTotal = calculateMetric(lastPeriodData);
+      const dimData = precomputed[columnName] || {};
+      optionsArray.slice(1).forEach((option) => {
+        if (shouldExcludeCategory(option)) return;
+        const catAgg = dimData[option];
+        if (!catAgg) return;
+        if (catAgg.metric2 < minRevThreshold) return;
+        const firstAgg = catAgg.byPeriod[firstPeriod];
+        const lastAgg = catAgg.byPeriod[lastPeriod];
+        const firstCatMetric = firstAgg ? metricFromAgg(firstAgg.metric1, firstAgg.metric2, firstAgg.metric3) : 0;
+        const lastCatMetric = lastAgg ? metricFromAgg(lastAgg.metric1, lastAgg.metric2, lastAgg.metric3) : 0;
+        firstPeriodShare[option] = firstTotal > 0 ? firstCatMetric / firstTotal * 100 : 0;
+        lastPeriodShare[option] = lastTotal > 0 ? lastCatMetric / lastTotal * 100 : 0;
+      });
+      Object.keys(firstPeriodShare).forEach((option) => {
+        const shareChange = lastPeriodShare[option] - firstPeriodShare[option];
+        if (Math.abs(shareChange) > INSIGHT_THRESHOLDS.minShareShiftPoints) {
+          const direction = shareChange > 0 ? "gained" : "lost";
+          const categoryRev = calculateCategoryRevShare(columnName, option);
+          const revShare = categoryRev / totalRevShare * 100;
+          const periodCount2 = completePeriods.length;
+          const recencyFactor = periodCount2 <= 6 ? 1.2 : periodCount2 <= 12 ? 1 : 0.8;
+          const priority = calculateBasePriority(shareChange, "share_points", {
+            revShare,
+            recencyFactor
+          });
+          insights.push(
+            createInsight(
+              `${labelPrefix}${formatFilterName2(
+                option
+              )} ${direction} ${Math.abs(shareChange).toFixed(
+                1
+              )} percentage points of market share (${firstPeriodShare[option].toFixed(1)}% \u2192 ${lastPeriodShare[option].toFixed(1)}%)`,
+              priority,
+              "shareShifts",
+              () => {
+                if (viewName) {
+                  setView(viewName);
+                  setTimeout(() => {
+                    setSelectedCategories([option]);
+                  }, 0);
+                } else {
+                  setFilterFn([option]);
+                }
+              },
+              createStandardMetadata("single-dimension", {
+                option,
+                shareChange,
+                revShare,
+                firstShare: firstPeriodShare[option],
+                lastShare: lastPeriodShare[option],
+                dimensionColumn: columnName,
+                viewName,
+                label: labelPrefix || viewName
+              })
+            )
+          );
+        }
+      });
+      return insights;
+    };
+    const detectMarketShareShifts = () => {
+      if (completePeriods.length < 2) return [];
+      if (isFormulaMetric2(metric)) return [];
+      const insights = DIMENSION_DEFINITIONS.flatMap((dim) => {
+        const column = COLUMNS[dim.columnKey];
+        if (!columnExists(column)) return [];
+        return detectShareShiftsForDimension(
+          column,
+          getFilterState(dim.filterKey),
+          filterOptionsMap[dim.filterKey] || [],
+          getFilterSetState(dim.filterKey),
+          "",
+          dim.viewName
+        );
+      });
+      return deduplicateInsightsByText(
+        insights.sort((a, b) => b.priority - a.priority)
+      ).slice(0, INSIGHT_LIMITS.generation.shareShifts);
+    };
+    const scoreInsight = (insight, category) => {
+      let score = insight.priority || 0;
+      const categoryMultipliers = {
+        performanceAlerts: 1.5,
+        // Critical alerts (declines, drops) - highest priority
+        categoryTrends: 1.4,
+        // Individual category trends (filtered by revenue share) - high priority
+        overallTrends: 1.2,
+        // Overall market trends - moderate priority
+        marketLeaders: 1,
+        // Market leader identification - baseline
+        shareShifts: 1.1,
+        // Market share shifts - slightly above baseline
+        allTimeGrowth: 1
+        // Cross-dimensional growth insights - baseline
+      };
+      score *= categoryMultipliers[category] || 1;
+      if (insight.text.includes("recent") || insight.text.includes("last")) {
+        score *= 1.2;
+      }
+      if (insight.text.includes("above avg.") || insight.text.includes("below avg.")) {
+        score *= 1.3;
+      }
+      const magnitudeMatch = insight.text.match(/(\d+\.?\d*)%/);
+      if (magnitudeMatch) {
+        const magnitude = parseFloat(magnitudeMatch[1]);
+        if (magnitude >= 30) {
+          score *= 1.3;
+        } else if (magnitude >= 20) {
+          score *= 1.2;
+        } else if (magnitude >= 15) {
+          score *= 1.1;
+        }
+      }
+      if (insight.text.includes("declined") || insight.text.includes("declining") || insight.text.includes("drop") || insight.text.includes("decreased")) {
+        score *= 1.15;
+      }
+      if (insight.text.includes("surged") || insight.text.includes("surge")) {
+        score *= 1.1;
+      }
+      if (insight.text.includes("consecutive") || insight.text.includes("consistent")) {
+        score *= 1.1;
+      }
+      return score;
+    };
+    const filterInsights = (insights) => {
+      return insights.filter((insight) => {
+        if (insight.category === "decomposition") {
+          return true;
+        }
+        const changeMatch = insight.text.match(/(\d+\.?\d*)%/);
+        if (changeMatch) {
+          const changeValue = parseFloat(changeMatch[1]);
+          const category = insight.category;
+          if (category === "shareShifts") {
+          } else if (category === "categoryTrends" || category === "allTimeGrowth") {
+            if (changeValue < INSIGHT_THRESHOLDS.minGrowthThreshold)
+              return false;
+          } else if (category === "marketLeaders") {
+            if (changeValue < INSIGHT_THRESHOLDS.minMarketShareThreshold)
+              return false;
+          } else {
+            if (changeValue < 5) return false;
+          }
+        }
+        const insightTextLower = insight.text.toLowerCase();
+        for (const { state, formatValue } of FILTER_CONFIG) {
+          if (state.length > 0) {
+            const matchesFilter = state.some((filterValue) => {
+              const filterName = formatValue ? formatValue(filterValue) : formatFilterName2(filterValue);
+              return insightTextLower.includes(filterName.toLowerCase()) || insightTextLower.includes(String(filterValue).toLowerCase());
+            });
+            if (matchesFilter) return false;
+          }
+        }
+        return true;
+      });
+    };
+    const firstPeriodRows = completeDataByPeriod[completePeriods[0]] || [];
+    const lastPeriodRows = completeDataByPeriod[completePeriods[completePeriods.length - 1]] || [];
+    const firstValue = calculateMetric(firstPeriodRows);
+    const lastValue = calculateMetric(lastPeriodRows);
+    if (firstValue !== 0 && firstValue !== null) {
+      const {
+        growthRate: totalGrowth,
+        direction,
+        absoluteGrowth
+      } = calculateGrowthMetrics(lastValue, firstValue);
+      const contextualDescription = getFilterContext();
+      const priority = calculateBasePriority(totalGrowth, "growth_percentage");
+      structuredInsights.basicInsights.overallTrends.push(
+        createInsight(
+          `Overall ${METRIC_LABELS[metric] || metric} ${direction} ${absoluteGrowth.toFixed(
+            1
+          )}% from ${formatMetric(firstValue)} to ${formatMetric(
+            lastValue
+          )} ${contextualDescription} (complete periods only)`,
+          priority,
+          "overallTrends",
+          () => setView("Overall"),
+          createStandardMetadata("global", {
+            totalGrowth,
+            firstValue,
+            lastValue,
+            direction
+          })
+        )
+      );
+    }
+    const analyzeMarketLeader = (columnName, filterArray, dimensionLabel, viewName, textPrefix = "dominates") => {
+      if (filterArray.length > 0 || totalMarketValue === 0) return;
+      const analysis = {};
+      const dimData = precomputed[columnName] || {};
+      Object.keys(dimData).forEach((value) => {
+        if (value === "Unknown" || shouldExcludeCategory(value)) return;
+        const cat = dimData[value];
+        analysis[value] = metricFromAgg(cat.metric1, cat.metric2);
+      });
+      const sorted = Object.entries(analysis).sort((a, b) => b[1] - a[1]);
+      if (sorted.length === 0) return;
+      const [topValue, topMetricValue] = sorted[0];
+      let marketShare, displayValue;
+      if (isFormulaMetric2(metric)) {
+        const catData = dimData[topValue];
+        displayValue = topMetricValue;
+        marketShare = totalRevShare > 0 ? catData.metric2 / totalRevShare * 100 : 0;
+      } else {
+        marketShare = topMetricValue / totalMarketValue * 100;
+        displayValue = topMetricValue;
+      }
+      const minThreshold = INSIGHT_THRESHOLDS.minMarketShareThreshold;
+      const isNear100Percent = marketShare >= 99.5;
+      if ((isFormulaMetric2(metric) || marketShare > minThreshold) && !isNear100Percent) {
+        const shareText = isFormulaMetric2(metric) ? formatMetric(displayValue) : `${marketShare.toFixed(1)}% share (${formatMetric(
+          displayValue
+        )})`;
+        const priority = calculateBasePriority(marketShare, "market_share");
+        structuredInsights.basicInsights.marketLeaders.push(
+          createInsight(
+            `${formatFilterName2(
+              topValue
+            )} ${textPrefix} ${dimensionLabel} with ${shareText}`,
+            priority,
+            "marketLeaders",
+            () => {
+              if (viewName) {
+                setView(viewName);
+                setTimeout(() => {
+                  setSelectedCategories([topValue]);
+                }, 0);
+              }
+            },
+            createStandardMetadata("single-dimension", {
+              topValue,
+              marketShare,
+              displayValue,
+              dimensionLabel,
+              dimensionColumn: columnName,
+              viewName,
+              label: dimensionLabel
+            })
+          )
+        );
+      }
+    };
+    if (totalMarketValue > 0) {
+      DIMENSION_DEFINITIONS.forEach((dim) => {
+        const column = COLUMNS[dim.columnKey];
+        if (columnExists(column)) {
+          analyzeMarketLeader(
+            column,
+            getFilterState(dim.filterKey),
+            dim.marketLeaderLabel,
+            dim.viewName,
+            dim.insightTextPrefix
+          );
+        }
+      });
+      structuredInsights.basicInsights.marketLeaders = deduplicateInsightsByText(
+        structuredInsights.basicInsights.marketLeaders
+      ).slice(0, INSIGHT_LIMITS.generation.marketLeaders);
+    }
+    if (tabType === "advanced" && completePeriods.length >= 2) {
+      const { growthRate: overallMarketGrowthRate } = firstValue && firstValue !== 0 && firstValue !== null ? calculateGrowthMetrics(lastValue, firstValue) : { growthRate: 0 };
+      const crossDimensionalCombos = [
+        {
+          fields: [COLUMNS.PRODUCT_NAME, COLUMNS.REGION],
+          name: "Product \xD7 Region",
+          filters: [productNameFilter, revenueRegionFilter],
+          setters: [setProductNameFilter, setRevenueRegionFilter]
+        },
+        {
+          fields: [COLUMNS.PRODUCT_NAME, COLUMNS.CUSTOMER_SEGMENT],
+          name: "Product \xD7 Segment",
+          filters: [productNameFilter, companySegmentFilter],
+          setters: [setProductNameFilter, setCompanySegmentFilter]
+        },
+        {
+          fields: [COLUMNS.PRODUCT_NAME, COLUMNS.ACQUISITION_CHANNEL],
+          name: "Product \xD7 Acquisition Channel",
+          filters: [productNameFilter, acquisitionChannelFilter],
+          setters: [setProductNameFilter, setAcquisitionChannelFilter]
+        },
+        {
+          fields: [COLUMNS.PRODUCT_GROUP_L1, COLUMNS.REGION],
+          name: "Product Group \xD7 Region",
+          filters: [productGroupFilter, revenueRegionFilter],
+          setters: [setProductGroupFilter, setRevenueRegionFilter]
+        },
+        {
+          fields: [COLUMNS.PRODUCT_GROUP_L1, COLUMNS.CUSTOMER_SEGMENT],
+          name: "Product Group \xD7 Segment",
+          filters: [productGroupFilter, companySegmentFilter],
+          setters: [setProductGroupFilter, setCompanySegmentFilter]
+        },
+        {
+          fields: [COLUMNS.REGION, COLUMNS.CUSTOMER_SEGMENT],
+          name: "Region \xD7 Segment",
+          filters: [revenueRegionFilter, companySegmentFilter],
+          setters: [setRevenueRegionFilter, setCompanySegmentFilter]
+        },
+        {
+          fields: [COLUMNS.CHANNEL, COLUMNS.CUSTOMER_SEGMENT],
+          name: "Channel \xD7 Segment",
+          filters: [channelFilter, companySegmentFilter],
+          setters: [setChannelFilter, setCompanySegmentFilter]
+        },
+        {
+          fields: [COLUMNS.CHANNEL, COLUMNS.REGION],
+          name: "Channel \xD7 Region",
+          filters: [channelFilter, revenueRegionFilter],
+          setters: [setChannelFilter, setRevenueRegionFilter]
+        },
+        {
+          fields: [COLUMNS.CUSTOMER_TYPE, COLUMNS.REGION],
+          name: "Customer Type \xD7 Region",
+          filters: [isAiCompanyFilter, revenueRegionFilter],
+          setters: [setIsAiCompanyFilter, setRevenueRegionFilter]
+        },
+        {
+          fields: [COLUMNS.CUSTOMER_TYPE, COLUMNS.CUSTOMER_SEGMENT],
+          name: "Customer Type \xD7 Segment",
+          filters: [isAiCompanyFilter, companySegmentFilter],
+          setters: [setIsAiCompanyFilter, setCompanySegmentFilter]
+        },
+        {
+          fields: [COLUMNS.ACQUISITION_CHANNEL, COLUMNS.REGION],
+          name: "Acquisition Channel \xD7 Region",
+          filters: [acquisitionChannelFilter, revenueRegionFilter],
+          setters: [setAcquisitionChannelFilter, setRevenueRegionFilter]
+        }
+      ];
+      if (false) crossDimensionalCombos.forEach((combo) => {
+        const hasVariation = combo.filters.some(
+          (filter) => Array.isArray(filter) && filter.length === 0
+        );
+        if (hasVariation) {
+          const segmentAnalysis = {};
+          completeFilteredData.forEach((row) => {
+            const values = combo.fields.map((field) => row[field]);
+            if (values.every(
+              (val) => val && val !== "Unknown" && !shouldExcludeCategory(val)
+            )) {
+              const segmentKey = values.join(" + ");
+              if (!segmentAnalysis[segmentKey]) {
+                segmentAnalysis[segmentKey] = [];
+              }
+              segmentAnalysis[segmentKey].push(row);
+            }
+          });
+          const segmentGrowthRates = Object.entries(segmentAnalysis).map(([segmentKey, rows]) => {
+            const totalValue = calculateMetric(rows);
+            if (totalValue < INSIGHT_THRESHOLDS.minSegmentSize) return null;
+            const firstPeriodSegmentRows = rows.filter(
+              (row) => row[dateField] === completePeriods[0]
+            );
+            const lastPeriodSegmentRows = rows.filter(
+              (row) => row[dateField] === completePeriods[completePeriods.length - 1]
+            );
+            const firstSegmentValue = calculateMetric(firstPeriodSegmentRows);
+            const lastSegmentValue = calculateMetric(lastPeriodSegmentRows);
+            if (firstSegmentValue === 0 || firstSegmentValue === null)
+              return null;
+            const { growthRate, relativeGrowth, direction, absoluteGrowth } = calculateGrowthMetrics(
+              lastSegmentValue,
+              firstSegmentValue,
+              overallMarketGrowthRate
+            );
+            return {
+              segmentKey,
+              originalValues: segmentKey.split(" + "),
+              growthRate,
+              relativeGrowth,
+              direction,
+              absoluteGrowth,
+              totalValue,
+              firstValue: firstSegmentValue,
+              lastValue: lastSegmentValue,
+              combo
+            };
+          }).filter(
+            (item) => item && Math.abs(item.relativeGrowth) >= INSIGHT_THRESHOLDS.minRelativeGrowthThreshold && item.absoluteGrowth > INSIGHT_THRESHOLDS.minGrowthThreshold
+          ).sort(
+            (a, b) => Math.abs(b.relativeGrowth) - Math.abs(a.relativeGrowth)
+          );
+          segmentGrowthRates.slice(0, INSIGHT_LIMITS.generation.allTimeGrowth).forEach((item) => {
+            const formattedSegment = item.originalValues.join(" x ");
+            const relativeText = item.relativeGrowth > 0 ? ` (${item.relativeGrowth.toFixed(
+              1
+            )} percentage points above avg.)` : ` (${Math.abs(item.relativeGrowth).toFixed(
+              1
+            )} percentage points below avg.)`;
+            const priority = calculateBasePriority(
+              item.relativeGrowth,
+              "relative_growth"
+            );
+            structuredInsights.advancedInsights.allTimeGrowth.push(
+              createInsight(
+                `${METRIC_LABELS[metric] || metric} from ${formattedSegment} users ${item.direction} ${item.absoluteGrowth.toFixed(1)}% from ${formatMetric(
+                  item.firstValue
+                )} to ${formatMetric(item.lastValue)}${relativeText}`,
+                priority,
+                "allTimeGrowth",
+                () => {
+                  item.combo.setters.forEach((setter, index) => {
+                    if (Array.isArray(item.combo.filters[index]) && item.combo.filters[index].length === 0) {
+                      setter([item.originalValues[index]]);
+                    }
+                  });
+                  setView("Overall");
+                },
+                createStandardMetadata("cross-dimension", {
+                  segmentKey: item.segmentKey,
+                  growthRate: item.growthRate,
+                  relativeGrowth: item.relativeGrowth,
+                  crossDimensionFields: item.combo.fields,
+                  crossDimensionName: item.combo.name
+                })
+              )
+            );
+          });
+        }
+      });
+    }
+    const detectCategoryTrends = () => {
+      if (completePeriods.length < 3) return [];
+      const insights = [];
+      const recentPeriods = completePeriods.slice(-7);
+      if (recentPeriods.length < 3) return [];
+      const marketFirstPeriodRows = completeDataByPeriod[recentPeriods[0]] || [];
+      const marketLastPeriodRows = completeDataByPeriod[recentPeriods[recentPeriods.length - 1]] || [];
+      const marketFirstValue = calculateMetric(marketFirstPeriodRows);
+      const marketLastValue = calculateMetric(marketLastPeriodRows);
+      if (marketFirstValue === 0 || marketFirstValue === null) return [];
+      const { growthRate: overallMarketGrowthRate } = calculateGrowthMetrics(
+        marketLastValue,
+        marketFirstValue
+      );
+      const dimensionsToAnalyze = DIMENSION_DEFINITIONS.filter(
+        (dim) => columnExists(COLUMNS[dim.columnKey])
+      ).map((dim) => ({
+        column: COLUMNS[dim.columnKey],
+        filter: getFilterState(dim.filterKey),
+        setFilter: getFilterSetState(dim.filterKey),
+        viewName: dim.viewName,
+        label: dim.insightLabel
+      }));
+      dimensionsToAnalyze.forEach(
+        ({ column, filter, setFilter, viewName, label }) => {
+          if (filter.length > 0) return;
+          const dimData = precomputed[column] || {};
+          const parentPeriodValues = recentPeriods.map((period) => {
+            const periodRows = completeDataByPeriod[period] || [];
+            return calculateMetric(periodRows);
+          }).filter((v) => v != null && !isNaN(v));
+          const parentMax = parentPeriodValues.length > 0 ? Math.max(...parentPeriodValues) : 0;
+          const parentMin = parentPeriodValues.length > 0 ? Math.min(...parentPeriodValues) : 0;
+          const parentRange = parentMax - parentMin;
+          Object.keys(dimData).forEach((categoryValue) => {
+            if (categoryValue === "Unknown" || shouldExcludeCategory(categoryValue))
+              return;
+            const catAgg = dimData[categoryValue];
+            const categoryRev = catAgg.metric2;
+            if (categoryRev < minRevThreshold) return;
+            const firstPeriodAgg = catAgg.byPeriod[recentPeriods[0]];
+            const lastPeriodAgg = catAgg.byPeriod[recentPeriods[recentPeriods.length - 1]];
+            const categoryFirstValue = firstPeriodAgg ? metricFromAgg(firstPeriodAgg.metric1, firstPeriodAgg.metric2, firstPeriodAgg.metric3) : 0;
+            const categoryLastValue = lastPeriodAgg ? metricFromAgg(lastPeriodAgg.metric1, lastPeriodAgg.metric2, lastPeriodAgg.metric3) : 0;
+            if (categoryFirstValue === 0 || categoryFirstValue === null) return;
+            const {
+              growthRate: categoryGrowthRate,
+              relativeGrowth,
+              direction,
+              absoluteGrowth
+            } = calculateGrowthMetrics(
+              categoryLastValue,
+              categoryFirstValue,
+              overallMarketGrowthRate
+            );
+            if (Math.abs(relativeGrowth) < INSIGHT_THRESHOLDS.minRelativeGrowthThreshold)
+              return;
+            if (absoluteGrowth < INSIGHT_THRESHOLDS.minGrowthThreshold) return;
+            const relativeText = relativeGrowth > 0 ? ` (${relativeGrowth.toFixed(1)} percentage points above avg.)` : ` (${Math.abs(relativeGrowth).toFixed(
+              1
+            )} percentage points below avg.)`;
+            const revShare = categoryRev / totalRevShare * 100;
+            const absChange = Math.abs(categoryLastValue - categoryFirstValue);
+            const normalizedImpact = parentRange > 0 ? absChange / parentRange * 100 : absChange;
+            const excessScore = Math.abs(relativeGrowth) * (revShare / 10);
+            const severityScore = Math.abs(absoluteGrowth);
+            const urgencyMultiplier = absoluteGrowth < 0 ? 1.5 : 1;
+            const priority = (normalizedImpact * 0.6 + excessScore * 0.25 + severityScore * 0.15) * urgencyMultiplier;
+            insights.push(
+              createInsight(
+                `${formatFilterName2(
+                  categoryValue
+                )} ${METRIC_LABELS[metric] || metric} ${direction} ${absoluteGrowth.toFixed(
+                  1
+                )}% in recent periods (${formatMetric(
+                  categoryFirstValue
+                )} \u2192 ${formatMetric(categoryLastValue)})${relativeText}`,
+                priority,
+                "categoryTrends",
+                () => {
+                  const categoryAbsChange = categoryLastValue - categoryFirstValue;
+                  const categoryExcessGrowth = categoryGrowthRate - overallMarketGrowthRate;
+                  setInsightContext((prevContext) => {
+                    const newContext = {
+                      parentCategory: categoryValue,
+                      parentLabel: formatFilterName2(categoryValue),
+                      parentGrowth: categoryGrowthRate,
+                      parentExcessGrowth: categoryExcessGrowth,
+                      marketAvgGrowth: overallMarketGrowthRate,
+                      parentAbsChange: categoryAbsChange,
+                      periods: recentPeriods,
+                      firstValue: categoryFirstValue,
+                      lastValue: categoryLastValue,
+                      drillPath: prevContext && prevContext.parentCategory ? [
+                        ...prevContext && prevContext.drillPath || [],
+                        {
+                          category: prevContext.parentCategory,
+                          label: prevContext.parentLabel,
+                          growth: prevContext.parentGrowth,
+                          excessGrowth: prevContext.parentExcessGrowth
+                        }
+                      ] : []
+                    };
+                    logger_default.log("Setting insightContext:", newContext);
+                    return newContext;
+                  });
+                  setFilter([categoryValue]);
+                  setView("Overall");
+                  setSelectedCategories([]);
+                },
+                createStandardMetadata("single-dimension", {
+                  categoryValue,
+                  categoryGrowthRate,
+                  relativeGrowth,
+                  revShare,
+                  dimensionColumn: column,
+                  viewName,
+                  label
+                })
+              )
+            );
+          });
+        }
+      );
+      return deduplicateInsightsByText(
+        insights.sort((a, b) => b.priority - a.priority)
+      ).slice(0, INSIGHT_LIMITS.generation.categoryTrends);
+    };
+    structuredInsights.basicInsights.performanceAlerts = filterInsights(
+      detectPerformanceAlerts()
+    );
+    structuredInsights.basicInsights.categoryTrends = filterInsights(
+      detectCategoryTrends()
+    );
+    structuredInsights.basicInsights.shareShifts = filterInsights(
+      detectMarketShareShifts()
+    );
+    structuredInsights.basicInsights.overallTrends = deduplicateInsightsByText(
+      filterInsights(structuredInsights.basicInsights.overallTrends)
+    );
+    structuredInsights.basicInsights.marketLeaders = deduplicateInsightsByText(
+      filterInsights(structuredInsights.basicInsights.marketLeaders)
+    );
+    if (tabType === "advanced") {
+      structuredInsights.advancedInsights.allTimeGrowth = deduplicateInsightsByText(
+        filterInsights(structuredInsights.advancedInsights.allTimeGrowth)
+      );
+    }
+    Object.keys(structuredInsights.basicInsights).forEach((category) => {
+      structuredInsights.basicInsights[category] = structuredInsights.basicInsights[category].map((insight) => ({
+        ...insight,
+        score: scoreInsight(insight, category)
+      })).sort((a, b) => b.score - a.score);
+    });
+    if (tabType === "advanced") {
+      Object.keys(structuredInsights.advancedInsights).forEach((category) => {
+        structuredInsights.advancedInsights[category] = structuredInsights.advancedInsights[category].map((insight) => ({
+          ...insight,
+          score: scoreInsight(insight, category)
+        })).sort((a, b) => b.score - a.score);
+      });
+    }
+    return structuredInsights;
+  }
+
   // src/styles.js
   function buildStaticStyles(theme, isDarkMode, showDataSummary) {
     return {
@@ -7517,15 +8450,15 @@ var __app = (() => {
     const [selectedCategories, setSelectedCategories] = React.useState([]);
     const [showTopXControl, setShowTopXControl] = React.useState(false);
     const [categorySearchText, setCategorySearchText] = React.useState("");
-    const [productNameFilter, setProductNameFilter] = React.useState([]);
-    const [companySegmentFilter, setCompanySegmentFilter] = React.useState([]);
-    const [revenueRegionFilter, setRevenueRegionFilter] = React.useState([]);
+    const [productNameFilter, setProductNameFilter2] = React.useState([]);
+    const [companySegmentFilter, setCompanySegmentFilter2] = React.useState([]);
+    const [revenueRegionFilter, setRevenueRegionFilter2] = React.useState([]);
     const [revenueCountryFilter, setRevenueCountryFilter] = React.useState([]);
-    const [acquisitionChannelFilter, setAcquisitionChannelFilter] = React.useState([]);
+    const [acquisitionChannelFilter, setAcquisitionChannelFilter2] = React.useState([]);
     const [pricingTypeFilter, setPricingTypeFilter] = React.useState([]);
-    const [isAiCompanyFilter, setIsAiCompanyFilter] = React.useState([]);
-    const [channelFilter, setChannelFilter] = React.useState([]);
-    const [productGroupFilter, setProductGroupFilter] = React.useState([]);
+    const [isAiCompanyFilter, setIsAiCompanyFilter2] = React.useState([]);
+    const [channelFilter, setChannelFilter2] = React.useState([]);
+    const [productGroupFilter, setProductGroupFilter2] = React.useState([]);
     const [productSubFilter, setProductSubFilter] = React.useState([]);
     const [channelTypeFilter, setChannelTypeFilter] = React.useState(
       []
@@ -9779,899 +10712,6 @@ var __app = (() => {
         setView
       ]
     );
-    const generateStructuredInsights = (tabType) => {
-      if (periods.length < 3) {
-        return {
-          basicInsights: {
-            decomposition: [],
-            // 🆕 NEW
-            overallTrends: [],
-            marketLeaders: [],
-            performanceAlerts: [],
-            categoryTrends: []
-          },
-          advancedInsights: {
-            allTimeGrowth: []
-          },
-          recommendations: []
-        };
-      }
-      const structuredInsights2 = {
-        basicInsights: {
-          decomposition: [],
-          // 🆕 NEW - explains parent's excess growth (shown first)
-          overallTrends: [],
-          marketLeaders: [],
-          performanceAlerts: [],
-          categoryTrends: [],
-          shareShifts: []
-        },
-        advancedInsights: {
-          allTimeGrowth: []
-        },
-        recommendations: []
-      };
-      const completePeriods = periods.slice(0, -1);
-      let completeFilteredData = [];
-      let completeDataByPeriod = {};
-      completePeriods.forEach((period) => {
-        const agg = periodAggregates[period];
-        if (!agg) return;
-        const syntheticRow = { [dateField]: period, [COLUMNS.METRIC1]: agg.metric1, [COLUMNS.METRIC2]: agg.metric2, __metric3: agg.metric3 };
-        completeFilteredData.push(syntheticRow);
-        completeDataByPeriod[period] = [syntheticRow];
-      });
-      const activeDimColumns = DIMENSION_DEFINITIONS.filter((dim) => columnExists(COLUMNS[dim.columnKey])).map((dim) => COLUMNS[dim.columnKey]);
-      const precomputed = {};
-      activeDimColumns.forEach((col) => {
-        precomputed[col] = {};
-      });
-      activeDimColumns.forEach((col) => {
-        const dimPeriods = liveInsightsDimAggs[col] || {};
-        Object.keys(dimPeriods).forEach((period) => {
-          if (!completePeriods.includes(period)) return;
-          const cats = dimPeriods[period];
-          Object.keys(cats).forEach((val) => {
-            if (!val || val === "Unknown") return;
-            const catAgg = cats[val];
-            let cat = precomputed[col][val];
-            if (!cat) {
-              cat = { metric1: 0, metric2: 0, byPeriod: {} };
-              precomputed[col][val] = cat;
-            }
-            const vol = catAgg.metric1 || 0;
-            const rev = catAgg.metric2 || 0;
-            cat.metric1 += vol;
-            cat.metric2 += rev;
-            cat.byPeriod[period] = { metric1: vol, metric2: rev, metric3: catAgg.metric3 };
-          });
-        });
-      });
-      const metricFromAgg = (m1, m2, m3) => {
-        switch (metric) {
-          case "metric1":
-            return m1;
-          case "metric2":
-            return m2;
-          case "metric3":
-            if (m3 !== void 0) return m3;
-            return m1 > 0 ? 1e4 * m2 / m1 : 0;
-          default:
-            return m1;
-        }
-      };
-      const totalMarketValue = calculateMetric(completeFilteredData);
-      const totalRevShare = completeFilteredData.reduce(
-        (sum, row) => sum + (row[COLUMNS.METRIC2] || 0),
-        0
-      );
-      const dataScale = totalMarketValue;
-      const periodCount = completePeriods.length;
-      const INSIGHT_THRESHOLDS = {
-        // Growth thresholds
-        minGrowthThreshold: periodCount >= 6 ? 5 : 8,
-        minRelativeGrowthThreshold: 5,
-        // Minimum difference from market to be significant
-        // Market share thresholds
-        // Lower threshold for larger datasets (more categories), higher for smaller datasets
-        minMarketShareThreshold: dataScale > 1e6 ? 5 : 10,
-        minRevContributionThreshold: 0.01,
-        // 1% of total revenue
-        // Performance alert thresholds
-        consecutiveDeclineThreshold: 2,
-        suddenDropThreshold: 20,
-        // Percentage
-        // Segment size thresholds
-        minSegmentSize: Math.max(dataScale * 0.03, totalMarketValue * 0.05),
-        // Share shift thresholds
-        minShareShiftPoints: 3
-        // Percentage points
-      };
-      const shouldExcludeCategory = (category) => {
-        if (!category) return true;
-        const excludedCategories = ["uncategorized", "other", "unknown"];
-        return excludedCategories.some(
-          (excluded) => category.toLowerCase() === excluded.toLowerCase()
-        );
-      };
-      const calculateCategoryRevShare = (columnName, categoryValue) => {
-        var dimData = precomputed[columnName];
-        var catData = dimData && dimData[categoryValue];
-        return catData && catData.metric2 || 0;
-      };
-      const minRevThreshold = totalRevShare * INSIGHT_THRESHOLDS.minRevContributionThreshold;
-      const createInsight = (text, basePriority, category, action, metadata = {}) => {
-        return {
-          text,
-          priority: basePriority,
-          // Base priority before scoring
-          category,
-          action: action || (() => setView("Overall")),
-          metadata
-          // Store additional data for scoring adjustments
-        };
-      };
-      const deduplicateInsightsByText = (insights) => {
-        const seenTexts = /* @__PURE__ */ new Set();
-        return insights.filter((insight) => {
-          if (seenTexts.has(insight.text)) return false;
-          seenTexts.add(insight.text);
-          return true;
-        });
-      };
-      if (insightContext && insightContext.parentCategory) {
-        const excessInsights = generateExcessGrowthInsights(insightContext);
-        structuredInsights2.basicInsights.decomposition = excessInsights.slice(
-          0,
-          10
-        );
-      }
-      const createStandardMetadata = (type, values = {}) => {
-        const baseMetadata = {
-          insightType: type,
-          // 'global' | 'single-dimension' | 'cross-dimension'
-          scope: type === "global" ? "global" : type === "cross-dimension" ? "cross-dimensional" : "filtered"
-        };
-        if (type === "single-dimension") {
-          baseMetadata.dimensionColumn = values.dimensionColumn;
-          baseMetadata.viewName = values.viewName;
-          baseMetadata.label = values.label;
-        }
-        if (type === "cross-dimension") {
-          baseMetadata.dimensionColumns = values.crossDimensionFields;
-          baseMetadata.crossDimensionName = values.crossDimensionName;
-        }
-        Object.keys(values).forEach((key) => {
-          if (!baseMetadata.hasOwnProperty(key)) {
-            baseMetadata[key] = values[key];
-          }
-        });
-        return baseMetadata;
-      };
-      const calculateBasePriority = (value, type, context = {}) => {
-        switch (type) {
-          case "growth_percentage":
-            return Math.abs(value);
-          case "share_points":
-            const revShare = context.revShare || 10;
-            const recencyFactor = context.recencyFactor || 1;
-            return Math.abs(value) * (revShare / 10) * recencyFactor;
-          case "market_share":
-            return value;
-          case "drop_percentage":
-            return value + 50;
-          case "decline_score":
-            return (context.consecutivePeriods || 0) * 20 + (value || 0);
-          case "relative_growth":
-            const revShareForGrowth = context.revShare || 10;
-            return Math.abs(value) * (revShareForGrowth / 10);
-          default:
-            return Math.abs(value) || 0;
-        }
-      };
-      const detectPerformanceAlerts = () => {
-        if (completePeriods.length < 3) return [];
-        const alerts = [];
-        const recentPeriods = completePeriods.slice(-3);
-        let consecutiveDeclines = 0;
-        let totalDecline = 0;
-        for (let i = 1; i < recentPeriods.length; i++) {
-          const currentRows = completeDataByPeriod[recentPeriods[i]] || [];
-          const prevRows = completeDataByPeriod[recentPeriods[i - 1]] || [];
-          const currentValue = calculateMetric(currentRows);
-          const prevValue = calculateMetric(prevRows);
-          const percentChange = calculatePercentageChange(
-            currentValue,
-            prevValue
-          );
-          if (percentChange !== null && percentChange < 0) {
-            consecutiveDeclines++;
-            totalDecline += Math.abs(percentChange);
-          } else {
-            break;
-          }
-        }
-        if (consecutiveDeclines >= INSIGHT_THRESHOLDS.consecutiveDeclineThreshold) {
-          const priority = calculateBasePriority(totalDecline, "decline_score", {
-            consecutivePeriods: consecutiveDeclines
-          });
-          alerts.push(
-            createInsight(
-              `${METRIC_LABELS[metric] || metric} declining for ${consecutiveDeclines} consecutive periods (${totalDecline.toFixed(
-                1
-              )}% total decline) - requires attention`,
-              priority,
-              "performanceAlerts",
-              () => setView("Overall"),
-              createStandardMetadata("global", {
-                alertType: "consecutive_decline",
-                consecutiveDeclines,
-                totalDecline
-              })
-            )
-          );
-        }
-        for (let i = 1; i < completePeriods.length; i++) {
-          const currentRows = completeDataByPeriod[completePeriods[i]] || [];
-          const prevRows = completeDataByPeriod[completePeriods[i - 1]] || [];
-          const currentValue = calculateMetric(currentRows);
-          const prevValue = calculateMetric(prevRows);
-          const percentChange = calculatePercentageChange(
-            currentValue,
-            prevValue
-          );
-          if (percentChange !== null) {
-            const dropPercent = Math.abs(Math.min(0, percentChange));
-            if (dropPercent > INSIGHT_THRESHOLDS.suddenDropThreshold) {
-              const priority = calculateBasePriority(
-                dropPercent,
-                "drop_percentage"
-              );
-              const formattedPeriod = formatPeriodDate2(completePeriods[i]);
-              const anomalousPeriod = completePeriods[i];
-              const comparisonPeriod = completePeriods[i - 1];
-              alerts.push(
-                createInsight(
-                  `Significant ${METRIC_LABELS[metric] || metric} drop of ${dropPercent.toFixed(
-                    1
-                  )}% in ${formattedPeriod} (${formatMetric(
-                    prevValue
-                  )} \u2192 ${formatMetric(currentValue)})`,
-                  priority,
-                  "performanceAlerts",
-                  () => {
-                    setInsightContext({
-                      type: "period_anomaly",
-                      anomalousPeriod,
-                      comparisonPeriod,
-                      periods: [comparisonPeriod, anomalousPeriod],
-                      // Just 2 periods
-                      firstValue: prevValue,
-                      lastValue: currentValue,
-                      parentGrowth: percentChange,
-                      parentExcessGrowth: null,
-                      // No market comparison for period anomalies
-                      marketAvgGrowth: null,
-                      // Simple mode
-                      parentAbsChange: currentValue - prevValue,
-                      parentLabel: `${formattedPeriod} Drop`,
-                      drillPath: []
-                    });
-                    setView("Overall");
-                  },
-                  createStandardMetadata("global", {
-                    alertType: "sudden_drop",
-                    dropPercent,
-                    period: completePeriods[i]
-                  })
-                )
-              );
-            }
-          }
-        }
-        return deduplicateInsightsByText(alerts).slice(
-          0,
-          INSIGHT_LIMITS.generation.performanceAlerts
-        );
-      };
-      const detectShareShiftsForDimension = (columnName, filterArray, optionsArray, setFilterFn, labelPrefix = "", viewName = null) => {
-        if (filterArray.length > 0 || completePeriods.length < 2) return [];
-        const insights = [];
-        const firstPeriod = completePeriods[0];
-        const lastPeriod = completePeriods[completePeriods.length - 1];
-        const firstPeriodShare = {};
-        const lastPeriodShare = {};
-        const firstPeriodData = completeDataByPeriod[firstPeriod] || [];
-        const lastPeriodData = completeDataByPeriod[lastPeriod] || [];
-        const firstTotal = calculateMetric(firstPeriodData);
-        const lastTotal = calculateMetric(lastPeriodData);
-        const dimData = precomputed[columnName] || {};
-        optionsArray.slice(1).forEach((option) => {
-          if (shouldExcludeCategory(option)) return;
-          const catAgg = dimData[option];
-          if (!catAgg) return;
-          if (catAgg.metric2 < minRevThreshold) return;
-          const firstAgg = catAgg.byPeriod[firstPeriod];
-          const lastAgg = catAgg.byPeriod[lastPeriod];
-          const firstCatMetric = firstAgg ? metricFromAgg(firstAgg.metric1, firstAgg.metric2, firstAgg.metric3) : 0;
-          const lastCatMetric = lastAgg ? metricFromAgg(lastAgg.metric1, lastAgg.metric2, lastAgg.metric3) : 0;
-          firstPeriodShare[option] = firstTotal > 0 ? firstCatMetric / firstTotal * 100 : 0;
-          lastPeriodShare[option] = lastTotal > 0 ? lastCatMetric / lastTotal * 100 : 0;
-        });
-        Object.keys(firstPeriodShare).forEach((option) => {
-          const shareChange = lastPeriodShare[option] - firstPeriodShare[option];
-          if (Math.abs(shareChange) > INSIGHT_THRESHOLDS.minShareShiftPoints) {
-            const direction = shareChange > 0 ? "gained" : "lost";
-            const categoryRev = calculateCategoryRevShare(columnName, option);
-            const revShare = categoryRev / totalRevShare * 100;
-            const periodCount2 = completePeriods.length;
-            const recencyFactor = periodCount2 <= 6 ? 1.2 : periodCount2 <= 12 ? 1 : 0.8;
-            const priority = calculateBasePriority(shareChange, "share_points", {
-              revShare,
-              recencyFactor
-            });
-            insights.push(
-              createInsight(
-                `${labelPrefix}${formatFilterName2(
-                  option
-                )} ${direction} ${Math.abs(shareChange).toFixed(
-                  1
-                )} percentage points of market share (${firstPeriodShare[option].toFixed(1)}% \u2192 ${lastPeriodShare[option].toFixed(1)}%)`,
-                priority,
-                "shareShifts",
-                () => {
-                  if (viewName) {
-                    setView(viewName);
-                    setTimeout(() => {
-                      setSelectedCategories([option]);
-                    }, 0);
-                  } else {
-                    setFilterFn([option]);
-                  }
-                },
-                createStandardMetadata("single-dimension", {
-                  option,
-                  shareChange,
-                  revShare,
-                  firstShare: firstPeriodShare[option],
-                  lastShare: lastPeriodShare[option],
-                  dimensionColumn: columnName,
-                  viewName,
-                  label: labelPrefix || viewName
-                })
-              )
-            );
-          }
-        });
-        return insights;
-      };
-      const detectMarketShareShifts = () => {
-        if (completePeriods.length < 2) return [];
-        if (isFormulaMetric2(metric)) return [];
-        const insights = DIMENSION_DEFINITIONS.flatMap((dim) => {
-          const column = COLUMNS[dim.columnKey];
-          if (!columnExists(column)) return [];
-          return detectShareShiftsForDimension(
-            column,
-            getFilterState(dim.filterKey),
-            filterOptionsMap[dim.filterKey] || [],
-            getFilterSetState(dim.filterKey),
-            "",
-            dim.viewName
-          );
-        });
-        return deduplicateInsightsByText(
-          insights.sort((a, b) => b.priority - a.priority)
-        ).slice(0, INSIGHT_LIMITS.generation.shareShifts);
-      };
-      const scoreInsight = (insight, category) => {
-        let score = insight.priority || 0;
-        const categoryMultipliers = {
-          performanceAlerts: 1.5,
-          // Critical alerts (declines, drops) - highest priority
-          categoryTrends: 1.4,
-          // Individual category trends (filtered by revenue share) - high priority
-          overallTrends: 1.2,
-          // Overall market trends - moderate priority
-          marketLeaders: 1,
-          // Market leader identification - baseline
-          shareShifts: 1.1,
-          // Market share shifts - slightly above baseline
-          allTimeGrowth: 1
-          // Cross-dimensional growth insights - baseline
-        };
-        score *= categoryMultipliers[category] || 1;
-        if (insight.text.includes("recent") || insight.text.includes("last")) {
-          score *= 1.2;
-        }
-        if (insight.text.includes("above avg.") || insight.text.includes("below avg.")) {
-          score *= 1.3;
-        }
-        const magnitudeMatch = insight.text.match(/(\d+\.?\d*)%/);
-        if (magnitudeMatch) {
-          const magnitude = parseFloat(magnitudeMatch[1]);
-          if (magnitude >= 30) {
-            score *= 1.3;
-          } else if (magnitude >= 20) {
-            score *= 1.2;
-          } else if (magnitude >= 15) {
-            score *= 1.1;
-          }
-        }
-        if (insight.text.includes("declined") || insight.text.includes("declining") || insight.text.includes("drop") || insight.text.includes("decreased")) {
-          score *= 1.15;
-        }
-        if (insight.text.includes("surged") || insight.text.includes("surge")) {
-          score *= 1.1;
-        }
-        if (insight.text.includes("consecutive") || insight.text.includes("consistent")) {
-          score *= 1.1;
-        }
-        return score;
-      };
-      const filterInsights = (insights) => {
-        return insights.filter((insight) => {
-          if (insight.category === "decomposition") {
-            return true;
-          }
-          const changeMatch = insight.text.match(/(\d+\.?\d*)%/);
-          if (changeMatch) {
-            const changeValue = parseFloat(changeMatch[1]);
-            const category = insight.category;
-            if (category === "shareShifts") {
-            } else if (category === "categoryTrends" || category === "allTimeGrowth") {
-              if (changeValue < INSIGHT_THRESHOLDS.minGrowthThreshold)
-                return false;
-            } else if (category === "marketLeaders") {
-              if (changeValue < INSIGHT_THRESHOLDS.minMarketShareThreshold)
-                return false;
-            } else {
-              if (changeValue < 5) return false;
-            }
-          }
-          const insightTextLower = insight.text.toLowerCase();
-          for (const { state, formatValue } of FILTER_CONFIG) {
-            if (state.length > 0) {
-              const matchesFilter = state.some((filterValue) => {
-                const filterName = formatValue ? formatValue(filterValue) : formatFilterName2(filterValue);
-                return insightTextLower.includes(filterName.toLowerCase()) || insightTextLower.includes(String(filterValue).toLowerCase());
-              });
-              if (matchesFilter) return false;
-            }
-          }
-          return true;
-        });
-      };
-      const firstPeriodRows = completeDataByPeriod[completePeriods[0]] || [];
-      const lastPeriodRows = completeDataByPeriod[completePeriods[completePeriods.length - 1]] || [];
-      const firstValue = calculateMetric(firstPeriodRows);
-      const lastValue = calculateMetric(lastPeriodRows);
-      if (firstValue !== 0 && firstValue !== null) {
-        const {
-          growthRate: totalGrowth,
-          direction,
-          absoluteGrowth
-        } = calculateGrowthMetrics(lastValue, firstValue);
-        const contextualDescription = getFilterContext();
-        const priority = calculateBasePriority(totalGrowth, "growth_percentage");
-        structuredInsights2.basicInsights.overallTrends.push(
-          createInsight(
-            `Overall ${METRIC_LABELS[metric] || metric} ${direction} ${absoluteGrowth.toFixed(
-              1
-            )}% from ${formatMetric(firstValue)} to ${formatMetric(
-              lastValue
-            )} ${contextualDescription} (complete periods only)`,
-            priority,
-            "overallTrends",
-            () => setView("Overall"),
-            createStandardMetadata("global", {
-              totalGrowth,
-              firstValue,
-              lastValue,
-              direction
-            })
-          )
-        );
-      }
-      const analyzeMarketLeader = (columnName, filterArray, dimensionLabel, viewName, textPrefix = "dominates") => {
-        if (filterArray.length > 0 || totalMarketValue === 0) return;
-        const analysis = {};
-        const dimData = precomputed[columnName] || {};
-        Object.keys(dimData).forEach((value) => {
-          if (value === "Unknown" || shouldExcludeCategory(value)) return;
-          const cat = dimData[value];
-          analysis[value] = metricFromAgg(cat.metric1, cat.metric2);
-        });
-        const sorted = Object.entries(analysis).sort((a, b) => b[1] - a[1]);
-        if (sorted.length === 0) return;
-        const [topValue, topMetricValue] = sorted[0];
-        let marketShare, displayValue;
-        if (isFormulaMetric2(metric)) {
-          const catData = dimData[topValue];
-          displayValue = topMetricValue;
-          marketShare = totalRevShare > 0 ? catData.metric2 / totalRevShare * 100 : 0;
-        } else {
-          marketShare = topMetricValue / totalMarketValue * 100;
-          displayValue = topMetricValue;
-        }
-        const minThreshold = INSIGHT_THRESHOLDS.minMarketShareThreshold;
-        const isNear100Percent = marketShare >= 99.5;
-        if ((isFormulaMetric2(metric) || marketShare > minThreshold) && !isNear100Percent) {
-          const shareText = isFormulaMetric2(metric) ? formatMetric(displayValue) : `${marketShare.toFixed(1)}% share (${formatMetric(
-            displayValue
-          )})`;
-          const priority = calculateBasePriority(marketShare, "market_share");
-          structuredInsights2.basicInsights.marketLeaders.push(
-            createInsight(
-              `${formatFilterName2(
-                topValue
-              )} ${textPrefix} ${dimensionLabel} with ${shareText}`,
-              priority,
-              "marketLeaders",
-              () => {
-                if (viewName) {
-                  setView(viewName);
-                  setTimeout(() => {
-                    setSelectedCategories([topValue]);
-                  }, 0);
-                }
-              },
-              createStandardMetadata("single-dimension", {
-                topValue,
-                marketShare,
-                displayValue,
-                dimensionLabel,
-                dimensionColumn: columnName,
-                viewName,
-                label: dimensionLabel
-              })
-            )
-          );
-        }
-      };
-      if (totalMarketValue > 0) {
-        DIMENSION_DEFINITIONS.forEach((dim) => {
-          const column = COLUMNS[dim.columnKey];
-          if (columnExists(column)) {
-            analyzeMarketLeader(
-              column,
-              getFilterState(dim.filterKey),
-              dim.marketLeaderLabel,
-              dim.viewName,
-              dim.insightTextPrefix
-            );
-          }
-        });
-        structuredInsights2.basicInsights.marketLeaders = deduplicateInsightsByText(
-          structuredInsights2.basicInsights.marketLeaders
-        ).slice(0, INSIGHT_LIMITS.generation.marketLeaders);
-      }
-      if (tabType === "advanced" && completePeriods.length >= 2) {
-        const { growthRate: overallMarketGrowthRate } = firstValue && firstValue !== 0 && firstValue !== null ? calculateGrowthMetrics(lastValue, firstValue) : { growthRate: 0 };
-        const crossDimensionalCombos = [
-          {
-            fields: [COLUMNS.PRODUCT_NAME, COLUMNS.REGION],
-            name: "Product \xD7 Region",
-            filters: [productNameFilter, revenueRegionFilter],
-            setters: [setProductNameFilter, setRevenueRegionFilter]
-          },
-          {
-            fields: [COLUMNS.PRODUCT_NAME, COLUMNS.CUSTOMER_SEGMENT],
-            name: "Product \xD7 Segment",
-            filters: [productNameFilter, companySegmentFilter],
-            setters: [setProductNameFilter, setCompanySegmentFilter]
-          },
-          {
-            fields: [COLUMNS.PRODUCT_NAME, COLUMNS.ACQUISITION_CHANNEL],
-            name: "Product \xD7 Acquisition Channel",
-            filters: [productNameFilter, acquisitionChannelFilter],
-            setters: [setProductNameFilter, setAcquisitionChannelFilter]
-          },
-          {
-            fields: [COLUMNS.PRODUCT_GROUP_L1, COLUMNS.REGION],
-            name: "Product Group \xD7 Region",
-            filters: [productGroupFilter, revenueRegionFilter],
-            setters: [setProductGroupFilter, setRevenueRegionFilter]
-          },
-          {
-            fields: [COLUMNS.PRODUCT_GROUP_L1, COLUMNS.CUSTOMER_SEGMENT],
-            name: "Product Group \xD7 Segment",
-            filters: [productGroupFilter, companySegmentFilter],
-            setters: [setProductGroupFilter, setCompanySegmentFilter]
-          },
-          {
-            fields: [COLUMNS.REGION, COLUMNS.CUSTOMER_SEGMENT],
-            name: "Region \xD7 Segment",
-            filters: [revenueRegionFilter, companySegmentFilter],
-            setters: [setRevenueRegionFilter, setCompanySegmentFilter]
-          },
-          {
-            fields: [COLUMNS.CHANNEL, COLUMNS.CUSTOMER_SEGMENT],
-            name: "Channel \xD7 Segment",
-            filters: [channelFilter, companySegmentFilter],
-            setters: [setChannelFilter, setCompanySegmentFilter]
-          },
-          {
-            fields: [COLUMNS.CHANNEL, COLUMNS.REGION],
-            name: "Channel \xD7 Region",
-            filters: [channelFilter, revenueRegionFilter],
-            setters: [setChannelFilter, setRevenueRegionFilter]
-          },
-          {
-            fields: [COLUMNS.CUSTOMER_TYPE, COLUMNS.REGION],
-            name: "Customer Type \xD7 Region",
-            filters: [isAiCompanyFilter, revenueRegionFilter],
-            setters: [setIsAiCompanyFilter, setRevenueRegionFilter]
-          },
-          {
-            fields: [COLUMNS.CUSTOMER_TYPE, COLUMNS.CUSTOMER_SEGMENT],
-            name: "Customer Type \xD7 Segment",
-            filters: [isAiCompanyFilter, companySegmentFilter],
-            setters: [setIsAiCompanyFilter, setCompanySegmentFilter]
-          },
-          {
-            fields: [COLUMNS.ACQUISITION_CHANNEL, COLUMNS.REGION],
-            name: "Acquisition Channel \xD7 Region",
-            filters: [acquisitionChannelFilter, revenueRegionFilter],
-            setters: [setAcquisitionChannelFilter, setRevenueRegionFilter]
-          }
-        ];
-        if (false) crossDimensionalCombos.forEach((combo) => {
-          const hasVariation = combo.filters.some(
-            (filter) => Array.isArray(filter) && filter.length === 0
-          );
-          if (hasVariation) {
-            const segmentAnalysis = {};
-            completeFilteredData.forEach((row) => {
-              const values = combo.fields.map((field) => row[field]);
-              if (values.every(
-                (val) => val && val !== "Unknown" && !shouldExcludeCategory(val)
-              )) {
-                const segmentKey = values.join(" + ");
-                if (!segmentAnalysis[segmentKey]) {
-                  segmentAnalysis[segmentKey] = [];
-                }
-                segmentAnalysis[segmentKey].push(row);
-              }
-            });
-            const segmentGrowthRates = Object.entries(segmentAnalysis).map(([segmentKey, rows]) => {
-              const totalValue = calculateMetric(rows);
-              if (totalValue < INSIGHT_THRESHOLDS.minSegmentSize) return null;
-              const firstPeriodSegmentRows = rows.filter(
-                (row) => row[dateField] === completePeriods[0]
-              );
-              const lastPeriodSegmentRows = rows.filter(
-                (row) => row[dateField] === completePeriods[completePeriods.length - 1]
-              );
-              const firstSegmentValue = calculateMetric(firstPeriodSegmentRows);
-              const lastSegmentValue = calculateMetric(lastPeriodSegmentRows);
-              if (firstSegmentValue === 0 || firstSegmentValue === null)
-                return null;
-              const { growthRate, relativeGrowth, direction, absoluteGrowth } = calculateGrowthMetrics(
-                lastSegmentValue,
-                firstSegmentValue,
-                overallMarketGrowthRate
-              );
-              return {
-                segmentKey,
-                originalValues: segmentKey.split(" + "),
-                growthRate,
-                relativeGrowth,
-                direction,
-                absoluteGrowth,
-                totalValue,
-                firstValue: firstSegmentValue,
-                lastValue: lastSegmentValue,
-                combo
-              };
-            }).filter(
-              (item) => item && Math.abs(item.relativeGrowth) >= INSIGHT_THRESHOLDS.minRelativeGrowthThreshold && item.absoluteGrowth > INSIGHT_THRESHOLDS.minGrowthThreshold
-            ).sort(
-              (a, b) => Math.abs(b.relativeGrowth) - Math.abs(a.relativeGrowth)
-            );
-            segmentGrowthRates.slice(0, INSIGHT_LIMITS.generation.allTimeGrowth).forEach((item) => {
-              const formattedSegment = item.originalValues.join(" x ");
-              const relativeText = item.relativeGrowth > 0 ? ` (${item.relativeGrowth.toFixed(
-                1
-              )} percentage points above avg.)` : ` (${Math.abs(item.relativeGrowth).toFixed(
-                1
-              )} percentage points below avg.)`;
-              const priority = calculateBasePriority(
-                item.relativeGrowth,
-                "relative_growth"
-              );
-              structuredInsights2.advancedInsights.allTimeGrowth.push(
-                createInsight(
-                  `${METRIC_LABELS[metric] || metric} from ${formattedSegment} users ${item.direction} ${item.absoluteGrowth.toFixed(1)}% from ${formatMetric(
-                    item.firstValue
-                  )} to ${formatMetric(item.lastValue)}${relativeText}`,
-                  priority,
-                  "allTimeGrowth",
-                  () => {
-                    item.combo.setters.forEach((setter, index) => {
-                      if (Array.isArray(item.combo.filters[index]) && item.combo.filters[index].length === 0) {
-                        setter([item.originalValues[index]]);
-                      }
-                    });
-                    setView("Overall");
-                  },
-                  createStandardMetadata("cross-dimension", {
-                    segmentKey: item.segmentKey,
-                    growthRate: item.growthRate,
-                    relativeGrowth: item.relativeGrowth,
-                    crossDimensionFields: item.combo.fields,
-                    crossDimensionName: item.combo.name
-                  })
-                )
-              );
-            });
-          }
-        });
-      }
-      const detectCategoryTrends = () => {
-        if (completePeriods.length < 3) return [];
-        const insights = [];
-        const recentPeriods = completePeriods.slice(-7);
-        if (recentPeriods.length < 3) return [];
-        const marketFirstPeriodRows = completeDataByPeriod[recentPeriods[0]] || [];
-        const marketLastPeriodRows = completeDataByPeriod[recentPeriods[recentPeriods.length - 1]] || [];
-        const marketFirstValue = calculateMetric(marketFirstPeriodRows);
-        const marketLastValue = calculateMetric(marketLastPeriodRows);
-        if (marketFirstValue === 0 || marketFirstValue === null) return [];
-        const { growthRate: overallMarketGrowthRate } = calculateGrowthMetrics(
-          marketLastValue,
-          marketFirstValue
-        );
-        const dimensionsToAnalyze = DIMENSION_DEFINITIONS.filter(
-          (dim) => columnExists(COLUMNS[dim.columnKey])
-        ).map((dim) => ({
-          column: COLUMNS[dim.columnKey],
-          filter: getFilterState(dim.filterKey),
-          setFilter: getFilterSetState(dim.filterKey),
-          viewName: dim.viewName,
-          label: dim.insightLabel
-        }));
-        dimensionsToAnalyze.forEach(
-          ({ column, filter, setFilter, viewName, label }) => {
-            if (filter.length > 0) return;
-            const dimData = precomputed[column] || {};
-            const parentPeriodValues = recentPeriods.map((period) => {
-              const periodRows = completeDataByPeriod[period] || [];
-              return calculateMetric(periodRows);
-            }).filter((v) => v != null && !isNaN(v));
-            const parentMax = parentPeriodValues.length > 0 ? Math.max(...parentPeriodValues) : 0;
-            const parentMin = parentPeriodValues.length > 0 ? Math.min(...parentPeriodValues) : 0;
-            const parentRange = parentMax - parentMin;
-            Object.keys(dimData).forEach((categoryValue) => {
-              if (categoryValue === "Unknown" || shouldExcludeCategory(categoryValue))
-                return;
-              const catAgg = dimData[categoryValue];
-              const categoryRev = catAgg.metric2;
-              if (categoryRev < minRevThreshold) return;
-              const firstPeriodAgg = catAgg.byPeriod[recentPeriods[0]];
-              const lastPeriodAgg = catAgg.byPeriod[recentPeriods[recentPeriods.length - 1]];
-              const categoryFirstValue = firstPeriodAgg ? metricFromAgg(firstPeriodAgg.metric1, firstPeriodAgg.metric2, firstPeriodAgg.metric3) : 0;
-              const categoryLastValue = lastPeriodAgg ? metricFromAgg(lastPeriodAgg.metric1, lastPeriodAgg.metric2, lastPeriodAgg.metric3) : 0;
-              if (categoryFirstValue === 0 || categoryFirstValue === null) return;
-              const {
-                growthRate: categoryGrowthRate,
-                relativeGrowth,
-                direction,
-                absoluteGrowth
-              } = calculateGrowthMetrics(
-                categoryLastValue,
-                categoryFirstValue,
-                overallMarketGrowthRate
-              );
-              if (Math.abs(relativeGrowth) < INSIGHT_THRESHOLDS.minRelativeGrowthThreshold)
-                return;
-              if (absoluteGrowth < INSIGHT_THRESHOLDS.minGrowthThreshold) return;
-              const relativeText = relativeGrowth > 0 ? ` (${relativeGrowth.toFixed(1)} percentage points above avg.)` : ` (${Math.abs(relativeGrowth).toFixed(
-                1
-              )} percentage points below avg.)`;
-              const revShare = categoryRev / totalRevShare * 100;
-              const absChange = Math.abs(categoryLastValue - categoryFirstValue);
-              const normalizedImpact = parentRange > 0 ? absChange / parentRange * 100 : absChange;
-              const excessScore = Math.abs(relativeGrowth) * (revShare / 10);
-              const severityScore = Math.abs(absoluteGrowth);
-              const urgencyMultiplier = absoluteGrowth < 0 ? 1.5 : 1;
-              const priority = (normalizedImpact * 0.6 + excessScore * 0.25 + severityScore * 0.15) * urgencyMultiplier;
-              insights.push(
-                createInsight(
-                  `${formatFilterName2(
-                    categoryValue
-                  )} ${METRIC_LABELS[metric] || metric} ${direction} ${absoluteGrowth.toFixed(
-                    1
-                  )}% in recent periods (${formatMetric(
-                    categoryFirstValue
-                  )} \u2192 ${formatMetric(categoryLastValue)})${relativeText}`,
-                  priority,
-                  "categoryTrends",
-                  () => {
-                    const categoryAbsChange = categoryLastValue - categoryFirstValue;
-                    const categoryExcessGrowth = categoryGrowthRate - overallMarketGrowthRate;
-                    setInsightContext((prevContext) => {
-                      const newContext = {
-                        parentCategory: categoryValue,
-                        parentLabel: formatFilterName2(categoryValue),
-                        parentGrowth: categoryGrowthRate,
-                        parentExcessGrowth: categoryExcessGrowth,
-                        marketAvgGrowth: overallMarketGrowthRate,
-                        parentAbsChange: categoryAbsChange,
-                        periods: recentPeriods,
-                        firstValue: categoryFirstValue,
-                        lastValue: categoryLastValue,
-                        drillPath: prevContext && prevContext.parentCategory ? [
-                          ...prevContext && prevContext.drillPath || [],
-                          {
-                            category: prevContext.parentCategory,
-                            label: prevContext.parentLabel,
-                            growth: prevContext.parentGrowth,
-                            excessGrowth: prevContext.parentExcessGrowth
-                          }
-                        ] : []
-                      };
-                      logger_default.log("Setting insightContext:", newContext);
-                      return newContext;
-                    });
-                    setFilter([categoryValue]);
-                    setView("Overall");
-                    setSelectedCategories([]);
-                  },
-                  createStandardMetadata("single-dimension", {
-                    categoryValue,
-                    categoryGrowthRate,
-                    relativeGrowth,
-                    revShare,
-                    dimensionColumn: column,
-                    viewName,
-                    label
-                  })
-                )
-              );
-            });
-          }
-        );
-        return deduplicateInsightsByText(
-          insights.sort((a, b) => b.priority - a.priority)
-        ).slice(0, INSIGHT_LIMITS.generation.categoryTrends);
-      };
-      structuredInsights2.basicInsights.performanceAlerts = filterInsights(
-        detectPerformanceAlerts()
-      );
-      structuredInsights2.basicInsights.categoryTrends = filterInsights(
-        detectCategoryTrends()
-      );
-      structuredInsights2.basicInsights.shareShifts = filterInsights(
-        detectMarketShareShifts()
-      );
-      structuredInsights2.basicInsights.overallTrends = deduplicateInsightsByText(
-        filterInsights(structuredInsights2.basicInsights.overallTrends)
-      );
-      structuredInsights2.basicInsights.marketLeaders = deduplicateInsightsByText(
-        filterInsights(structuredInsights2.basicInsights.marketLeaders)
-      );
-      if (tabType === "advanced") {
-        structuredInsights2.advancedInsights.allTimeGrowth = deduplicateInsightsByText(
-          filterInsights(structuredInsights2.advancedInsights.allTimeGrowth)
-        );
-      }
-      Object.keys(structuredInsights2.basicInsights).forEach((category) => {
-        structuredInsights2.basicInsights[category] = structuredInsights2.basicInsights[category].map((insight) => ({
-          ...insight,
-          score: scoreInsight(insight, category)
-        })).sort((a, b) => b.score - a.score);
-      });
-      if (tabType === "advanced") {
-        Object.keys(structuredInsights2.advancedInsights).forEach((category) => {
-          structuredInsights2.advancedInsights[category] = structuredInsights2.advancedInsights[category].map((insight) => ({
-            ...insight,
-            score: scoreInsight(insight, category)
-          })).sort((a, b) => b.score - a.score);
-        });
-      }
-      return structuredInsights2;
-    };
     const createInsightsCacheKey = (metric2, tabType, periods2, activeFilters, contextParent) => {
       const firstPeriods = periods2.slice(0, 3).join(",");
       const lastPeriods = periods2.slice(-3).join(",");
@@ -10735,7 +10775,44 @@ var __app = (() => {
       }
       setLoadingInsights(true);
       const timeoutId = setTimeout(() => {
-        const insights = generateStructuredInsights(activeInsightsTab);
+        const insights = generateStructuredInsights(activeInsightsTab, {
+          acquisitionChannelFilter,
+          activeInsightsTab,
+          calculateMetric,
+          channelFilter,
+          COLUMNS,
+          columnExists,
+          companySegmentFilter,
+          dateField,
+          DIMENSION_DEFINITIONS,
+          FILTER_CONFIG,
+          filterOptionsMap,
+          formatFilterName: formatFilterName2,
+          formatMetric,
+          formatPeriodDate: formatPeriodDate2,
+          generateExcessGrowthInsights,
+          getFilterContext,
+          getFilterSetState,
+          getFilterState,
+          INSIGHT_LIMITS,
+          insightContext,
+          isAiCompanyFilter,
+          isFormulaMetric: isFormulaMetric2,
+          liveInsightsDimAggs,
+          metric,
+          METRIC_LABELS,
+          periodAggregates,
+          periods,
+          pricingTypeFilter,
+          productGroupFilter,
+          productNameFilter,
+          productSubFilter,
+          revenueCountryFilter,
+          revenueRegionFilter,
+          setInsightContext,
+          setSelectedCategories,
+          setView
+        });
         insightsCacheRef.current[cacheKey] = insights;
         const cacheKeys = Object.keys(insightsCacheRef.current);
         if (cacheKeys.length > 10) {
