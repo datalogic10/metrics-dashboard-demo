@@ -5210,6 +5210,559 @@ var __app = (() => {
     ));
   }
 
+  // src/components/ControlsSection.js
+  function ControlsSection({
+    styles,
+    theme,
+    isDarkMode,
+    // Quick Query
+    queryText,
+    setQueryText,
+    isLLMLoading,
+    handleLLMQuery,
+    showQueryTooltip,
+    setShowQueryTooltip,
+    METRIC_LABELS,
+    DIMENSION_DEFINITIONS,
+    LLM_EXAMPLE_QUESTIONS,
+    llmError,
+    llmExplanation,
+    setLlmError,
+    setLlmExplanation,
+    // Theme + guide buttons
+    setIsDarkMode,
+    showGuideButton,
+    showGuide,
+    skipGuide,
+    startGuide,
+    // StatBoxes
+    liveMetricConfig,
+    allMetricsStatData,
+    metric,
+    setMetric,
+    dataFrequency,
+    periodChangeLabel,
+    activePeriodComparison,
+    setActivePeriodComparison,
+    setInsightContext,
+    formatMetricValue: formatMetricValue2,
+    // Controls grid
+    savedViews,
+    selectedSavedView,
+    handleLoadSavedView,
+    view,
+    setView,
+    VIEW_CONFIG,
+    VIEW_LABEL_OVERRIDES,
+    DATE_RANGES: DATE_RANGES2,
+    dateRange,
+    setDateRange,
+    renderButtonGroup,
+    setShowSaveViewModal,
+    compareCards,
+    addCompareCard,
+    handleShareClick,
+    resetAllFilters,
+    // Filter search
+    filterSearchInputRef,
+    filterSuggestionsDropdownRef,
+    filterSearchText,
+    setFilterSearchText,
+    showFilterSuggestions,
+    setShowFilterSuggestions,
+    filterDropdownPositionRef,
+    dropdownStyle,
+    setDropdownStyle,
+    currentFilterSuggestions,
+    getFilterState,
+    handleFilterSuggestionSelect,
+    // Show All advanced filters toggle
+    showAdvancedFilters,
+    setShowAdvancedFilters,
+    // Date agg
+    handleDataFrequencyChange,
+    // Advanced filters panel
+    FILTER_CONFIG,
+    filterOptionsWithoutAll,
+    renderDropdownFilter,
+    formatFilterName: formatFilterName2
+  }) {
+    return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: styles.topSection }, /* @__PURE__ */ React.createElement("div", { style: styles.queryContainer, "data-guide": "quick-query" }, /* @__PURE__ */ React.createElement("div", { style: styles.queryInputGroup }, /* @__PURE__ */ React.createElement("div", { style: styles.queryLabelContainer }, /* @__PURE__ */ React.createElement("label", { style: styles.queryLabel }, "Quick Query"), /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        style: styles.queryTooltipIcon,
+        onMouseEnter: () => setShowQueryTooltip(true),
+        onMouseLeave: () => setShowQueryTooltip(false)
+      },
+      /* @__PURE__ */ React.createElement(
+        "svg",
+        {
+          width: "14",
+          height: "14",
+          viewBox: "0 0 20 20",
+          fill: "none",
+          xmlns: "http://www.w3.org/2000/svg",
+          style: styles.block
+        },
+        /* @__PURE__ */ React.createElement(
+          "circle",
+          {
+            cx: "10",
+            cy: "10",
+            r: "9",
+            stroke: "currentColor",
+            strokeWidth: "1.5",
+            fill: "none"
+          }
+        ),
+        /* @__PURE__ */ React.createElement(
+          "path",
+          {
+            d: "M10 6v.01",
+            stroke: "currentColor",
+            strokeWidth: "1.5",
+            strokeLinecap: "round"
+          }
+        ),
+        /* @__PURE__ */ React.createElement(
+          "path",
+          {
+            d: "M10 9v5",
+            stroke: "currentColor",
+            strokeWidth: "1.5",
+            strokeLinecap: "round"
+          }
+        )
+      ),
+      showQueryTooltip && /* @__PURE__ */ React.createElement("div", { style: styles.queryTooltip }, /* @__PURE__ */ React.createElement("div", { style: styles.queryTooltipArrow }), /* @__PURE__ */ React.createElement("div", { style: styles.fontWeight600 }, "How to Use"), /* @__PURE__ */ React.createElement("div", { style: styles.textGray }, METRIC_LABELS ? `Type a natural language question like "How is ${METRIC_LABELS.metric1 || "the metric"} trending${DIMENSION_DEFINITIONS.length > 0 ? ` by ${DIMENSION_DEFINITIONS[0].viewName}` : ""}?" or click "Feeling Lucky" for examples.` : 'Type a natural language question like "How is revenue trending in EMEA?" or click "Feeling Lucky" for examples. Press Enter or click "Ask" to query.'))
+    )), /* @__PURE__ */ React.createElement("div", { style: styles.queryInputWrapper }, /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: "text",
+        value: queryText,
+        onChange: (e) => setQueryText(e.target.value),
+        onKeyDown: (e) => {
+          if (e.key === "Enter" && queryText.trim() && !isLLMLoading) {
+            handleLLMQuery(queryText);
+          }
+        },
+        placeholder: METRIC_LABELS ? `Ask a question... e.g. How is ${METRIC_LABELS.metric1 || "the metric"} trending${DIMENSION_DEFINITIONS.length > 0 ? ` by ${DIMENSION_DEFINITIONS[0].viewName}` : ""}?` : "Ask a question... e.g. How is revenue trending in EMEA?",
+        disabled: isLLMLoading,
+        style: {
+          flex: 1,
+          padding: "10px 14px",
+          fontSize: "14px",
+          fontFamily: "'Inter', 'Segoe UI', sans-serif",
+          border: "2px solid #d1d5db",
+          borderRadius: "8px",
+          backgroundColor: isLLMLoading ? "#f3f4f6" : "#fff",
+          minHeight: "44px",
+          outline: "none",
+          color: "#374151"
+        },
+        onFocus: (e) => {
+          e.target.style.borderColor = "#6366f1";
+        },
+        onBlur: (e) => {
+          e.target.style.borderColor = "#d1d5db";
+        }
+      }
+    ), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        style: {
+          ...styles.luckyButton,
+          fontSize: "14px",
+          fontWeight: "600",
+          padding: "10px 18px",
+          minWidth: "160px",
+          opacity: isLLMLoading ? 0.6 : 1
+        },
+        onClick: () => {
+          const example = LLM_EXAMPLE_QUESTIONS[Math.floor(Math.random() * LLM_EXAMPLE_QUESTIONS.length)];
+          setQueryText(example);
+          setLlmError("");
+          setLlmExplanation("");
+        },
+        disabled: isLLMLoading,
+        title: "Generate a random example question"
+      },
+      "Feeling Lucky"
+    ), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        style: {
+          ...styles.queryButton,
+          ...!queryText.trim() || isLLMLoading ? styles.queryButtonDisabled : {}
+        },
+        onClick: () => {
+          if (queryText.trim() && !isLLMLoading) {
+            handleLLMQuery(queryText);
+          }
+        },
+        disabled: !queryText.trim() || isLLMLoading
+      },
+      isLLMLoading ? "Thinking..." : "Ask"
+    )), (isLLMLoading || llmError || llmExplanation) && /* @__PURE__ */ React.createElement("div", { style: { marginTop: "8px", fontSize: "13px", fontFamily: "'Inter', 'Segoe UI', sans-serif" } }, isLLMLoading && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px", color: "#6366f1" } }, /* @__PURE__ */ React.createElement("div", { style: {
+      width: "14px",
+      height: "14px",
+      border: "2px solid #6366f1",
+      borderTopColor: "transparent",
+      borderRadius: "50%",
+      animation: "spin 0.8s linear infinite"
+    } }), "Interpreting your question..."), llmError && /* @__PURE__ */ React.createElement("div", { style: { color: "#dc2626", padding: "4px 0" } }, llmError), llmExplanation && !isLLMLoading && !llmError && /* @__PURE__ */ React.createElement("div", { style: { color: "#6b7280", fontStyle: "italic", padding: "4px 0" } }, llmExplanation))), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        style: {
+          ...styles.helpButton,
+          right: showGuideButton ? "100px" : "12px",
+          backgroundColor: isDarkMode ? "#4b5563" : theme.accentPrimary
+        },
+        onClick: () => setIsDarkMode(!isDarkMode),
+        title: isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"
+      },
+      isDarkMode ? "\u2600\uFE0F" : "\u{1F319}"
+    ), showGuideButton && /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        style: {
+          ...styles.helpButton,
+          backgroundColor: showGuide ? "#ef4444" : "#f77f00"
+        },
+        onClick: () => {
+          if (showGuide) {
+            skipGuide();
+          } else {
+            startGuide();
+          }
+        },
+        title: showGuide ? "Stop Guide" : "Guide Me - Click to start tour"
+      },
+      showGuide ? "\u2715" : "Guide Me"
+    )), /* @__PURE__ */ React.createElement("div", { style: styles.statBoxContainer, "data-guide": "metric-statboxes" }, (() => {
+      const m = ["metric1"];
+      if (liveMetricConfig && (liveMetricConfig.revenueAggType || liveMetricConfig.revenueMode === "formula")) m.push("metric2");
+      if (liveMetricConfig && (liveMetricConfig.derivedAggType || liveMetricConfig.derivedMode === "formula")) m.push("metric3");
+      return m;
+    })().map((metricName) => {
+      const metricStatData = allMetricsStatData[metricName];
+      if (!metricStatData) return null;
+      const displayLabel = METRIC_LABELS[metricName] || metricName;
+      return /* @__PURE__ */ React.createElement(
+        StatBox,
+        {
+          key: metricName,
+          metricName,
+          metricStatData,
+          isActive: metric === metricName,
+          accentColor: "#6366f1",
+          dataFrequency,
+          periodChangeLabel,
+          displayLabel,
+          activePeriodComparison,
+          setActivePeriodComparison,
+          setMetric,
+          setInsightContext,
+          formatMetricValue: formatMetricValue2,
+          styles,
+          theme,
+          isDarkMode
+        }
+      );
+    })), /* @__PURE__ */ React.createElement("div", { style: styles.controlsContainer }, /* @__PURE__ */ React.createElement("div", { style: styles.controlsHeader }, /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        style: {
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr 1fr",
+          gap: "20px",
+          width: "100%"
+        }
+      },
+      /* @__PURE__ */ React.createElement("div", { style: styles.controlGroup, "data-guide": "saved-views" }, /* @__PURE__ */ React.createElement("label", { style: styles.label }, "Load Saved View"), savedViews.length > 0 ? /* @__PURE__ */ React.createElement(
+        "select",
+        {
+          style: styles.select,
+          value: selectedSavedView,
+          onChange: (e) => handleLoadSavedView(e.target.value),
+          onClick: (e) => e.stopPropagation()
+        },
+        /* @__PURE__ */ React.createElement("option", { value: "" }, "-- Select a saved view --"),
+        savedViews.map((savedView) => /* @__PURE__ */ React.createElement("option", { key: savedView.name, value: savedView.name }, savedView.name))
+      ) : /* @__PURE__ */ React.createElement("select", { style: styles.select, disabled: true }, /* @__PURE__ */ React.createElement("option", null, "No saved views"))),
+      /* @__PURE__ */ React.createElement("div", { style: styles.controlGroup, "data-guide": "view-selector" }, /* @__PURE__ */ React.createElement("label", { style: styles.label }, "Split By Dimension"), /* @__PURE__ */ React.createElement(
+        "select",
+        {
+          style: styles.select,
+          value: view,
+          onChange: (e) => setView(e.target.value),
+          onClick: (e) => e.stopPropagation()
+        },
+        /* @__PURE__ */ React.createElement("option", { value: "Overall" }, "Overall"),
+        Object.keys(VIEW_CONFIG).map((viewName) => /* @__PURE__ */ React.createElement("option", { key: viewName, value: viewName }, VIEW_LABEL_OVERRIDES[viewName] || viewName))
+      )),
+      /* @__PURE__ */ React.createElement(
+        "div",
+        {
+          style: { ...styles.controlGroup, marginTop: "24px" },
+          "data-guide": "date-range"
+        },
+        renderButtonGroup(
+          DATE_RANGES2,
+          dateRange,
+          setDateRange,
+          styles.dateRangeGroup,
+          styles.dateRangeButton,
+          styles.dateRangeButtonActive
+        )
+      ),
+      /* @__PURE__ */ React.createElement("div", { style: styles.controlGroup }, /* @__PURE__ */ React.createElement("div", { style: styles.buttonGroup }, /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          style: {
+            ...styles.buttonGroupBtn,
+            ...false ? styles.buttonGroupBtnActive : {}
+          },
+          onClick: () => setShowSaveViewModal(true),
+          title: "Save View to Google Sheets",
+          "data-guide": "save-view"
+        },
+        "\u{1F4BE} Save View"
+      ), /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          style: {
+            ...styles.buttonGroupBtn,
+            ...compareCards.length > 0 ? styles.buttonGroupBtnActive : {},
+            position: "relative"
+          },
+          onClick: addCompareCard,
+          title: compareCards.length >= 3 ? "Maximum 3 compare cards" : "Add current view to compare dock",
+          disabled: compareCards.length >= 3,
+          "data-guide": "comparison"
+        },
+        compareCards.length > 0 && /* @__PURE__ */ React.createElement("span", { style: {
+          position: "absolute",
+          top: "-6px",
+          right: "-6px",
+          backgroundColor: "#3b82f6",
+          color: "white",
+          borderRadius: "50%",
+          width: "16px",
+          height: "16px",
+          fontSize: "10px",
+          fontWeight: "700",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center"
+        } }, compareCards.length),
+        "\u{1F4CA} Compare"
+      ), /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          style: {
+            ...styles.buttonGroupBtn,
+            ...false ? styles.buttonGroupBtnActive : {}
+          },
+          onClick: handleShareClick,
+          title: "Share Chart Configuration",
+          "data-guide": "share-link"
+        },
+        "\u{1F517} Share"
+      ), /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          style: {
+            ...styles.buttonGroupBtn,
+            backgroundColor: theme.danger,
+            color: "white",
+            border: "none",
+            marginLeft: "4px"
+          },
+          onClick: resetAllFilters,
+          title: "Reset All Filters",
+          "data-guide": "reset-button"
+        },
+        "\u21BA Reset"
+      ))),
+      /* @__PURE__ */ React.createElement("div", { style: styles.controlGroup, "data-guide": "filter-search" }, /* @__PURE__ */ React.createElement(
+        "div",
+        {
+          style: { display: "flex", gap: "8px", alignItems: "center" }
+        },
+        /* @__PURE__ */ React.createElement("div", { style: { ...styles.filterSearchContainer, flex: 1 } }, /* @__PURE__ */ React.createElement(
+          "input",
+          {
+            ref: filterSearchInputRef,
+            style: {
+              ...styles.filterSearchInput,
+              borderColor: showFilterSuggestions ? "#6366f1" : "#d1d5db",
+              width: "100%",
+              boxShadow: showFilterSuggestions ? "0 0 0 3px rgba(99, 102, 241, 0.1)" : "none"
+            },
+            type: "text",
+            placeholder: "Search filters...",
+            value: filterSearchText,
+            onChange: (e) => {
+              const newValue = e.target.value;
+              setFilterSearchText(newValue);
+              requestAnimationFrame(() => {
+                if (!showFilterSuggestions && newValue.length > 0) {
+                  setShowFilterSuggestions(true);
+                }
+              });
+            },
+            onFocus: () => {
+              requestAnimationFrame(() => {
+                if (filterSearchInputRef.current) {
+                  if (!filterDropdownPositionRef.current) {
+                    const rect = filterSearchInputRef.current.getBoundingClientRect();
+                    filterDropdownPositionRef.current = {
+                      top: `${rect.bottom}px`,
+                      left: `${rect.left}px`,
+                      width: `${rect.width}px`
+                    };
+                  }
+                  setDropdownStyle(filterDropdownPositionRef.current);
+                }
+              });
+              setShowFilterSuggestions(true);
+            },
+            onBlur: (e) => {
+              setTimeout(() => {
+                const activeElement = document.activeElement;
+                if (!filterSuggestionsDropdownRef.current || !filterSuggestionsDropdownRef.current.contains(
+                  activeElement
+                )) {
+                  setShowFilterSuggestions(false);
+                  filterDropdownPositionRef.current = null;
+                }
+              }, 50);
+            },
+            onKeyDown: (e) => {
+              if (e.key === "Escape") {
+                setShowFilterSuggestions(false);
+                if (filterSearchInputRef.current) {
+                  filterSearchInputRef.current.blur();
+                }
+              }
+            },
+            onClick: (e) => e.stopPropagation()
+          }
+        ), showFilterSuggestions && Object.keys(currentFilterSuggestions).length > 0 && /* @__PURE__ */ React.createElement(
+          "div",
+          {
+            ref: filterSuggestionsDropdownRef,
+            style: {
+              ...styles.filterSuggestionsDropdown,
+              ...dropdownStyle
+            }
+          },
+          Object.entries(currentFilterSuggestions).map(
+            ([groupType, suggestions]) => /* @__PURE__ */ React.createElement("div", { key: groupType }, /* @__PURE__ */ React.createElement("div", { style: styles.filterGroupHeader }, groupType), suggestions.map((suggestion, index) => {
+              const isSelected = getFilterState(
+                suggestion.filterKey
+              ).includes(suggestion.value);
+              return /* @__PURE__ */ React.createElement(
+                "div",
+                {
+                  key: `${suggestion.type}-${suggestion.value}`,
+                  style: isSelected ? styles.filterSuggestionItemSelected : styles.filterSuggestionItemUnselected,
+                  onMouseDown: (e) => {
+                    e.preventDefault();
+                    handleFilterSuggestionSelect(
+                      suggestion
+                    );
+                  }
+                },
+                /* @__PURE__ */ React.createElement(
+                  "input",
+                  {
+                    type: "checkbox",
+                    style: styles.checkboxInput,
+                    checked: isSelected,
+                    onChange: () => handleFilterSuggestionSelect(
+                      suggestion
+                    ),
+                    onClick: (e) => e.stopPropagation(),
+                    onMouseDown: (e) => e.stopPropagation()
+                  }
+                ),
+                /* @__PURE__ */ React.createElement("div", { style: styles.filterSuggestionName }, suggestion.displayName)
+              );
+            }))
+          )
+        ), showFilterSuggestions && filterSearchText.length > 0 && Object.keys(currentFilterSuggestions).length === 0 && /* @__PURE__ */ React.createElement(
+          "div",
+          {
+            style: {
+              ...styles.filterSuggestionsDropdown,
+              ...dropdownStyle
+            }
+          },
+          /* @__PURE__ */ React.createElement(
+            "div",
+            {
+              style: {
+                ...styles.filterSuggestionItem,
+                cursor: "default"
+              }
+            },
+            /* @__PURE__ */ React.createElement("div", { style: styles.filterSuggestionName }, 'No matching filters found for "', filterSearchText, '"')
+          )
+        )),
+        /* @__PURE__ */ React.createElement(
+          "button",
+          {
+            style: {
+              ...styles.resetButton,
+              backgroundColor: "transparent",
+              border: `1px solid ${theme.borderSecondary}`,
+              color: theme.textSecondary,
+              fontSize: "12px",
+              padding: "6px 12px",
+              whiteSpace: "nowrap"
+            },
+            onClick: (e) => {
+              e.stopPropagation();
+              setShowAdvancedFilters(!showAdvancedFilters);
+            },
+            title: "Show all available filters",
+            "data-guide": "advanced-filters"
+          },
+          "Show All"
+        )
+      )),
+      /* @__PURE__ */ React.createElement("div", { style: styles.controlGroup }, renderButtonGroup(
+        ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"],
+        dataFrequency,
+        handleDataFrequencyChange,
+        styles.dataFrequencyGroup,
+        styles.dataFrequencyButton,
+        styles.dataFrequencyButtonActive
+      ))
+    )))), /* @__PURE__ */ React.createElement("div", { style: styles.advancedFiltersPanel }, /* @__PURE__ */ React.createElement("div", { style: styles.advancedFiltersHeader }, /* @__PURE__ */ React.createElement("h3", { style: styles.advancedFiltersTitle }, "Advanced Filters", /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        style: styles.closeButton,
+        onClick: () => setShowAdvancedFilters(false)
+      },
+      "\xD7"
+    ))), /* @__PURE__ */ React.createElement("div", { style: styles.advancedFiltersContent }, /* @__PURE__ */ React.createElement("div", { style: styles.filterSection }, /* @__PURE__ */ React.createElement("button", { style: styles.modernResetButton, onClick: resetAllFilters }, "Reset All Filters")), /* @__PURE__ */ React.createElement("div", { style: styles.filterSection }, /* @__PURE__ */ React.createElement("h4", { style: styles.sectionTitle }, "Data Filters"), FILTER_CONFIG.map(
+      ({ key, label, state, setState, formatValue }) => {
+        const options = filterOptionsWithoutAll[key] || [];
+        return renderDropdownFilter(
+          key,
+          label,
+          options,
+          state,
+          setState,
+          formatValue || formatFilterName2
+        );
+      }
+    )))));
+  }
+
   // src/styles.js
   function buildStaticStyles(theme, isDarkMode, showDataSummary) {
     return {
@@ -11718,480 +12271,77 @@ var __app = (() => {
         handleCsvUpload,
         setShowConnectModal
       }
-    ), /* @__PURE__ */ React.createElement("div", { style: styles.topSection }, /* @__PURE__ */ React.createElement("div", { style: styles.queryContainer, "data-guide": "quick-query" }, /* @__PURE__ */ React.createElement("div", { style: styles.queryInputGroup }, /* @__PURE__ */ React.createElement("div", { style: styles.queryLabelContainer }, /* @__PURE__ */ React.createElement("label", { style: styles.queryLabel }, "Quick Query"), /* @__PURE__ */ React.createElement(
-      "div",
-      {
-        style: styles.queryTooltipIcon,
-        onMouseEnter: () => setShowQueryTooltip(true),
-        onMouseLeave: () => setShowQueryTooltip(false)
-      },
-      /* @__PURE__ */ React.createElement(
-        "svg",
-        {
-          width: "14",
-          height: "14",
-          viewBox: "0 0 20 20",
-          fill: "none",
-          xmlns: "http://www.w3.org/2000/svg",
-          style: styles.block
-        },
-        /* @__PURE__ */ React.createElement(
-          "circle",
-          {
-            cx: "10",
-            cy: "10",
-            r: "9",
-            stroke: "currentColor",
-            strokeWidth: "1.5",
-            fill: "none"
-          }
-        ),
-        /* @__PURE__ */ React.createElement(
-          "path",
-          {
-            d: "M10 6v.01",
-            stroke: "currentColor",
-            strokeWidth: "1.5",
-            strokeLinecap: "round"
-          }
-        ),
-        /* @__PURE__ */ React.createElement(
-          "path",
-          {
-            d: "M10 9v5",
-            stroke: "currentColor",
-            strokeWidth: "1.5",
-            strokeLinecap: "round"
-          }
-        )
-      ),
-      showQueryTooltip && /* @__PURE__ */ React.createElement("div", { style: styles.queryTooltip }, /* @__PURE__ */ React.createElement("div", { style: styles.queryTooltipArrow }), /* @__PURE__ */ React.createElement("div", { style: styles.fontWeight600 }, "How to Use"), /* @__PURE__ */ React.createElement("div", { style: styles.textGray }, METRIC_LABELS ? `Type a natural language question like "How is ${METRIC_LABELS.metric1 || "the metric"} trending${DIMENSION_DEFINITIONS.length > 0 ? ` by ${DIMENSION_DEFINITIONS[0].viewName}` : ""}?" or click "Feeling Lucky" for examples.` : 'Type a natural language question like "How is revenue trending in EMEA?" or click "Feeling Lucky" for examples. Press Enter or click "Ask" to query.'))
-    )), /* @__PURE__ */ React.createElement("div", { style: styles.queryInputWrapper }, /* @__PURE__ */ React.createElement(
-      "input",
-      {
-        type: "text",
-        value: queryText,
-        onChange: (e) => setQueryText(e.target.value),
-        onKeyDown: (e) => {
-          if (e.key === "Enter" && queryText.trim() && !isLLMLoading) {
-            handleLLMQuery(queryText);
-          }
-        },
-        placeholder: METRIC_LABELS ? `Ask a question... e.g. How is ${METRIC_LABELS.metric1 || "the metric"} trending${DIMENSION_DEFINITIONS.length > 0 ? ` by ${DIMENSION_DEFINITIONS[0].viewName}` : ""}?` : "Ask a question... e.g. How is revenue trending in EMEA?",
-        disabled: isLLMLoading,
-        style: {
-          flex: 1,
-          padding: "10px 14px",
-          fontSize: "14px",
-          fontFamily: "'Inter', 'Segoe UI', sans-serif",
-          border: "2px solid #d1d5db",
-          borderRadius: "8px",
-          backgroundColor: isLLMLoading ? "#f3f4f6" : "#fff",
-          minHeight: "44px",
-          outline: "none",
-          color: "#374151"
-        },
-        onFocus: (e) => {
-          e.target.style.borderColor = "#6366f1";
-        },
-        onBlur: (e) => {
-          e.target.style.borderColor = "#d1d5db";
-        }
-      }
     ), /* @__PURE__ */ React.createElement(
-      "button",
+      ControlsSection,
       {
-        style: {
-          ...styles.luckyButton,
-          fontSize: "14px",
-          fontWeight: "600",
-          padding: "10px 18px",
-          minWidth: "160px",
-          opacity: isLLMLoading ? 0.6 : 1
-        },
-        onClick: () => {
-          const example = LLM_EXAMPLE_QUESTIONS[Math.floor(Math.random() * LLM_EXAMPLE_QUESTIONS.length)];
-          setQueryText(example);
-          setLlmError("");
-          setLlmExplanation("");
-        },
-        disabled: isLLMLoading,
-        title: "Generate a random example question"
-      },
-      "Feeling Lucky"
-    ), /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        style: {
-          ...styles.queryButton,
-          ...!queryText.trim() || isLLMLoading ? styles.queryButtonDisabled : {}
-        },
-        onClick: () => {
-          if (queryText.trim() && !isLLMLoading) {
-            handleLLMQuery(queryText);
-          }
-        },
-        disabled: !queryText.trim() || isLLMLoading
-      },
-      isLLMLoading ? "Thinking..." : "Ask"
-    )), (isLLMLoading || llmError || llmExplanation) && /* @__PURE__ */ React.createElement("div", { style: { marginTop: "8px", fontSize: "13px", fontFamily: "'Inter', 'Segoe UI', sans-serif" } }, isLLMLoading && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px", color: "#6366f1" } }, /* @__PURE__ */ React.createElement("div", { style: {
-      width: "14px",
-      height: "14px",
-      border: "2px solid #6366f1",
-      borderTopColor: "transparent",
-      borderRadius: "50%",
-      animation: "spin 0.8s linear infinite"
-    } }), "Interpreting your question..."), llmError && /* @__PURE__ */ React.createElement("div", { style: { color: "#dc2626", padding: "4px 0" } }, llmError), llmExplanation && !isLLMLoading && !llmError && /* @__PURE__ */ React.createElement("div", { style: { color: "#6b7280", fontStyle: "italic", padding: "4px 0" } }, llmExplanation))), /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        style: {
-          ...styles.helpButton,
-          right: showGuideButton ? "100px" : "12px",
-          backgroundColor: isDarkMode ? "#4b5563" : theme.accentPrimary
-        },
-        onClick: () => setIsDarkMode(!isDarkMode),
-        title: isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"
-      },
-      isDarkMode ? "\u2600\uFE0F" : "\u{1F319}"
-    ), showGuideButton && /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        style: {
-          ...styles.helpButton,
-          backgroundColor: showGuide ? "#ef4444" : "#f77f00"
-        },
-        onClick: () => {
-          if (showGuide) {
-            skipGuide();
-          } else {
-            startGuide();
-          }
-        },
-        title: showGuide ? "Stop Guide" : "Guide Me - Click to start tour"
-      },
-      showGuide ? "\u2715" : "Guide Me"
-    )), /* @__PURE__ */ React.createElement("div", { style: styles.statBoxContainer, "data-guide": "metric-statboxes" }, (() => {
-      const m = ["metric1"];
-      if (liveMetricConfig && (liveMetricConfig.revenueAggType || liveMetricConfig.revenueMode === "formula")) m.push("metric2");
-      if (liveMetricConfig && (liveMetricConfig.derivedAggType || liveMetricConfig.derivedMode === "formula")) m.push("metric3");
-      return m;
-    })().map((metricName) => {
-      const metricStatData = allMetricsStatData[metricName];
-      if (!metricStatData) return null;
-      const displayLabel = METRIC_LABELS[metricName] || metricName;
-      return /* @__PURE__ */ React.createElement(
-        StatBox,
-        {
-          key: metricName,
-          metricName,
-          metricStatData,
-          isActive: metric === metricName,
-          accentColor: "#6366f1",
-          dataFrequency,
-          periodChangeLabel,
-          displayLabel,
-          activePeriodComparison,
-          setActivePeriodComparison,
-          setMetric,
-          setInsightContext,
-          formatMetricValue: formatMetricValue2,
-          styles,
-          theme,
-          isDarkMode
-        }
-      );
-    })), /* @__PURE__ */ React.createElement("div", { style: styles.controlsContainer }, /* @__PURE__ */ React.createElement("div", { style: styles.controlsHeader }, /* @__PURE__ */ React.createElement(
-      "div",
-      {
-        style: {
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr 1fr",
-          gap: "20px",
-          width: "100%"
-        }
-      },
-      /* @__PURE__ */ React.createElement("div", { style: styles.controlGroup, "data-guide": "saved-views" }, /* @__PURE__ */ React.createElement("label", { style: styles.label }, "Load Saved View"), savedViews.length > 0 ? /* @__PURE__ */ React.createElement(
-        "select",
-        {
-          style: styles.select,
-          value: selectedSavedView,
-          onChange: (e) => handleLoadSavedView(e.target.value),
-          onClick: (e) => e.stopPropagation()
-        },
-        /* @__PURE__ */ React.createElement("option", { value: "" }, "-- Select a saved view --"),
-        savedViews.map((savedView) => /* @__PURE__ */ React.createElement("option", { key: savedView.name, value: savedView.name }, savedView.name))
-      ) : /* @__PURE__ */ React.createElement("select", { style: styles.select, disabled: true }, /* @__PURE__ */ React.createElement("option", null, "No saved views"))),
-      /* @__PURE__ */ React.createElement("div", { style: styles.controlGroup, "data-guide": "view-selector" }, /* @__PURE__ */ React.createElement("label", { style: styles.label }, "Split By Dimension"), /* @__PURE__ */ React.createElement(
-        "select",
-        {
-          style: styles.select,
-          value: view,
-          onChange: (e) => setView(e.target.value),
-          onClick: (e) => e.stopPropagation()
-        },
-        /* @__PURE__ */ React.createElement("option", { value: "Overall" }, "Overall"),
-        Object.keys(VIEW_CONFIG).map((viewName) => /* @__PURE__ */ React.createElement("option", { key: viewName, value: viewName }, VIEW_LABEL_OVERRIDES[viewName] || viewName))
-      )),
-      /* @__PURE__ */ React.createElement(
-        "div",
-        {
-          style: { ...styles.controlGroup, marginTop: "24px" },
-          "data-guide": "date-range"
-        },
-        renderButtonGroup(
-          DATE_RANGES,
-          dateRange,
-          setDateRange,
-          styles.dateRangeGroup,
-          styles.dateRangeButton,
-          styles.dateRangeButtonActive
-        )
-      ),
-      /* @__PURE__ */ React.createElement("div", { style: styles.controlGroup }, /* @__PURE__ */ React.createElement("div", { style: styles.buttonGroup }, /* @__PURE__ */ React.createElement(
-        "button",
-        {
-          style: {
-            ...styles.buttonGroupBtn,
-            ...false ? styles.buttonGroupBtnActive : {}
-          },
-          onClick: () => setShowSaveViewModal(true),
-          title: "Save View to Google Sheets",
-          "data-guide": "save-view"
-        },
-        "\u{1F4BE} Save View"
-      ), /* @__PURE__ */ React.createElement(
-        "button",
-        {
-          style: {
-            ...styles.buttonGroupBtn,
-            ...compareCards.length > 0 ? styles.buttonGroupBtnActive : {},
-            position: "relative"
-          },
-          onClick: addCompareCard,
-          title: compareCards.length >= 3 ? "Maximum 3 compare cards" : "Add current view to compare dock",
-          disabled: compareCards.length >= 3,
-          "data-guide": "comparison"
-        },
-        compareCards.length > 0 && /* @__PURE__ */ React.createElement("span", { style: {
-          position: "absolute",
-          top: "-6px",
-          right: "-6px",
-          backgroundColor: "#3b82f6",
-          color: "white",
-          borderRadius: "50%",
-          width: "16px",
-          height: "16px",
-          fontSize: "10px",
-          fontWeight: "700",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center"
-        } }, compareCards.length),
-        "\u{1F4CA} Compare"
-      ), /* @__PURE__ */ React.createElement(
-        "button",
-        {
-          style: {
-            ...styles.buttonGroupBtn,
-            ...false ? styles.buttonGroupBtnActive : {}
-          },
-          onClick: handleShareClick,
-          title: "Share Chart Configuration",
-          "data-guide": "share-link"
-        },
-        "\u{1F517} Share"
-      ), /* @__PURE__ */ React.createElement(
-        "button",
-        {
-          style: {
-            ...styles.buttonGroupBtn,
-            backgroundColor: theme.danger,
-            color: "white",
-            border: "none",
-            marginLeft: "4px"
-          },
-          onClick: resetAllFilters,
-          title: "Reset All Filters",
-          "data-guide": "reset-button"
-        },
-        "\u21BA Reset"
-      ))),
-      /* @__PURE__ */ React.createElement("div", { style: styles.controlGroup, "data-guide": "filter-search" }, /* @__PURE__ */ React.createElement(
-        "div",
-        {
-          style: { display: "flex", gap: "8px", alignItems: "center" }
-        },
-        /* @__PURE__ */ React.createElement("div", { style: { ...styles.filterSearchContainer, flex: 1 } }, /* @__PURE__ */ React.createElement(
-          "input",
-          {
-            ref: filterSearchInputRef,
-            style: {
-              ...styles.filterSearchInput,
-              borderColor: showFilterSuggestions ? "#6366f1" : "#d1d5db",
-              width: "100%",
-              boxShadow: showFilterSuggestions ? "0 0 0 3px rgba(99, 102, 241, 0.1)" : "none"
-            },
-            type: "text",
-            placeholder: "Search filters...",
-            value: filterSearchText,
-            onChange: (e) => {
-              const newValue = e.target.value;
-              setFilterSearchText(newValue);
-              requestAnimationFrame(() => {
-                if (!showFilterSuggestions && newValue.length > 0) {
-                  setShowFilterSuggestions(true);
-                }
-              });
-            },
-            onFocus: () => {
-              requestAnimationFrame(() => {
-                if (filterSearchInputRef.current) {
-                  if (!filterDropdownPositionRef.current) {
-                    const rect = filterSearchInputRef.current.getBoundingClientRect();
-                    filterDropdownPositionRef.current = {
-                      top: `${rect.bottom}px`,
-                      left: `${rect.left}px`,
-                      width: `${rect.width}px`
-                    };
-                  }
-                  setDropdownStyle(filterDropdownPositionRef.current);
-                }
-              });
-              setShowFilterSuggestions(true);
-            },
-            onBlur: (e) => {
-              setTimeout(() => {
-                const activeElement = document.activeElement;
-                if (!filterSuggestionsDropdownRef.current || !filterSuggestionsDropdownRef.current.contains(
-                  activeElement
-                )) {
-                  setShowFilterSuggestions(false);
-                  filterDropdownPositionRef.current = null;
-                }
-              }, 50);
-            },
-            onKeyDown: (e) => {
-              if (e.key === "Escape") {
-                setShowFilterSuggestions(false);
-                if (filterSearchInputRef.current) {
-                  filterSearchInputRef.current.blur();
-                }
-              }
-            },
-            onClick: (e) => e.stopPropagation()
-          }
-        ), showFilterSuggestions && Object.keys(currentFilterSuggestions).length > 0 && /* @__PURE__ */ React.createElement(
-          "div",
-          {
-            ref: filterSuggestionsDropdownRef,
-            style: {
-              ...styles.filterSuggestionsDropdown,
-              ...dropdownStyle
-            }
-          },
-          Object.entries(currentFilterSuggestions).map(
-            ([groupType, suggestions]) => /* @__PURE__ */ React.createElement("div", { key: groupType }, /* @__PURE__ */ React.createElement("div", { style: styles.filterGroupHeader }, groupType), suggestions.map((suggestion, index) => {
-              const isSelected = getFilterState(
-                suggestion.filterKey
-              ).includes(suggestion.value);
-              return /* @__PURE__ */ React.createElement(
-                "div",
-                {
-                  key: `${suggestion.type}-${suggestion.value}`,
-                  style: isSelected ? styles.filterSuggestionItemSelected : styles.filterSuggestionItemUnselected,
-                  onMouseDown: (e) => {
-                    e.preventDefault();
-                    handleFilterSuggestionSelect(
-                      suggestion
-                    );
-                  }
-                },
-                /* @__PURE__ */ React.createElement(
-                  "input",
-                  {
-                    type: "checkbox",
-                    style: styles.checkboxInput,
-                    checked: isSelected,
-                    onChange: () => handleFilterSuggestionSelect(
-                      suggestion
-                    ),
-                    onClick: (e) => e.stopPropagation(),
-                    onMouseDown: (e) => e.stopPropagation()
-                  }
-                ),
-                /* @__PURE__ */ React.createElement("div", { style: styles.filterSuggestionName }, suggestion.displayName)
-              );
-            }))
-          )
-        ), showFilterSuggestions && filterSearchText.length > 0 && Object.keys(currentFilterSuggestions).length === 0 && /* @__PURE__ */ React.createElement(
-          "div",
-          {
-            style: {
-              ...styles.filterSuggestionsDropdown,
-              ...dropdownStyle
-            }
-          },
-          /* @__PURE__ */ React.createElement(
-            "div",
-            {
-              style: {
-                ...styles.filterSuggestionItem,
-                cursor: "default"
-              }
-            },
-            /* @__PURE__ */ React.createElement("div", { style: styles.filterSuggestionName }, 'No matching filters found for "', filterSearchText, '"')
-          )
-        )),
-        /* @__PURE__ */ React.createElement(
-          "button",
-          {
-            style: {
-              ...styles.resetButton,
-              backgroundColor: "transparent",
-              border: `1px solid ${theme.borderSecondary}`,
-              color: theme.textSecondary,
-              fontSize: "12px",
-              padding: "6px 12px",
-              whiteSpace: "nowrap"
-            },
-            onClick: (e) => {
-              e.stopPropagation();
-              setShowAdvancedFilters(!showAdvancedFilters);
-            },
-            title: "Show all available filters",
-            "data-guide": "advanced-filters"
-          },
-          "Show All"
-        )
-      )),
-      /* @__PURE__ */ React.createElement("div", { style: styles.controlGroup }, renderButtonGroup(
-        ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"],
+        styles,
+        theme,
+        isDarkMode,
+        queryText,
+        setQueryText,
+        isLLMLoading,
+        handleLLMQuery,
+        showQueryTooltip,
+        setShowQueryTooltip,
+        METRIC_LABELS,
+        DIMENSION_DEFINITIONS,
+        LLM_EXAMPLE_QUESTIONS,
+        llmError,
+        llmExplanation,
+        setLlmError,
+        setLlmExplanation,
+        setIsDarkMode,
+        showGuideButton,
+        showGuide,
+        skipGuide,
+        startGuide,
+        liveMetricConfig,
+        allMetricsStatData,
+        metric,
+        setMetric,
         dataFrequency,
+        periodChangeLabel,
+        activePeriodComparison,
+        setActivePeriodComparison,
+        setInsightContext,
+        formatMetricValue: formatMetricValue2,
+        savedViews,
+        selectedSavedView,
+        handleLoadSavedView,
+        view,
+        setView,
+        VIEW_CONFIG,
+        VIEW_LABEL_OVERRIDES,
+        DATE_RANGES,
+        dateRange,
+        setDateRange,
+        renderButtonGroup,
+        setShowSaveViewModal,
+        compareCards,
+        addCompareCard,
+        handleShareClick,
+        resetAllFilters,
+        filterSearchInputRef,
+        filterSuggestionsDropdownRef,
+        filterSearchText,
+        setFilterSearchText,
+        showFilterSuggestions,
+        setShowFilterSuggestions,
+        filterDropdownPositionRef,
+        dropdownStyle,
+        setDropdownStyle,
+        currentFilterSuggestions,
+        getFilterState,
+        handleFilterSuggestionSelect,
+        showAdvancedFilters,
+        setShowAdvancedFilters,
         handleDataFrequencyChange,
-        styles.dataFrequencyGroup,
-        styles.dataFrequencyButton,
-        styles.dataFrequencyButtonActive
-      ))
-    )))), /* @__PURE__ */ React.createElement("div", { style: styles.advancedFiltersPanel }, /* @__PURE__ */ React.createElement("div", { style: styles.advancedFiltersHeader }, /* @__PURE__ */ React.createElement("h3", { style: styles.advancedFiltersTitle }, "Advanced Filters", /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        style: styles.closeButton,
-        onClick: () => setShowAdvancedFilters(false)
-      },
-      "\xD7"
-    ))), /* @__PURE__ */ React.createElement("div", { style: styles.advancedFiltersContent }, /* @__PURE__ */ React.createElement("div", { style: styles.filterSection }, /* @__PURE__ */ React.createElement("button", { style: styles.modernResetButton, onClick: resetAllFilters }, "Reset All Filters")), /* @__PURE__ */ React.createElement("div", { style: styles.filterSection }, /* @__PURE__ */ React.createElement("h4", { style: styles.sectionTitle }, "Data Filters"), FILTER_CONFIG.map(
-      ({ key, label, state, setState, formatValue }) => {
-        const options = filterOptionsWithoutAll[key] || [];
-        return renderDropdownFilter(
-          key,
-          label,
-          options,
-          state,
-          setState,
-          formatValue || formatFilterName2
-        );
+        FILTER_CONFIG,
+        filterOptionsWithoutAll,
+        renderDropdownFilter,
+        formatFilterName: formatFilterName2
       }
-    )))), /* @__PURE__ */ React.createElement(
+    ), /* @__PURE__ */ React.createElement(
       ProTipBanner,
       {
         styles,
